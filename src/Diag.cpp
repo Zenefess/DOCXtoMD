@@ -80,3 +80,12 @@ void DiagErrorText(cchptr message, cwchptr text) {
    if(text) DiagWriteWideErr(text);
    fputc('\n', stderr);
 }
+
+void DiagNoteText(cchptr message, cwchptr text) {
+   fflush(stdout);
+   fputs("DOCXtoMD: note: ", stderr);
+   if(message) fputs(message, stderr);
+   fputs(": ", stderr);
+   if(text) DiagWriteWideErr(text);
+   fputc('\n', stderr);
+}

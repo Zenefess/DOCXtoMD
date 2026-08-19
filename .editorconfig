@@ -19,6 +19,20 @@ max_line_length = 180
 [*.{md,MD}]
 end_of_line = unset
 
+# RULE-DEV:r8 The test scripts are Python, where four spaces is the language's own convention and what
+# every Python reader and formatter expects; three would make them look wrong to the one audience that
+# reads them. tc2's other three properties -- UTF-8, CRLF and the 180-column limit -- still apply, and
+# .gitattributes stores these files LF and checks them out CRLF like every other source file.
+[*.py]
+indent_size = 4
+
+# RULE-DEV:tc2 Fixture parts are input data, not source. Their bytes are what make_fixtures.py compresses
+# and what a CRC-32 is computed over, so an editor rewriting their line endings would silently change
+# every fixture; .gitattributes leaves them byte-for-byte as committed and this stops an editor undoing
+# that. Anything under tests/build/ is generated and never edited.
+[tests/fixtures/**]
+end_of_line = unset
+
 # RULE-DEV:tc2 The MIT licence text is not a source file, and is authored LF.
 [LICENSE]
 end_of_line = unset

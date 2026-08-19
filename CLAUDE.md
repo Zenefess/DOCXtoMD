@@ -24,12 +24,17 @@ below.
 
 ## Current state (do not assume more exists)
 
-- `src/` — **exists** and holds the M2 CLI skeleton: six files, all CRLF, tab-free, ASCII-only, none
-  over 150 columns, each carrying a validated r17 prolog at `v0.1.0` with `ISA: Scalar`. Unlike
-  `include/`, `src/` is **not** exempt from the repository style, and the six files are committed in
+- `src/` — **exists** and holds the CLI skeleton (M2) and the container layer (M3): twelve files, all
+  CRLF, tab-free, ASCII-only, none over 150 columns, each carrying a validated r17 prolog at `v0.1.0`
+  with `ISA: Scalar`. Unlike
+  `include/`, `src/` is **not** exempt from the repository style, and all twelve are committed in
   the shape `.clang-format` produces — running the formatter over them is a verified no-op, so a
   format-on-save cannot manufacture a diff. Keep it that way: format after editing, then re-check the
-  r17 prolog, since the formatter has no opinion about it. `DOCXtoMD.cpp` is **gone**: its prolog and
+  r17 prolog, since the formatter has no opinion about it. Two shapes are worth copying because they
+  survive the formatter *and* stay inside e2's 150 columns: a data table gets a trailing `// range`
+  comment on each row (the formatter will not join lines a comment ends, so the table keeps the shape
+  the RFC prints it in), and a long call gets its arguments shortened into named constants rather than
+  hand-wrapped, because the formatter rejoins any wrap that fits inside its 180-column limit. `DOCXtoMD.cpp` is **gone**: its prolog and
   D4's `#ifndef __AVX2__` + `#error` guard were carried into `src/main.cpp` and `src/BuildGuards.h` by
   the same commit that deleted it, and its note that r11 does not reach the entry-point name (the
   language spells it, so it is not an en3 deviation and needs no `RULE-DEV` tag) now sits above
@@ -39,8 +44,11 @@ below.
     include path because MSVC searches the including file's own directory for a quoted include, so
     `src\` is deliberately **not** in `<AdditionalIncludeDirectories>`.
   - `Diag.h`/`Diag.cpp` — the diagnostic sink. Exports `EXIT_CODE` (all seven exit codes as one named
-    enum, so the stable API lives in code rather than only in this file) and four writers:
-    `DiagWriteOut`, `DiagWriteErr`, `DiagError`, `DiagErrorText`. Wide text crosses to UTF-8 through a
+    enum, so the stable API lives in code rather than only in this file) and five writers:
+    `DiagWriteOut`, `DiagWriteErr`, `DiagError`, `DiagErrorText` and `DiagNoteText`. Notes go to
+    **stderr**, not stdout, so `--stdout` can hand a document to a pipe uncontaminated; `-q` suppresses
+    them, and until this module owns that flag it is the caller that decides not to call.
+    Wide text crosses to UTF-8 through a
     single local `WideCharToMultiByte` call buffered with `amalloc`/`mdealloc` (p2) — that is the
     Win32 boundary, and the planned `Utf` module takes over the document side when M4 writes it.
     `Thread-safety: Reentrant`: it holds no state and takes no lock, because at M2 nothing is shared.
@@ -61,13 +69,62 @@ below.
     line; a bad option *earlier* on the line still wins. `CliParse` returns an `EXIT_CODE`, not a bool,
     so `main` can tell a usage error (1, and print the usage text) from a failed allocation (5, and do
     not — the command line was fine).
-  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, a `CreateFileW` readability probe per input,
-    and the exit-code mapping. There is no positional output operand (D7b).
-  - **What the binary does at M2**: `--help`/`--version` exit 0, a usage error exits 1 after printing
-    the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, and
-    a *readable* input exits **5** with `conversion is not implemented in this build`. Exit 5, not 0,
-    because exit code 0's published contract is "all inputs converted" and M3–M11 build the converter.
-    That is temporary: M5 is the milestone that first makes 0 truthful.
+  - `Crc32.h`/`Crc32.cpp` — ZIP's CRC-32: IEEE 802.3, **reflected polynomial `0xEDB88320`**, over a
+    256-entry table built by a `constexpr` function, so there is no run-time initialiser for a worker to
+    race. `Crc32Update` folds one range into a running value and `Crc32` does a whole buffer; the
+    standard's pre- and post-inversion happens inside each call, so both the value passed in and the
+    value returned are finished checksums. Two `static_assert`s pin the table against published
+    anchors. Do **not** reach for the SSE4.2 `_mm_crc32_u*` intrinsics here: they implement CRC-32C,
+    a different polynomial, and would validate nothing.
+  - `Inflate.h`/`Inflate.cpp` — the first-party RFC 1951 decoder (D1). Stored, fixed- and
+    dynamic-Huffman blocks over canonical decode tables with a 9-bit primary lookup and a bit-at-a-time
+    canonical walk behind it; overlapping match copies byte at a time, because a match may overlap the
+    bytes it is still producing. The 32 KiB window comes free: the whole output stays addressable, so a
+    match is checked against everything produced rather than against a ring buffer. The bit reader
+    separates *held* bits from *real* ones — peeking past the end of a stream is normal, since the
+    primary table is indexed by a fixed-width peek, while consuming past it is what truncation means.
+    `InflateRaw`'s `destBytes` is a hard cap and is where a bomb is stopped. The fixed tables are built
+    **once per stream**, not once per block: an empty fixed block is ten bits and rebuilding two decode
+    tables for each of them costs about 3.4 seconds a megabyte, which a hostile entry can spend for free
+    because it produces no output for any cap to measure. The flag that remembers them is on the same
+    stack frame as the tables, so nothing is shared between workers — and it **must** be cleared when a
+    dynamic block rebuilds them, or a fixed block after a dynamic one decodes with the wrong codes.
+    HLIT and HDIST are held to the RFC's 286 and 30 rather than to the 288 and 32 the fixed alphabets
+    need, which is also what zlib enforces.
+  - `ZipReader.h`/`ZipReader.cpp` — the container. EOCD discovery over the last 65,557 bytes preferring
+    the record whose comment length accounts for the rest of the file, ZIP64 locator and end record,
+    the central directory (which is authoritative, so a data descriptor needs no special case), local
+    headers read for their own name and extra lengths, methods 0 and 8, OLE and encryption detection,
+    and `ZIP_LIMITS` — archive, per-entry, total, ratio and entry-count caps. `ZipReadEntry` hands over
+    bytes only when three checks agree: the stream may not write past the declared size, it must reach
+    exactly that size, and the CRC-32 must match; the run total is charged when an entry is *accepted*,
+    not when it succeeds, so an entry that inflates most of a cap's worth and then fails its CRC-32 still
+    costs what it spent. Entry names are copied into the reader's own heap, sized by a first pass that
+    walks the directory and sums the names — an archive that declares a directory far larger than its
+    records use would otherwise get to choose a matching allocation. No caller holds a pointer into the
+    archive bytes, and duplicate names resolve to the **first**
+    record in central directory order. That last choice diverges from most readers, Python's `zipfile`
+    among them, which take the **last**: first-wins is deterministic and refuses to let an appended
+    record override an earlier one, which is the safer reading of a file no legitimate producer emits.
+    It is a decision a session made, not one the owner ruled, so it is revisable — but change the
+    header's documentation and `tests/build/duplicate-names.docx` together if it ever is.
+  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, the container probe per input, and the
+    exit-code mapping. There is no positional output operand (D7b).
+  - **What the binary does at M3**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+    the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
+    input that is not a usable DOCX exits **3** with a sentence saying which rule it broke, and a
+    *sound* container exits **5** with `conversion is not implemented in this build` after a note
+    reporting the entry count and the inflated size of each part it verified. Exit 5, not 0,
+    because exit code 0's published contract is "all inputs converted" and M4–M11 build the converter.
+    That is temporary: M5 is the milestone that first makes 0 truthful. A run in which several inputs
+    fail returns the **highest** of their verdicts, not 6 — D7c reserves 6 for a run that converted
+    something, and nothing is converted in this build.
+  - **What the M3 probe does not do**: it requires only the two part names ISO/IEC 29500-2 guarantees,
+    `[Content_Types].xml` and `_rels/.rels`, and reads `word/document.xml` only when it happens to be
+    there, purely to exercise the inflater on a real stream. That is not a breach of correctness rule 1
+    ("resolve, never hardcode"): the guaranteed entry points are the *only* names the format lets a
+    reader start from, and nothing is resolved through them until M4's `OpcPackage` parses
+    `_rels/.rels`. M4 replaces the probe.
 - `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF) and exposes **only** `Debug|x64` and
   `Release|x64`, matching the project file exactly.
 - `DOCXtoMD.vcxproj` — v143, Unicode, Console, `/W3`, SDLCheck, ConformanceMode, Release
@@ -83,10 +140,10 @@ below.
   and both build clean at `/W3`. No OutDir override. Both configs also define
   `WIN32_LEAN_AND_MEAN;NOMINMAX` — added at M2, when `<windows.h>` first entered the project; neither
   hides a header this project needs, because `winnls.h` (`WideCharToMultiByte`) and `wincon.h`
-  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Three
-  `<ClCompile>`s, all `src\…`, and nine `<ClInclude>`s: the six `include\…` headers and three
+  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Six
+  `<ClCompile>`s, all `src\…`, and twelve `<ClInclude>`s: the six `include\…` headers and six
   `src\…` ones.
-- `DOCXtoMD.vcxproj.filters` — lists the three `src\*.cpp` files under Source Files and all nine
+- `DOCXtoMD.vcxproj.filters` — lists the six `src\*.cpp` files under Source Files and all twelve
   headers under Header Files, in the same order as the `.vcxproj`. Every `<ClCompile Include="…">` and
   `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character; keep it that way, or
   the IDE tree stops reflecting the build. The tree is deliberately flat — there is no `src` filter
@@ -146,8 +203,9 @@ below.
   - `CHANGELOG.md` — c2/c3 Keep-a-Changelog, `[Unreleased]` only; nothing is released yet.
   - `.gitignore` — the three things an MSVC build or Visual Studio drops here: `/x64/` (no OutDir
     override, so binaries *and* intermediates share that tree, and D3 leaves no `Win32\` to ignore),
-    `/.vs/` and `*.vcxproj.user`. Both directory patterns are anchored with a leading `/`, so a
-    future `tests/x64/` fixture path would not be swallowed by accident. Nothing here is produced by
+    `/.vs/` and `*.vcxproj.user`, plus `/tests/build/`, which is where `tests/make_fixtures.py` writes
+    the `.docx` files it zips. All three directory patterns are anchored with a leading `/`, so a
+    future `tests/x64/` fixture path would not be swallowed by accident. Only the last is produced by
     a Linux session.
   None of the six is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
   not reach them and neither project file mentions them.
@@ -155,7 +213,7 @@ below.
   (MIT, Copyright (c) 2026 David William Bull), this file.
 - Line endings: `.gitattributes` now holds the line, so this no longer needs checking by hand.
   Source and build files (`*.c`, `*.cpp`, `*.h`, `*.hpp`, `*.inl`, `*.sln`, `*.vcxproj`, `*.filters`,
-  `*.props`, and the four tooling dotfiles) are `text eol=crlf`: Git stores LF and materialises
+  `*.props`, `*.py`, and the four tooling dotfiles) are `text eol=crlf`: Git stores LF and materialises
   **CRLF** in every working tree, on Linux exactly as on Windows, so tc2 cannot drift and a
   line-ending change can never reach a diff. Everything else is `* -text` — byte-for-byte as
   committed, whatever `core.autocrlf` a contributor has set — which is what leaves the Markdown docs
@@ -164,9 +222,24 @@ below.
   attributes and nothing shows as modified; **what a checkout produces is byte-identical to before**,
   including for the six owner-authored headers, whose content was not touched.
 - `docs/` **exists** and holds `CONVERSION_REFERENCE.md`; `include/` **exists** and holds the six
-  shared headers; `src/` **exists** as of M2. None of the three is planned-only any more.
-- **Not yet created** (GCS obligations, see Roadmap): `tests/`, `bench/`, CI. Do not reference them as
-  if they exist.
+  shared headers; `src/` **exists** as of M2; `tests/` **exists** as of M3. None of the four is
+  planned-only any more.
+- `tests/` — the container test scaffolding, and nothing else yet. `make_fixtures.py` builds every
+  fixture; `run_container.py` runs the exe over them and checks the exit code and the message. Both are
+  CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on a
+  POSIX host — run them as `python tests/<name>.py`. `fixtures/minimal/src/` is the one part tree so
+  far: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`, `word/_rels/document.xml.rels` and
+  `word/styles.xml`, hand-authored and reviewable. The hostile fixtures are synthesised by the script
+  instead, because a malformed archive is not expressible as a tree of files, which is why
+  `make_fixtures.py` carries its own ~90-line ZIP writer rather than using Python's `zipfile`: the
+  negatives need per-field control that `zipfile` does not offer. Being first-party on both sides is
+  not circular — the compressed payloads come from Python's `zlib`, which is what actually pins the
+  DEFLATE behaviour, and the positive fixtures are cross-checked with `zipfile` by hand. Output goes to
+  `tests/build/`, which is git-ignored.
+  The expectation table lives in `make_fixtures.py` and `run_container.py` reads it, so a fixture and
+  the exit code it should produce are declared in one place.
+- **Not yet created** (GCS obligations, see Roadmap): `tests/` unit-test harness (M4), `run_golden.py`
+  (M5), `bench/`, CI. Do not reference them as if they exist.
 
 ## Build & run
 
@@ -181,8 +254,18 @@ msbuild DOCXtoMD.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64
 ```
 
 Default output paths (no OutDir override): `x64\Release\DOCXtoMD.exe`, `x64\Debug\DOCXtoMD.exe`.
-Since M2 the binary has a real command line: `--help` and `--version` exit 0, a usage error exits 1, an
-unopenable input exits 2, and a readable input exits 5 because the converter does not exist yet.
+Since M2 the binary has a real command line and since M3 it reads the container: `--help` and
+`--version` exit 0, a usage error exits 1, an unopenable input exits 2, an input that is not a usable
+DOCX exits 3 and is told which rule it broke, and a sound container exits 5 because the converter does
+not exist yet. The container fixtures and their expected verdicts are checked by
+
+```bat
+python tests\make_fixtures.py                                   :: writes tests\build\*.docx
+python tests\run_container.py                                   :: runs x64\Release\DOCXtoMD.exe over them
+python tests\run_container.py --exe x64\Debug\DOCXtoMD.exe      :: or any other build
+```
+
+`run_container.py` builds the fixtures itself, so the second command alone is enough.
 **x64 is the only supported platform** — GCS a2 declares 32-bit unsupported, and D3 is **executed
 and verified on Windows**: the Win32 configurations are gone from `DOCXtoMD.vcxproj`, and
 `/p:Platform=Win32` fails instead of building. A bare `msbuild DOCXtoMD.vcxproj` with no
@@ -540,10 +623,11 @@ implementation session must respect:
 | Soft hyphens | Removed; NBSP and smart punctuation kept verbatim |
 | Output encoding | UTF-8, no BOM, LF line endings (tc2's CRLF governs source files, not program output) |
 
-## Planned architecture (`docs/`, `include/` and four `src/` modules exist — build the rest by Roadmap)
+## Planned architecture (`docs/`, `include/`, `tests/` and seven `src/` modules exist — build the rest by Roadmap)
 
-**Written so far (M2)**: `src/main.cpp`, `src/BuildGuards.h`, `src/CliOptions.h`/`.cpp` and
-`src/Diag.h`/`.cpp`, plus everything already in `docs/` and `include/`. Every other entry below is
+**Written so far (M2 + M3)**: `src/main.cpp`, `src/BuildGuards.h`, `src/CliOptions.h`/`.cpp`,
+`src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp` and `src/ZipReader.h`/`.cpp`, plus
+everything already in `docs/`, `include/` and `tests/`. Every other entry below is
 still to be written — do not reference one as if it exists.
 
 ```
@@ -556,8 +640,11 @@ src/
    CliOptions.h/.cpp     argv → options struct; usage/version text
    Utf.h/.cpp            UTF-8 validate/transcode (UTF-16 only at the Win32 boundary)
    Inflate.h/.cpp        first-party RFC 1951 DEFLATE (D1): stored/fixed/dynamic Huffman, 32 KiB window
+                         [written at M3]
    Crc32.h/.cpp          ZIP CRC-32 (poly 0xEDB88320 — NOT SSE4.2 CRC-32C); entry verification
+                         [written at M3]
    ZipReader.h/.cpp      EOCD/central directory/local headers, methods 0+8, ZIP64; bomb+traversal caps
+                         [written at M3]
    XmlPull.h/.cpp        streaming pull tokenizer over the inflated buffer; zero-allocation, string_view tokens
    OpcPackage.h/.cpp     [Content_Types].xml + rels graphs; part lookup; r:id resolution
    StyleModel.h/.cpp     styles.xml → resolved-props cache (basedOn chains, toggle XOR, name normalization)
@@ -570,8 +657,9 @@ src/
    MediaExtractor.h/.cpp referenced media parts → disk; content-type extensions; dedup; safe names
    Diag.h/.cpp           error codes/messages → stderr; exit-code mapping. MT-safe from M13: every
                          worker reports through this one sink, so it locks then (D6). Reentrant at M2
-tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py;
-                         run_golden.py; unit tests as a second console .vcxproj with a tiny CHECK header
+tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
+                         run_container.py [both written at M3]; run_golden.py [M5]; unit tests as a
+                         second console .vcxproj with a tiny CHECK header [M4]
 bench/                   GCS p4 microbenches (create with the first performance claim)
 docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
 include/                 the six owner-authored shared headers (already here); on the include path
@@ -646,11 +734,17 @@ still accept only one input; what it must not do is assume there will only ever 
 ## Testing & definition of done
 
 - Fixtures are **unzipped part trees** under `tests/fixtures/<case>/src/` (hand-authorable, reviewable,
-  diffable) zipped into `.docx` by `tests/make_fixtures.py` (Python `zipfile`; never PowerShell
-  `Compress-Archive` — it writes backslash separators). `tests/run_golden.py` runs the exe and
-  byte-compares against `expected.md`, and asserts documented exit codes on corrupt-input fixtures.
-  `make_fixtures.py` must be able to emit **stored** and **deflated** entries so the first-party
-  inflater is exercised on both.
+  diffable) zipped into `.docx` by `tests/make_fixtures.py` — **never** PowerShell `Compress-Archive`,
+  which writes backslash separators. As of M3 that script exists and writes its own ZIP records rather
+  than calling Python's `zipfile`, because the hostile fixtures need per-field control `zipfile` does
+  not offer; its payloads still come from Python's `zlib`, so the DEFLATE behaviour the inflater is
+  measured against is not first-party. It emits **stored** and **deflated** entries, and forces every
+  RFC 1951 block type — `strategy=Z_FIXED` for fixed Huffman, the default strategy on a large body for
+  dynamic, and `level=0` for stored blocks inside a deflate stream, which is a different code path from
+  a stored ZIP entry.
+- Two runners, with different jobs. `tests/run_container.py` (M3) runs the exe over every fixture and
+  asserts the exit code and a substring of the message; `tests/run_golden.py` (M5, not yet written)
+  runs the exe and byte-compares against `expected.md`. Neither takes the other's job.
 - A milestone's DoD is **commands that pass**, not adjectives. Before claiming any change done:
   1. x64 Release builds with **zero warnings** at `/W3` (on Windows; on Linux say you could not build).
   2. New/changed files: prolog validates (r17 regexes), 3-space indent, no tabs, lines ≤150/180,
@@ -726,7 +820,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   three behave as documented: no arguments prints the usage text and exits 1, `--version` exits 0, and
   `--help` reproduces the Target CLI block. With the build and all three checks confirmed on Windows,
   M2's DoD is fully discharged and the marker is `[done]`.
-- **M3 `[next]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
+- **M3 `[done-unverified]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
   fixed-Huffman and dynamic-Huffman blocks; canonical decode tables; 32 KiB window; overlapping match
   copies), `Crc32`, and `ZipReader` (EOCD search over the last 65,557 bytes, central directory, local
   headers, methods 0/8 only, ZIP64, data descriptors, duplicate names, encryption bit) with the
@@ -735,7 +829,49 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   negatives). DoD: extracts `word/document.xml` from both a stored-entry and a deflated-entry fixture
   `.docx` with CRC-32 verified; a dynamic-Huffman payload round-trips against a Python-`zlib`-generated
   fixture; corrupt/encrypted/`.doc` inputs exit 3 with clear messages.
-- **M4 `[todo]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `Utf`, `XmlPull`,
+  **Status**: the code landed from Linux on 2026-08-19, so the marker is `[done-unverified]` — **no
+  Windows session has run msbuild against it**. What was verified on Linux, and what was not:
+  - **Verified on Linux, mechanically**: the r17 prolog regexes from the GCS, 3-space indent, no tabs,
+    ASCII only, CRLF, and ≤150 columns on all twelve `src/` files and both `tests/*.py`;
+    `.vcxproj`/`.filters` XML well-formedness and mutual sync with what is on disk; and
+    `clang-format --style=file` a verified no-op on every file in `src/`.
+  - **Verified on Linux, behaviourally, against the shim build**: `tests/run_container.py` passes all
+    45 checks — 12 sound containers exit 5 after verifying their parts, 16 hostile ones exit 3 with the
+    documented sentence, an absent input exits 2, four command lines behave as M2 published them, and
+    Python's `zipfile` reads every sound fixture back with each entry's CRC-32 matching. On top of that,
+    three scratch harnesses the
+    commit does not carry: the inflater round-trips **660** payload/level/strategy combinations against
+    Python's `zlib` byte for byte (33 payloads x levels 0/1/6/9 x the five zlib strategies), decodes a
+    multi-block stream built with `Z_FULL_FLUSH`, and rejects all 1,788 proper prefixes of a valid
+    stream plus 1,500 bit-flipped ones with no sanitizer report; `Crc32` matches `zlib.crc32` on 128
+    payloads in both its whole-buffer and three-chunk forms; and 3,000 mutated archives through the
+    exe produce only exit codes 3 and 5, with no AddressSanitizer or UndefinedBehaviorSanitizer
+    diagnostic anywhere. And because both sides of the fixture pipeline are first-party, a
+    cross-check the other way: four `.docx` files written by Python's own `zipfile` (stored, deflated,
+    with directory entries, and one carrying a 3 MB binary member and a 2.7 MB part) all verify, and
+    Python's `zipfile` reads back byte-identical `word/document.xml` from the deflated, ZIP64,
+    data-descriptor and archive-comment fixtures. It reads a different one from `duplicate-names.docx`,
+    which is the documented first-wins-versus-last-wins divergence and not a defect.
+  - **Reviewed adversarially** before the commit, by ten independent readers over five dimensions (RFC
+    1951 conformance, ZIP/APPNOTE conformance, memory and error paths, GCS compliance, and whether the
+    milestone was actually delivered), each finding then put to two skeptics told to refute it. Twenty
+    findings were raised and the two that mattered are fixed above: the fixed-table rebuild, measured at
+    13.45 s versus 0.05 s on four megabytes of empty fixed blocks, and the name heap, measured at a
+    41.9 MB allocation versus none on an archive whose directory declares far more extent than its five
+    records use. The rest were either already fixed in the same working tree or refuted on the code.
+  - **Not verified, and not claimable**: the msbuild DoD. Nothing here says anything about `/W3`,
+    `/sdl`, `/arch:AVX2`, the real `include/` headers, or 2-byte `wchar_t`. The shim is a scratch
+    `windows.h`/`typedefs.h`/`memory management.h` trio in a session directory, exactly as M2's was,
+    and it is not committed. A Windows session must run
+    `msbuild DOCXtoMD.sln /m /p:Configuration=Release /p:Platform=x64` and then
+    `python tests\run_container.py` before this becomes `[done]`.
+  Two scope notes. The fixture set is wider than the milestone asked for — it also covers ZIP64, data
+  descriptors, archive comments, duplicate names, a truthful 300 MiB bomb, a 1024:1 ratio bomb and an
+  over-count archive — because those paths are in `ZipReader` either way and a fixture is the only
+  thing that proves them. And `tests/run_container.py` is a third file beyond the two the milestone
+  names; it exists because "corrupt/encrypted/`.doc` inputs exit 3 with clear messages" is a DoD
+  bullet, and a DoD bullet with no command behind it is an adjective.
+- **M4 `[next]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `Utf`, `XmlPull`,
   `OpcPackage`, plus the unit-test harness (second console `.vcxproj` + tiny CHECK header under
   `tests/`). **`Utf` is scheduled here** — owner ruling, 2026-08-19, closing the gap that no milestone
   named it. It belongs with `XmlPull` because the tokenizer runs over the inflated part bytes and must

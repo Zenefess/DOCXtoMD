@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Minimal fixture</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t xml:space="preserve">One paragraph of plain text, and one </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>bold</w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve"> run.</w:t>
+      </w:r>
+    </w:p>
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+    </w:sectPr>
+  </w:body>
+</w:document>

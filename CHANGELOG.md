@@ -68,6 +68,73 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   `/x64/` — the project sets no OutDir, so binaries and intermediates share that one tree, and D3
   leaves no `Win32\` tree to ignore — together with `/.vs/` and `*.vcxproj.user`. Both directory
   patterns are anchored with a leading `/`, so a future path such as `tests/x64/` is not swallowed.
+- The container layer, in three first-party modules (decision D1 — no vendored ZIP or inflate code):
+  `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp` and `src/ZipReader.h`/`.cpp`.
+- `Crc32` — ZIP's CRC-32, IEEE 802.3 with the reflected polynomial `0xEDB88320`, over a 256-entry table
+  a `constexpr` function builds at compile time, so no run-time initialiser exists for a worker to race
+  under D6. `Crc32Update` folds one range into a running value and `Crc32` covers a whole buffer; the
+  standard's pre- and post-inversion happens inside each call, so the value in and the value out are
+  both finished checksums. Two `static_assert`s pin the table to published anchors. The SSE4.2
+  `_mm_crc32_u*` intrinsics are deliberately unused: they implement CRC-32C, a different polynomial,
+  and would validate nothing.
+- `Inflate` — a first-party RFC 1951 decoder: stored, fixed-Huffman and dynamic-Huffman blocks over
+  canonical decode tables with a 9-bit primary lookup and a bit-at-a-time canonical walk behind it, and
+  byte-at-a-time match copies because a match may overlap the bytes it is still producing. The 32 KiB
+  window falls out of keeping the whole output addressable, so a match is bounded by everything
+  produced so far. The bit reader counts *held* bits separately from *real* ones: peeking past the end
+  of a stream is normal, since the primary table is indexed by a fixed-width peek, while consuming past
+  it is what truncation means — conflating the two would reject valid streams at their last symbol.
+- `ZipReader` — end-of-central-directory discovery over the last 65,557 bytes, preferring the record
+  whose comment length accounts for exactly the rest of the file; ZIP64 locator, end record and extended
+  information extra field; the central directory, which is treated as authoritative so a data descriptor
+  needs no special case; local headers read for their own name and extra lengths, because writers are
+  allowed to differ there; methods 0 and 8 only; OLE compound-file and encrypted-entry detection; and
+  the `ZIP_LIMITS` caps on archive size, per-entry size, run total, compression ratio and entry count.
+  Entry names are copied into the reader's own heap so no caller holds a pointer into the archive
+  bytes, and duplicate names resolve to the first record in central directory order. The name heap is
+  sized by a first pass that walks the directory and sums the names, so an archive declaring a directory
+  far larger than its records use cannot choose a matching allocation: on a 41.9 MB archive whose end
+  record claims a 41.9 MB directory holding five short-named entries, sizing from the declared extent
+  asked for 41,943,366 bytes and summing the names asks for 96.
+- An archive larger than the reader will load reports that, rather than being called a suspected ZIP
+  bomb: it is a size problem and may be nothing else.
+- Rule 11 ("verify what you inflate") is implemented as three checks that must agree before
+  `ZipReadEntry` hands over any bytes: the output buffer is exactly the declared size, so a stream that
+  produces more is stopped at the byte that overruns rather than measured afterwards; the stream must
+  reach exactly that size; and the CRC-32 must match what the directory entry declares. That is what
+  makes a declared size safe to allocate against — it is checked, never believed. The run total is
+  charged when an entry is accepted rather than when it succeeds, so an entry that inflates most of a
+  cap's worth and only then fails its CRC-32 has still spent it.
+- Exit code 3 is now reachable. An input that is not a usable DOCX is reported with a sentence naming
+  the rule it broke — not a ZIP, an OLE compound file (so an encrypted `.docx` or a legacy `.doc`),
+  encrypted entries, an unsupported compression method, a truncated archive, a malformed structure, a
+  size that disagrees with the directory, a corrupt deflate stream, a failed CRC-32, or a decompression
+  cap — and each of the nine ways a deflate stream can be corrupt gets its own wording.
+- `DiagNoteText`, a progress writer on **stderr** so that `--stdout` can hand a document to a pipe
+  uncontaminated. `-q` suppresses notes; until `Diag` owns that flag it is the caller that decides not
+  to call.
+- `tests/`, with the container scaffolding: `make_fixtures.py` builds every fixture and `run_container.py`
+  runs the exe over them, asserting the exit code and a substring of the message. The one part tree so
+  far is `tests/fixtures/minimal/src/` — five hand-authored, reviewable parts. `make_fixtures.py`
+  writes its own ZIP records rather than calling Python's `zipfile`, because the hostile fixtures need
+  per-field control `zipfile` does not offer; the compressed payloads still come from Python's `zlib`,
+  which is what actually pins the DEFLATE behaviour the inflater is measured against. Its 28 fixtures
+  force every RFC 1951 block type (`Z_FIXED`, the default strategy on a large body, and `level=0` for
+  stored blocks inside a deflate stream) and cover ZIP64, data descriptors, an archive comment,
+  duplicate names, a truthful 300 MiB bomb, a 1024:1 ratio bomb, an over-count archive, and the
+  corrupt, encrypted and legacy-`.doc` negatives the milestone asked for. Four of them exist because a
+  claim needed to be true rather than asserted: `multi-block.docx` really carries eleven blocks of mixed
+  type, where the dynamic-Huffman fixture turns out to be a single one; `overlapping-matches.docx` really
+  produces 64 matches whose distance is shorter than their length, which nothing else in the set did; and
+  `bad-directory.docx` and `overlong-directory.docx` reach the two `ZipReader` results no other fixture
+  could produce.
+- `run_container.py` also reads every sound fixture back with Python's `zipfile`. `make_fixtures.py`
+  writes ZIP records itself and `ZipReader` reads them itself, so the two agreeing proves less than it
+  looks — one shared misreading of the format would satisfy both. An independent implementation
+  decompressing every entry and checking it against the CRC-32 in its header is what closes that.
+- `/tests/build/` in `.gitignore` — the `.docx` files `make_fixtures.py` writes are generated, the part
+  trees are not. And `*.py text eol=crlf` in `.gitattributes`, so the test scripts follow tc2 with the
+  rest of the tree; they carry no shebang, because a CRLF shebang does not survive on a POSIX host.
 
 ### Changed
 
@@ -86,6 +153,15 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   dash, so the block and the program's usage text are now byte-identical. The sources carry no BOM and
   the project does not pass `/utf-8`, so a non-ASCII byte in a narrow literal would be read in whatever
   code page the compiler is running under.
+- `main.cpp`'s per-input check is now a container probe rather than a `CreateFileW` readability test.
+  It opens the input as an OPC package, requires the two part names ISO/IEC 29500-2 guarantees
+  (`[Content_Types].xml` and `_rels/.rels`), inflates and CRC-verifies them, and inflates
+  `word/document.xml` as well when it happens to be there — purely to exercise the inflater on a real
+  stream, since nothing is resolved through relationships until M4's `OpcPackage`. A sound container
+  still exits 5: the converter arrives across M4 to M11, and exit code 0's contract is "all inputs
+  converted".
+- A run in which several inputs fail now returns the **highest** of their per-file verdicts. Exit code 6
+  stays unreachable, because D7c reserves it for a run that converted something.
 
 ### Removed
 

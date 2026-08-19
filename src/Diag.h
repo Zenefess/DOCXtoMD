@@ -6,8 +6,8 @@
  * Last Modified: 2026-08-19
  * Description: Diagnostic sink: UTF-8 stdout and stderr writers, and the stable process exit codes.
  * To Do: 1) Take include/spinlocks.h and become MT-safe when M13 gives every worker this one sink (D6).
- *        2) Add the note level that -q suppresses, once M5 gives the converter something to report.
- *        3) Collect the per-file failure list that exit code 6 summarises at M13 (D7c).
+ *        2) Collect the per-file failure list that exit code 6 summarises at M13 (D7c).
+ *        3) Take over -q from the callers, so a note is suppressed in one place rather than at each site.
  * Dependencies: typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -59,3 +59,10 @@ void DiagError(cchptr message);
 /// @param text     Wide text -- a path or an option -- transcoded to UTF-8 for the console.
 /// @note An untranscodable argument is replaced by a placeholder rather than suppressing the whole line.
 void DiagErrorText(cchptr message, cwchptr text);
+
+/// Writes one progress line to stderr naming a wide argument: "DOCXtoMD: note: <message>: <text>".
+/// @param message  NUL-terminated UTF-8 sentence fragment, without a trailing newline.
+/// @param text     Wide text -- a path or an option -- transcoded to UTF-8 for the console.
+/// @note Notes go to stderr, not stdout, so that --stdout can hand a document to a pipe uncontaminated.
+/// @note -q suppresses notes, and until this module owns that flag the caller is what decides not to call.
+void DiagNoteText(cchptr message, cwchptr text);

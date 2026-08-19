@@ -18,10 +18,19 @@
     <ClCompile Include="src\CliOptions.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\Crc32.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\Diag.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\Inflate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ZipReader.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -50,7 +59,16 @@
     <ClInclude Include="src\CliOptions.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\Crc32.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\Diag.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Inflate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ZipReader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

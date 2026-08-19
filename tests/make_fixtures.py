@@ -1,0 +1,494 @@
+# RULE-DEV:r17 GCS r17's file prolog is a C block comment, which Python cannot carry. The module
+# docstring below holds the same information in the form the language allows.
+"""Builds the .docx fixtures the DOCXtoMD container tests run against.
+
+Reviewable part trees live under tests/fixtures/<case>/src/ and are zipped here; the hostile cases are
+synthesised, because a malformed archive cannot be expressed as a tree of files. Everything lands in
+tests/build/, which is generated and git-ignored.
+
+Run it with the interpreter rather than directly -- the file is CRLF like the rest of the repository, so
+a shebang would not survive on a POSIX host:
+
+    python tests/make_fixtures.py            build every fixture
+    python tests/make_fixtures.py --list     name every fixture and the exit code it should produce
+
+The ZIP writer here is deliberately first-party rather than zipfile: the negatives need control over
+individual header fields, and zipfile offers none. Being first-party on both sides is not a problem --
+the fixtures are validated against Python's own zlib, which is what actually pins the DEFLATE behaviour.
+"""
+
+import os
+import struct
+import sys
+import zlib
+
+LOCAL_SIG = 0x04034B50
+CENTRAL_SIG = 0x02014B50
+EOCD_SIG = 0x06054B50
+EOCD64_SIG = 0x06064B50
+LOCATOR64_SIG = 0x07064B50
+DESCRIPTOR_SIG = 0x08074B50
+
+# A fixed 1980-01-01 timestamp, so a rebuild produces byte-identical fixtures.
+DOS_TIME = 0
+DOS_DATE = 0x0021
+
+FLAG_ENCRYPTED = 0x0001
+FLAG_DESCRIPTOR = 0x0008
+FLAG_UTF8 = 0x0800
+
+MARKER32 = 0xFFFFFFFF
+MARKER16 = 0xFFFF
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+FIXTURES = os.path.join(ROOT, "fixtures")
+BUILD = os.path.join(ROOT, "build")
+
+# What each built fixture is for, and the exit code DOCXtoMD must return for it. run_container.py reads
+# this table, so the expectations live in exactly one place.
+#   0 is never expected: no build before M5 converts anything, so a sound container still exits 5.
+EXPECTATIONS = []
+
+
+def expect(name, code, matches, why):
+    EXPECTATIONS.append({"name": name, "code": code, "matches": matches, "why": why})
+
+
+# ---------------------------------------------------------------------------- deflate helpers
+
+
+def deflate(raw, level=6, strategy=zlib.Z_DEFAULT_STRATEGY):
+    """Raw DEFLATE with no zlib wrapper, which is what a ZIP entry stores."""
+    engine = zlib.compressobj(level, zlib.DEFLATED, -15, 8, strategy)
+    return engine.compress(raw) + engine.flush()
+
+
+def deflate_blocks(chunks, level=6, strategy=zlib.Z_DEFAULT_STRATEGY):
+    """One raw DEFLATE stream carrying several blocks: every chunk but the last ends at a full flush.
+
+    zlib picks its own block boundaries otherwise, and for a payload of the size a .docx part actually is
+    it picks exactly one -- so this is the only way to build a fixture that really is multi-block.
+    """
+    engine = zlib.compressobj(level, zlib.DEFLATED, -15, 8, strategy)
+    out = []
+    for chunk in chunks[:-1]:
+        out.append(engine.compress(chunk))
+        out.append(engine.flush(zlib.Z_FULL_FLUSH))
+    out.append(engine.compress(chunks[-1]))
+    out.append(engine.flush())
+    return b"".join(out)
+
+
+def deflate_zeros(total, level=9):
+    """Deflates `total` zero bytes without ever holding them all in memory."""
+    engine = zlib.compressobj(level, zlib.DEFLATED, -15)
+    block = b"\0" * (1 << 20)
+    out = []
+    left = total
+    while left:
+        take = min(left, len(block))
+        out.append(engine.compress(block[:take]))
+        left -= take
+    out.append(engine.flush())
+    return b"".join(out)
+
+
+def crc_zeros(total):
+    """CRC-32 of `total` zero bytes, computed the same way."""
+    block = b"\0" * (1 << 20)
+    crc = 0
+    left = total
+    while left:
+        take = min(left, len(block))
+        crc = zlib.crc32(block[:take], crc)
+        left -= take
+    return crc & MARKER32
+
+
+def eocd_fields(data):
+    """Locates the end-of-central-directory record and reads the three fields the negatives patch."""
+    at = data.rfind(b"PK\x05\x06")
+    total, cd_size, cd_at = struct.unpack("<HII", data[at + 10:at + 20])
+    return at, total, cd_size, cd_at
+
+
+def first_block_type(payload):
+    """BTYPE of a raw DEFLATE stream's first block: 0 stored, 1 fixed, 2 dynamic."""
+    if not payload:
+        return None
+    return (payload[0] >> 1) & 3
+
+
+# ---------------------------------------------------------------------------- ZIP writer
+
+
+def make_entry(name, raw, method="deflate", level=6, strategy=zlib.Z_DEFAULT_STRATEGY, **over):
+    """One entry, with every header field open to being overridden by a hostile fixture."""
+    if method == "store":
+        payload, code = raw, 0
+    elif method == "deflate":
+        payload, code = deflate(raw, level, strategy), 8
+    else:
+        payload, code = raw, int(method)  # An unsupported method, storing the bytes as they are
+
+    entry = {
+        "name": name,
+        "payload": payload,
+        "method": code,
+        "crc": zlib.crc32(raw) & MARKER32,
+        "usize": len(raw),
+        "csize": len(payload),
+        "flags": 0,
+        "descriptor": False,
+    }
+    entry.update(over)
+    # A fixture that supplies its own payload gets a matching compressed size unless it deliberately
+    # overrode that too, so an override cannot silently truncate the stream the reader is handed.
+    if "csize" not in over:
+        entry["csize"] = len(entry["payload"])
+    return entry
+
+
+def build_zip(entries, zip64=False, comment=b""):
+    """Assembles local headers, data, the central directory and the end record into one archive."""
+    out = bytearray()
+    central = bytearray()
+
+    for entry in entries:
+        offset = len(out)
+        name = entry["name"].encode("utf-8")
+        flags = entry["flags"]
+        if entry["descriptor"]:
+            flags |= FLAG_DESCRIPTOR
+        if any(byte > 0x7F for byte in name):
+            flags |= FLAG_UTF8
+
+        # A streamed entry leaves the local header's copies at zero and repeats them after the data; the
+        # central directory is authoritative either way, which is what DOCXtoMD relies on.
+        if entry["descriptor"]:
+            local_crc, local_csize, local_usize = 0, 0, 0
+        else:
+            local_crc, local_csize, local_usize = entry["crc"], entry["csize"], entry["usize"]
+
+        out += struct.pack("<IHHHHHIIIHH", LOCAL_SIG, 20, flags, entry["method"], DOS_TIME, DOS_DATE,
+                           local_crc, local_csize & MARKER32, local_usize & MARKER32, len(name), 0)
+        out += name
+        out += entry["payload"]
+        if entry["descriptor"]:
+            out += struct.pack("<IIII", DESCRIPTOR_SIG, entry["crc"], entry["csize"], entry["usize"])
+
+        extra = b""
+        usize, csize, header_at = entry["usize"], entry["csize"], offset
+        if zip64:
+            extra = struct.pack("<HHQQQ", 0x0001, 24, usize, csize, header_at)
+            usize = csize = header_at = MARKER32
+
+        central += struct.pack("<IHHHHHHIIIHHHHHII", CENTRAL_SIG, 20, 20, flags, entry["method"], DOS_TIME,
+                               DOS_DATE, entry["crc"], csize & MARKER32, usize & MARKER32, len(name),
+                               len(extra), 0, 0, 0, 0, header_at & MARKER32)
+        central += name
+        central += extra
+
+    cd_at = len(out)
+    out += central
+    cd_size = len(central)
+    count = len(entries)
+
+    if zip64:
+        record_at = len(out)
+        out += struct.pack("<IQHHIIQQQQ", EOCD64_SIG, 44, 45, 45, 0, 0, count, count, cd_size, cd_at)
+        out += struct.pack("<IIQI", LOCATOR64_SIG, 0, record_at, 1)
+        out += struct.pack("<IHHHHIIH", EOCD_SIG, MARKER16, MARKER16, MARKER16, MARKER16, MARKER32,
+                           MARKER32, len(comment))
+    else:
+        out += struct.pack("<IHHHHIIH", EOCD_SIG, 0, 0, count, count, cd_size, cd_at, len(comment))
+    out += comment
+    return bytes(out)
+
+
+# ---------------------------------------------------------------------------- part trees
+
+
+def read_part_tree(case):
+    """Reads tests/fixtures/<case>/src/ into (part name, bytes) pairs in package order."""
+    root = os.path.join(FIXTURES, case, "src")
+    if not os.path.isdir(root):
+        raise SystemExit("fixture part tree not found: " + root)
+
+    parts = []
+    for folder, _, files in os.walk(root):
+        for leaf in files:
+            path = os.path.join(folder, leaf)
+            name = os.path.relpath(path, root).replace(os.sep, "/")
+            with open(path, "rb") as handle:
+                parts.append((name, handle.read()))
+    # Sorting puts [Content_Types].xml first and _rels/.rels second, which is the order Word writes and
+    # the order a reader is least surprised by.
+    parts.sort(key=lambda part: part[0])
+    return parts
+
+
+# --list only needs the expectation table, so it builds nothing: the two bomb fixtures cost hundreds of
+# megabytes of compression each, and printing a list should not.
+WRITING = True
+
+
+def write(name, data):
+    if not WRITING:
+        return None
+    path = os.path.join(BUILD, name)
+    with open(path, "wb") as handle:
+        handle.write(data)
+    return path
+
+
+# ---------------------------------------------------------------------------- fixtures
+
+
+def build_all(verbose=True, writing=True):
+    global WRITING
+    WRITING = writing
+    del EXPECTATIONS[:]
+    if writing:
+        os.makedirs(BUILD, exist_ok=True)
+    parts = read_part_tree("minimal")
+    body = dict(parts)["word/document.xml"]
+    report = []
+
+    def note(name, entries):
+        payloads = [e["payload"] for e in entries if e["method"] == 8]
+        types = sorted({first_block_type(p) for p in payloads if p})
+        # A full flush ends a block and emits an empty stored one, so each marker means two more blocks.
+        # That makes this a lower bound on the block count, which is all the report claims.
+        blocks = 1 + 2 * max([p.count(b"\x00\x00\xff\xff") for p in payloads] or [0])
+        report.append((name, len(entries), types, blocks))
+
+    # -- sound containers. Each exits 5: the container is verified, but no build before M5 converts.
+
+    stored = [make_entry(name, raw, method="store") for name, raw in parts]
+    note("minimal-stored.docx", stored)
+    write("minimal-stored.docx", build_zip(stored))
+    expect("minimal-stored.docx", 5, ["container verified", "word/document.xml"],
+           "every entry stored, so ZipReader copies rather than inflates")
+
+    deflated = [make_entry(name, raw) for name, raw in parts]
+    note("minimal-deflated.docx", deflated)
+    write("minimal-deflated.docx", build_zip(deflated))
+    expect("minimal-deflated.docx", 5, ["container verified", "word/document.xml"],
+           "every entry deflated, CRC-32 verified after inflation")
+
+    fixed = [make_entry(name, raw, strategy=zlib.Z_FIXED) for name, raw in parts]
+    note("fixed-huffman.docx", fixed)
+    write("fixed-huffman.docx", build_zip(fixed))
+    expect("fixed-huffman.docx", 5, ["container verified"], "RFC 1951 fixed-Huffman blocks (BTYPE 1)")
+
+    # A body big and varied enough that zlib chooses dynamic Huffman, with long matches to exercise the
+    # window. Generated rather than committed, so the repository does not carry 100 KiB of filler.
+    filler = []
+    for index in range(900):
+        filler.append("      <w:p><w:r><w:t>Paragraph %d of the dynamic Huffman fixture, "
+                      "repeated text repeated text.</w:t></w:r></w:p>" % index)
+    grown = body.replace(b"  </w:body>", ("\n".join(filler) + "\n  </w:body>").encode("utf-8"))
+
+    # Level 0 emits stored blocks inside a deflate stream, which is a different code path from a stored
+    # ZIP entry and the only way to reach InflateStoredBlock. A stored block caps at 65535 bytes, so the
+    # grown body is what makes this more than one of them.
+    raw_blocks = [make_entry(name, grown if name == "word/document.xml" else raw, level=0)
+                  for name, raw in parts]
+    note("deflate-stored-blocks.docx", raw_blocks)
+    write("deflate-stored-blocks.docx", build_zip(raw_blocks))
+    expect("deflate-stored-blocks.docx", 5, ["container verified"],
+           "several RFC 1951 stored blocks inside one deflate stream (BTYPE 0)")
+
+    dynamic = [make_entry(name, grown if name == "word/document.xml" else raw) for name, raw in parts]
+    note("dynamic-huffman.docx", dynamic)
+    write("dynamic-huffman.docx", build_zip(dynamic))
+    expect("dynamic-huffman.docx", 5, ["container verified", "word/document.xml %d bytes" % len(grown)],
+           "one RFC 1951 dynamic-Huffman block (BTYPE 2) over a 100 KiB part")
+
+    # Several blocks in one stream, and a mixture of types: a full flush ends the current block and emits
+    # an empty stored one, so this reaches the block loop's hand-off between types as well as its repeat.
+    pieces = [grown[i:i + 20000] for i in range(0, len(grown), 20000)]
+    mixed = [make_entry(name, raw) for name, raw in parts if name != "word/document.xml"]
+    mixed.append(make_entry("word/document.xml", grown, payload=deflate_blocks(pieces)))
+    note("multi-block.docx", mixed)
+    write("multi-block.docx", build_zip(mixed))
+    expect("multi-block.docx", 5, ["container verified", "word/document.xml %d bytes" % len(grown)],
+           "one deflate stream carrying many blocks of mixed type, ended by a final block")
+
+    # Overlapping match copies -- a match that reads bytes it is still producing -- are a named M3 scope
+    # item, and only a run of repeated bytes reaches them. Distances 1, 2 and 3 are the interesting ones.
+    runs = b"".join([b"      <w:p><w:r><w:t>",
+                     b"A" * 4000, b"</w:t></w:r></w:p>\n      <w:p><w:r><w:t>",
+                     b"ab" * 3000, b"</w:t></w:r></w:p>\n      <w:p><w:r><w:t>",
+                     b"xyz" * 2000, b"</w:t></w:r></w:p>\n"])
+    repeated = body.replace(b"  </w:body>", runs + b"  </w:body>")
+    overlap = [make_entry(name, repeated if name == "word/document.xml" else raw) for name, raw in parts]
+    note("overlapping-matches.docx", overlap)
+    write("overlapping-matches.docx", build_zip(overlap))
+    expect("overlapping-matches.docx", 5, ["container verified", "word/document.xml %d bytes" % len(repeated)],
+           "runs at distance 1, 2 and 3: matches that read the bytes they are still producing")
+
+    write("zip64.docx", build_zip([make_entry(name, raw) for name, raw in parts], zip64=True))
+    expect("zip64.docx", 5, ["container verified"],
+           "ZIP64 end record, locator and extra fields on an archive small enough to review")
+
+    streamed = [make_entry(name, raw, descriptor=True) for name, raw in parts]
+    write("data-descriptor.docx", build_zip(streamed))
+    expect("data-descriptor.docx", 5, ["container verified"],
+           "local headers zeroed and sizes in a trailing data descriptor")
+
+    without_body = [make_entry(name, raw) for name, raw in parts if name != "word/document.xml"]
+    write("no-document.docx", build_zip(without_body))
+    expect("no-document.docx", 5, ["container verified"],
+           "no word/document.xml: M3 requires only the two entry points OPC guarantees")
+
+    # Duplicate names: ZipReader documents first-in-central-directory-order as the tie-break, so the note
+    # must report the first entry's size and never the decoy's.
+    decoy = body.replace(b"Minimal fixture", b"Decoy that must never be read") + b"<!-- padding -->" * 40
+    doubled = [make_entry(name, raw) for name, raw in parts]
+    doubled.append(make_entry("word/document.xml", decoy))
+    write("duplicate-names.docx", build_zip(doubled))
+    expect("duplicate-names.docx", 5, ["container verified", "word/document.xml %d bytes" % len(body)],
+           "two entries named word/document.xml: the first in directory order wins")
+
+    write("with-comment.docx", build_zip([make_entry(name, raw) for name, raw in parts],
+                                         comment=b"an archive comment, so the end record is not the last 22 bytes"))
+    expect("with-comment.docx", 5, ["container verified"],
+           "an archive comment, so the end record is not the last 22 bytes of the file")
+
+    # -- containers that are not usable DOCX files. Every one exits 3.
+
+    write("not-a-zip.docx", b"This file is plain text, not a ZIP archive, and is padded past 22 bytes.\n")
+    expect("not-a-zip.docx", 3, ["no ZIP end-of-central-directory"], "no EOCD signature anywhere")
+
+    write("empty.docx", b"")
+    expect("empty.docx", 3, ["no ZIP end-of-central-directory"], "zero bytes, shorter than an EOCD record")
+
+    write("legacy-doc.docx", b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1" + b"\0" * 504)
+    expect("legacy-doc.docx", 3, ["OLE compound file"],
+           "OLE magic: an encrypted .docx or a legacy .doc, neither of which is a ZIP")
+
+    scrambled = [make_entry(name, raw, flags=FLAG_ENCRYPTED if name == "word/document.xml" else 0)
+                 for name, raw in parts]
+    write("encrypted.docx", build_zip(scrambled))
+    expect("encrypted.docx", 3, ["encrypted entries"], "general purpose bit 0 set on an entry")
+
+    whole = build_zip([make_entry(name, raw) for name, raw in parts])
+    write("truncated.docx", whole[:-30])
+    expect("truncated.docx", 3, ["no ZIP end-of-central-directory"], "the end record chopped off")
+
+    broken_crc = [make_entry(name, raw, method="store",
+                             **({"crc": 0x01020304} if name == "word/document.xml" else {}))
+                  for name, raw in parts]
+    write("bad-crc.docx", build_zip(broken_crc))
+    expect("bad-crc.docx", 3, ["CRC-32"], "a stored entry whose declared CRC-32 does not match its bytes")
+
+    def corrupt(payload):
+        # Byte 3 lands inside a dynamic block's code-length table, so the stream fails structurally
+        # rather than only failing its checksum.
+        damaged = bytearray(payload)
+        damaged[3] ^= 0xFF
+        return bytes(damaged)
+
+    broken_stream = []
+    for name, raw in parts:
+        entry = make_entry(name, raw)
+        if name == "word/document.xml":
+            entry["payload"] = corrupt(entry["payload"])
+        broken_stream.append(entry)
+    write("corrupt-deflate.docx", build_zip(broken_stream))
+    expect("corrupt-deflate.docx", 3, ["deflate stream"], "a flipped byte inside a deflate stream")
+
+    lying = []
+    for name, raw in parts:
+        entry = make_entry(name, raw)
+        if name == "word/document.xml":
+            entry["usize"] = len(raw) // 2  # The stream really produces twice this
+        lying.append(entry)
+    write("lying-size.docx", build_zip(lying))
+    expect("lying-size.docx", 3, ["produces more data than its directory entry declares"],
+           "a directory entry understating its size: the inflater must stop at the cap, not trust it")
+
+    def patch(data, at, raw):
+        out = bytearray(data)
+        out[at:at + len(raw)] = raw
+        return bytes(out)
+
+    _, _, _, cd_at = eocd_fields(whole)
+    write("bad-directory.docx", patch(whole, cd_at, b"XX"))
+    expect("bad-directory.docx", 3, ["ZIP structure is malformed"],
+           "the first central directory record's signature corrupted")
+
+    eocd_at, _, _, _ = eocd_fields(whole)
+    write("overlong-directory.docx", patch(whole, eocd_at + 12, struct.pack("<I", 0x00100000)))
+    expect("overlong-directory.docx", 3, ["archive is truncated"],
+           "an end record claiming a central directory that runs past the end of the file")
+
+    write("no-content-types.docx",
+          build_zip([make_entry(name, raw) for name, raw in parts if name != "[Content_Types].xml"]))
+    expect("no-content-types.docx", 3, ["[Content_Types].xml"], "the first entry point OPC guarantees is absent")
+
+    write("no-rels.docx",
+          build_zip([make_entry(name, raw) for name, raw in parts if name != "_rels/.rels"]))
+    expect("no-rels.docx", 3, ["_rels/.rels"], "the second entry point OPC guarantees is absent")
+
+    odd_method = []
+    for name, raw in parts:
+        odd_method.append(make_entry(name, raw, method=12) if name == "[Content_Types].xml"
+                          else make_entry(name, raw))
+    write("unsupported-method.docx", build_zip(odd_method))
+    expect("unsupported-method.docx", 3, ["compression method"], "method 12 (bzip2), which DOCXtoMD does not read")
+
+    # A truthful bomb: the entry really does inflate to more than the per-entry cap, so the cap is what
+    # stops it rather than a header being disbelieved.
+    bomb_bytes = 300 << 20
+    bomb_payload = deflate_zeros(bomb_bytes) if WRITING else b""
+    bomb = [make_entry(name, raw) for name, raw in parts if name != "word/document.xml"]
+    bomb.append({"name": "word/document.xml", "payload": bomb_payload, "method": 8,
+                 "crc": crc_zeros(bomb_bytes), "usize": bomb_bytes, "csize": len(bomb_payload),
+                 "flags": 0, "descriptor": False})
+    write("bomb.docx", build_zip(bomb))
+    expect("bomb.docx", 3, ["decompression limit"], "an entry inflating to 300 MiB, past the 256 MiB per-entry cap")
+
+    ratio_bytes = 16 << 20
+    ratio_payload = deflate_zeros(ratio_bytes) if WRITING else b""
+    if WRITING and ratio_bytes // len(ratio_payload) <= 1000:
+        raise SystemExit("ratio fixture no longer exceeds 1000:1; enlarge it")
+    ratio = [make_entry(name, raw) for name, raw in parts if name != "word/document.xml"]
+    ratio.append({"name": "word/document.xml", "payload": ratio_payload, "method": 8,
+                  "crc": crc_zeros(ratio_bytes), "usize": ratio_bytes, "csize": len(ratio_payload),
+                  "flags": 0, "descriptor": False})
+    write("ratio-bomb.docx", build_zip(ratio))
+    expect("ratio-bomb.docx", 3, ["decompression limit"],
+           "16 MiB from 16 KiB: under every byte cap, over the 1000:1 ratio cap")
+
+    crowd = [make_entry(name, raw) for name, raw in parts]
+    crowd += [make_entry("word/media/pad%05d.bin" % index, b"x", method="store")
+              for index in range(10001 if WRITING else 1)]
+    write("too-many-entries.docx", build_zip(crowd))
+    expect("too-many-entries.docx", 3, ["decompression limit"], "more central directory records than the cap allows")
+
+    if verbose:
+        print("built %d fixtures in %s" % (len(EXPECTATIONS), BUILD))
+        print()
+        print("%-28s %7s %7s  %s" % ("fixture", "entries", "blocks", "first deflate block type per entry"))
+        names = {0: "stored", 1: "fixed", 2: "dynamic"}
+        for name, count, types, blocks in report:
+            spelt = ", ".join(names.get(kind, "reserved(%s)" % kind) for kind in types) or "-"
+            print("%-28s %7d %6s+  %s" % (name, count, blocks, spelt))
+    return EXPECTATIONS
+
+
+def main(argv):
+    if "--list" in argv:
+        build_all(verbose=False, writing=False)
+        for row in EXPECTATIONS:
+            print("%-28s exit %d  %s" % (row["name"], row["code"], row["why"]))
+        return 0
+    build_all()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
