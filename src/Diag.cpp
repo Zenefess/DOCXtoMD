@@ -6,7 +6,7 @@
  * Last Modified: 2026-08-19
  * Description: Diagnostic sink implementation; wide arguments cross to UTF-8 at the Win32 boundary.
  * To Do: 1) Guard every writer with include/spinlocks.h when M13 gives every worker this one sink (D6).
- *        2) Replace the local WideCharToMultiByte call with the Utf module once that module exists.
+ *        2) Replace the local WideCharToMultiByte call with the Utf module once M4 lands it.
  * Dependencies: BuildGuards.h, Diag.h, typedefs.h, memory management.h, windows.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -26,7 +26,7 @@
 //-- Boundary transcoding
 
 // Writes a wide argument to stderr as UTF-8. UTF-16 exists only at the Win32 boundary, so the conversion
-// stays here rather than becoming an interface: the planned Utf module owns the document-side transcoding.
+// stays here rather than becoming an interface: M4's Utf module owns the document-side transcoding.
 static void DiagWriteWideErr(cwchptr text) {
    csi32 byteCount = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
 

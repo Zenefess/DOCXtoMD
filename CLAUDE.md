@@ -42,7 +42,7 @@ below.
     enum, so the stable API lives in code rather than only in this file) and four writers:
     `DiagWriteOut`, `DiagWriteErr`, `DiagError`, `DiagErrorText`. Wide text crosses to UTF-8 through a
     single local `WideCharToMultiByte` call buffered with `amalloc`/`mdealloc` (p2) — that is the
-    Win32 boundary, and the planned `Utf` module takes over the document side when it is written.
+    Win32 boundary, and the planned `Utf` module takes over the document side when M4 writes it.
     `Thread-safety: Reentrant`: it holds no state and takes no lock, because at M2 nothing is shared.
     **M13 makes it `MT-safe` with `include/spinlocks.h`** (D6); do not read today's `Reentrant` as a
     promise that survives that.
@@ -656,10 +656,6 @@ still accept only one input; what it must not do is assume there will only ever 
 
 ## Roadmap
 
-`Utf` is in the planned architecture but **no milestone below names it**. Whoever writes `XmlPull` at
-M4 needs UTF-8 validation over the inflated part bytes, so that is its natural home; it is called out
-here rather than silently folded in, because scheduling it is the owner's call.
-
 Work the **first non-`[done]` milestone** unless the user directs otherwise. On completion — in the
 same commit — flip its marker here, update the "Current state" section to match the repo, and update
 the prolog `To Do:` lists. A Linux session that finishes a milestone's work but cannot run its DoD
@@ -707,20 +703,25 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   ≤150 columns; `.vcxproj`/`.filters` XML well-formedness and mutual sync against what is on disk; and
   `USAGE_TEXT` diffed byte for byte against the Target CLI block. The three `src/*.cpp` files were also
   compiled by `g++ -std=c++20 -Wall -Wextra` and run against **shim** `windows.h`/`typedefs.h`/
-  `memory management.h` headers, giving 39 command-line cases the documented exit codes with no
+  `memory management.h` headers, giving 43 command-line cases the documented exit codes with no
   AddressSanitizer or UndefinedBehaviorSanitizer diagnostic. **That shim proves the parser's logic,
   not the build**: it is not MSVC, not the real shared headers, and `wchar_t` is 4 bytes there.
   The milestone's scope line above says "exit codes 0/1/2", and all three are reachable; the build also
   returns **5** for a readable input and for a failed allocation, for the reason given under "Current
   state". That is deliberate, and 5 was already in the published table before this commit.
-  **Unrun, and what the next Windows session must do**: `msbuild DOCXtoMD.sln /p:Configuration=Debug`
-  and `/p:Configuration=Release` at `/W3` with zero warnings, then run the exe for the three DoD
-  checks. There is **no `.gitignore`**, so that build leaves `x64\`, `.vs\` and the `.vcxproj.user`
-  file untracked — do not commit them, and consider raising a `.gitignore` with the owner.
-  Note M2 is the **first** commit whose TUs compile `memory management.h`, and through it
+  **Owner-verified on Windows, 2026-08-19**: the x64 build succeeds with no warnings and no errors,
+  so the global DoD's zero-warnings-at-`/W3` check passes. That also settles the one real risk this
+  commit carried: M2 is the **first** commit whose TUs compile `memory management.h`, and through it
   `common functions.h`, `vector structures.h` and `SIMD management.h` — roughly 2,000 lines of
-  owner-authored code M1 never fed to the compiler. A warning from any of those four is an
-  owner-header report, not something to fix here (see "Shared headers").
+  owner-authored code M1 never fed to a compiler — and all four come through `/W3` clean. Later
+  milestones inherit that, so a warning appearing from one of them is a regression introduced by the
+  new code, not a latent header problem.
+  **Still unrun**: the three behavioural DoD checks against the real binary — no arguments prints the
+  usage text and exits 1, `--version` exits 0, and `--help` reproduces the Target CLI block. All three
+  hold on the shim, but not yet on `x64\Release\DOCXtoMD.exe`, which is the only reason the marker is
+  `[done-unverified]` rather than `[done]`; run them and flip it. There is **no `.gitignore`**, so a
+  build leaves `x64\`, `.vs\` and the `.vcxproj.user` file untracked — do not commit them, and
+  consider raising a `.gitignore` with the owner.
 - **M3 `[next]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
   fixed-Huffman and dynamic-Huffman blocks; canonical decode tables; 32 KiB window; overlapping match
   copies), `Crc32`, and `ZipReader` (EOCD search over the last 65,557 bytes, central directory, local
@@ -730,9 +731,14 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   negatives). DoD: extracts `word/document.xml` from both a stored-entry and a deflated-entry fixture
   `.docx` with CRC-32 verified; a dynamic-Huffman payload round-trips against a Python-`zlib`-generated
   fixture; corrupt/encrypted/`.doc` inputs exit 3 with clear messages.
-- **M4 `[todo]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `XmlPull`, `OpcPackage`,
-  plus the unit-test harness (second console `.vcxproj` + tiny CHECK header under `tests/`). DoD: unit
-  tests drive token streams from string literals; main part resolved via rels, not hardcoded.
+- **M4 `[todo]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `Utf`, `XmlPull`,
+  `OpcPackage`, plus the unit-test harness (second console `.vcxproj` + tiny CHECK header under
+  `tests/`). **`Utf` is scheduled here** — owner ruling, 2026-08-19, closing the gap that no milestone
+  named it. It belongs with `XmlPull` because the tokenizer runs over the inflated part bytes and must
+  not tokenise what has not been validated; UTF-16 stays at the Win32 boundary only, and `Diag`'s local
+  `WideCharToMultiByte` moves behind `Utf` once it exists. DoD: unit tests drive token streams from
+  string literals; a part carrying invalid UTF-8 is rejected with a clear message rather than reaching
+  the walker; the main part is resolved via rels, not hardcoded.
 - **M5 `[todo]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal `DocWalker`/
   `Ir`/`MdEmitter`, plus `tests/run_golden.py` (exe runner + byte-compare + exit-code assertions).
   DoD: first golden fixture converts byte-exact.
