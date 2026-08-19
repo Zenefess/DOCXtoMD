@@ -13,13 +13,14 @@ Two documents govern all work:
 
 - `GDC_GCS_v1_1_4.md` — **Guild Coding Standard v1.1.4 (GCS)**. `CONTRIBUTING.MD` makes it mandatory:
   all submissions are reviewed against it. **Read it in full before writing or modifying any C++ code.**
-- `CONVERSION_REFERENCE.md` (repo root — there is no `docs/` directory yet) — the full DOCX→Markdown
-  domain specification (OPC container, WordprocessingML element inventory, feature→GFM mapping table,
-  escaping rules, edge cases ranked by real-world frequency, pipeline design). **Read the relevant
-  sections before implementing any conversion milestone.**
+- `docs/CONVERSION_REFERENCE.md` — the full DOCX→Markdown domain specification (OPC container,
+  WordprocessingML element inventory, feature→GFM mapping table, escaping rules, edge cases ranked
+  by real-world frequency, pipeline design). **Read the relevant sections before implementing any
+  conversion milestone.**
 
-Five owner-authored shared headers sit at the repo root and supply the GCS substrate (aliases,
-allocators, SIMD helpers) that new code is expected to build on — see "Shared headers" below.
+Six owner-authored shared headers live in `include/` and supply the GCS substrate (aliases,
+allocators, SIMD helpers, spin locks) that new code is expected to build on — see "Shared headers"
+below.
 
 ## Current state (do not assume more exists)
 
@@ -32,12 +33,14 @@ allocators, SIMD helpers) that new code is expected to build on — see "Shared 
   Win32/x64) — D3 says delete the Win32 pair; M1 executes it. The **x64** configs set
   `<LanguageStandard>stdcpp20</LanguageStandard>` + `<LanguageStandard_C>stdc17</LanguageStandard_C>`;
   the Win32 configs set neither (MSVC default C++14). **No `<EnableEnhancedInstructionSet>` anywhere**
-  — `/arch:AVX2` is decided (D4) but not yet applied. No OutDir override.
-- `DOCXtoMD.vcxproj.filters` — lists only `DOCXtoMD.cpp` under Source Files. It has **no
-  `<ClInclude>` ItemGroup**, so the five headers below are in the build but unfiltered in the IDE
-  tree; M1 adds the ItemGroup.
-- Shared headers at repo root — all five listed as `<ClInclude>` in the `.vcxproj`, all CRLF, all
-  tab-free, none exceeding 150 columns:
+  — `/arch:AVX2` is decided (D4) but not yet applied. No OutDir override. All four configs set
+  `<AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>`,
+  so any TU writes `#include "typedefs.h"` with no path prefix. Six `<ClInclude>`s, all `include\…`.
+- `DOCXtoMD.vcxproj.filters` — lists `DOCXtoMD.cpp` under Source Files and all six headers under
+  Header Files. Every `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character
+  (a mismatch breaks project load in VS).
+- Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
+  Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
   - `typedefs.h` v1.0.1 — r1/r2/t1/t2 aliases, the full pointer lattice, `al1`–`al64`, `$LoopMT*`,
     `defpa`/`refpa` (m1/m2). r17 prolog, but `ISA: Scalar | SSE4.2 | AVX2 | AVX512` — `AVX512` is
     not a valid r17 token (see Known gaps).
@@ -50,14 +53,21 @@ allocators, SIMD helpers) that new code is expected to build on — see "Shared 
     256-bit). **Pre-r17 boxed banner**, no `ISA:` field.
   - `vector structures.h` — `VEC*`/`SSE*`/`AVX*` unions and vector structs. **Pre-r17 boxed banner**,
     no `ISA:` field.
-- `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `CONVERSION_REFERENCE.md`, `LICENSE`
+  - `spinlocks.h` v1.0.0 — user-space spin locks: `SpinLockMin`/`SpinLock`/`SpinLockMax` (long-wait,
+    balanced and minimum-latency profiles), `SpinLockTry`, `SpinUnlock`, and the `SPIN_*` tuning
+    constants. r17 prolog; `ISA: AVX2`; `Thread-safety: MT-safe`. It also already carries the exact
+    `#ifndef __AVX2__` + `#error` guard D4 settled on. **Added for future multithreaded work and
+    unused today** — D5 still rules this project single-threaded; see D6.
+- `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `docs/CONVERSION_REFERENCE.md`, `LICENSE`
   (MIT, Copyright (c) 2026 David William Bull), this file.
 - Line endings: every source/build file (`*.h`, `.cpp`, `.vcxproj`, `.filters`, `.sln`) is already
-  **CRLF** as tc2 requires; the Markdown docs (`CLAUDE.md`, `CONVERSION_REFERENCE.md`,
+  **CRLF** as tc2 requires; the Markdown docs (`CLAUDE.md`, `docs/CONVERSION_REFERENCE.md`,
   `CONTRIBUTING.MD`) are LF and `GDC_GCS_v1_1_4.md` is CRLF. `.gitattributes` still does not exist to
   hold that line, so a Linux session can still drift it — check before committing (M1 fixes this).
+- `docs/` **exists** and holds `CONVERSION_REFERENCE.md`; `include/` **exists** and holds the six
+  shared headers. Neither is planned-only any more.
 - **Not yet created** (GCS obligations, see Roadmap): `CHANGELOG.md`, `.clang-format`, `.editorconfig`,
-  `.gitattributes`, `src/`, `tests/`, `bench/`, `docs/`, CI. Do not reference them as if they exist.
+  `.gitattributes`, `src/`, `tests/`, `bench/`, CI. Do not reference them as if they exist.
 
 ## Build & run
 
@@ -90,8 +100,9 @@ MSBuild compiles **only** files listed in the `.vcxproj` — there is no globbin
 needs a `<ClCompile Include="..."/>` and every new `.h` a `<ClInclude Include="..."/>` in
 `DOCXtoMD.vcxproj`, plus a matching entry in `DOCXtoMD.vcxproj.filters` (the `.filters` file only
 affects the IDE tree, but a mismatched entry breaks project load in VS). Update both **in the same
-commit** that adds the file. The `.filters` file has no `<ClInclude>` ItemGroup at all yet, so the
-five existing headers are unlisted there — M1 adds the ItemGroup and all five entries.
+commit** that adds the file, and keep the two `Include=` paths byte-identical. Headers live under
+`include\`, which is on the compiler's include path via `<AdditionalIncludeDirectories>`, so
+`Include=` attributes carry the `include\` prefix while `#include` directives in code do not.
 
 ## Coding standard (GCS v1.1.4) — the rules you will otherwise break
 
@@ -163,10 +174,13 @@ check, or raise a decision to widen the baseline — do not just assume it.
 
 ### Shared headers — how to use them
 
-They are owner-authored library files shared with other projects, not repo-local code. **Do not
-reformat, refactor, or re-version them**; if one needs a change, raise it as a numbered decision
-(D6+) the way D1–D5 were raised. What sessions need to know:
+They live in `include/` and are owner-authored library files shared with other projects, not
+repo-local code. **Do not reformat, refactor, or re-version them**; if one needs a change, raise it
+as a numbered decision (D7+) the way D1–D6 were raised. What sessions need to know:
 
+- `include\` is on the compiler's include path (`<AdditionalIncludeDirectories>` in every config), so
+  write `#include "typedefs.h"`, never `#include "include/typedefs.h"` or a `..\` path. The headers
+  include each other by bare name and sit in one directory, so they resolve either way.
 - Include `typedefs.h` first; everything else depends on it.
 - `common functions.h` calls `Sleep()` in `Idle()` but does **not** include `<windows.h>` — include
   `memory management.h` (which pulls `<windows.h>` before `typedefs.h`) or `<windows.h>` yourself
@@ -178,6 +192,10 @@ reformat, refactor, or re-version them**; if one needs a change, raise it as a n
 - Allocation goes through them (p2): `amalloc(bytes, alignment)` / `salloc(...)` /
   `mdealloc(ptr)` / `malloc16|32|64(bytes)` / `declare1d16|32|64(...)`, with `mzero`/`mset` for fills
   and `Copy*`/`Stream*` for bulk moves (`Stream*` is non-temporal — bd1/bd2 before claiming it wins).
+- `spinlocks.h` is present but **not for use in DOCXtoMD today**: D5 rules the project
+  single-threaded, so nothing here should be taking a lock. It pulls `<windows.h>` and `<intrin.h>`
+  itself, before `typedefs.h`. Including it anywhere in this project means reopening D5 — that is
+  logged as D6 and is unruled, so do not act on it until the owner has.
 
 ### Do NOT (anti-habit list)
 
@@ -200,7 +218,7 @@ reformat, refactor, or re-version them**; if one needs a change, raise it as a n
 - No performance *claim* without a `bench/` diff (bd1/bd2) — using intrinsics needs no permission,
   asserting they are faster does.
 - No hand-rolled allocators or bare `new`/`malloc` — `memory management.h` owns that (p2).
-- No edits to `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, or the five shared headers without owner sign-off.
+- No edits to `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, or the six shared headers without owner sign-off.
 
 ### r17 file prolog — copy this template
 
@@ -232,15 +250,18 @@ token wrong, do not copy it); Thread-safety ∈ {N/A, Reentrant, MT-safe}.
 
 `ISA:` describes the code in the file, not the compiler flag: a file whose only vectorization comes
 from `/arch:AVX2` auto-vectorizing scalar loops stays `ISA: Scalar`; write `ISA: Scalar | AVX2` once
-the file actually carries intrinsics or vector aliases. `Thread-safety:` is `N/A` or `Reentrant` —
-never `MT-safe` (D5).
+the file actually carries intrinsics or vector aliases. In **project** files `Thread-safety:` is
+`N/A` or `Reentrant` — never `MT-safe` (D5). The shared `include/spinlocks.h` declares `MT-safe`
+because it is a general-purpose library header; D5 governs what this project writes, not what the
+shared headers offer.
 
 ### Known gaps in the GCS you must not paper over
 
 - a3's `static_assert(__AVX2__)` needs C++17's single-argument form **and** `/arch:AVX2` (else the
   macro is undefined and the assert reads as `static_assert(0)` — or fails to compile). C++20 is
   already set on the x64 configs, so only the flag is missing; D4 settles the form as
-  `#ifndef __AVX2__` + `#error` for a readable message. M1 applies both.
+  `#ifndef __AVX2__` + `#error` for a readable message. M1 applies both. `include/spinlocks.h`
+  already carries exactly that guard (plus a two-argument `static_assert`) — copy its wording.
 - p3 literally says "keep scalar baseline; … run-time CPUID dispatch", which reads as a scalar
   fallback path; a2/a8 plus D5 override that for this project — scalar survives as an *oracle* and as
   the right choice where SIMD is not faster, never as a shipped fallback build.
@@ -256,7 +277,7 @@ never `MT-safe` (D5).
 
 ## Conversion engine — non-negotiable correctness rules
 
-Full detail with rationale lives in `CONVERSION_REFERENCE.md`; these are the invariants every
+Full detail with rationale lives in `docs/CONVERSION_REFERENCE.md`; these are the invariants every
 implementation session must respect:
 
 1. **Resolve, never hardcode**: the main document part comes from `_rels/.rels` (cross-checked via
@@ -340,12 +361,13 @@ src/
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py;
                          run_golden.py; unit tests as a second console .vcxproj with a tiny CHECK header
 bench/                   GCS p4 microbenches (create with the first performance claim)
-docs/                    module guides (d2/d3); CONVERSION_REFERENCE.md currently lives at the repo
-                         root — moving it here must update every reference in the same commit
+docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
+include/                 the six owner-authored shared headers (already here); on the include path
+                         via $(ProjectDir)include, so TUs include them by bare name
 ```
 
 There is **no `third_party/`** and there will not be one (D1/D2): the shipped binary is first-party
-code plus the CRT/Win32 and the five shared headers at the repo root, which every module may include.
+code plus the CRT/Win32 and the six shared headers in `include/`, which every module may include.
 
 Allocation-conscious modules (GCS p2 hot set): `Inflate`, `ZipReader`, `XmlPull` (zero-allocation
 steady state), `DocWalker`, `RunCoalescer`, `MdEmitter` (single growable buffer), `Utf` — all
@@ -405,8 +427,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   - **D4**: add `<EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>`
     to both x64 `ItemDefinitionGroup`s, and put the `#ifndef __AVX2__` + `#error` guard in
     `DOCXtoMD.cpp` (temporary — it moves to `src/BuildGuards.h` at M2);
-  - add the missing `<ClInclude>` ItemGroup to `DOCXtoMD.vcxproj.filters` with all five headers under
-    Header Files;
+  - (the `<ClInclude>` ItemGroup in `DOCXtoMD.vcxproj.filters` is **already done** — all six headers
+    sit under Header Files, added with the `include/` restructure);
   - add the r17 prolog to `DOCXtoMD.cpp` (temporary — superseded by `src/main.cpp` at M2).
 
   DoD: x64 Debug **and** Release build clean at `/W3`; the prolog passes the r17 regexes; a
@@ -446,8 +468,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
 
 ## Decisions (settled — do not re-litigate per session)
 
-Ruled by the owner on 2026-08-18. Keep the IDs stable: `CONVERSION_REFERENCE.md` §6.2 cites "D2 in
-CLAUDE.md" by name. New questions get the next free ID (D6, D7, …) with the same
+D1–D5 were ruled by the owner on 2026-08-18. Keep the IDs stable: `docs/CONVERSION_REFERENCE.md`
+§6.2 cites "D2 in CLAUDE.md" by name. New questions get the next free ID (D7, D8, …) with the same
 question/recommendation/status shape, and stay `Open — owner call` until the owner rules.
 
 | ID | Question | **Ruling** | Executed? |
@@ -457,6 +479,7 @@ question/recommendation/status shape, and stay `Open — owner call` until the o
 | D3 | Win32 configs vs GCS a2 ("32-bit unsupported") | **Drop the Win32 configurations** from `DOCXtoMD.vcxproj`; x64 is the only platform | M1 |
 | D4 | Adopt a3: `/arch:AVX2` + `__AVX2__` guard on x64 | **Adopt**, with the guard as `#ifndef __AVX2__` + `#error` (not `static_assert`) | M1 |
 | D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD, single-threaded**: AVX2 floor with no sub-baseline fallback; single-threading is an owner-granted exception to a2 | standing |
+| D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | *Open — owner call.* Recommendation: leave D5 standing for the conversion pipeline (branchy, single-document, I/O-bound) and revisit only for a multi-file batch mode; until ruled, the header ships in `include/` unused | — |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the
@@ -469,6 +492,6 @@ threading baseline" subsection, which is where D4 and D5 actually live (D4/D5).
   or PR text (standard Claude Code attribution trailers are fine).
 - `CHANGELOG.md` (from M1): Keep-a-Changelog style per c3; prologs stay history-free (c1).
 - License field in every prolog: `License: MIT  Copyright: David William Bull` (two spaces).
-- `CONTRIBUTING.MD` and `GDC_GCS_v1_1_4.md` are owner-managed — do not edit them. The five shared
-  headers are owner-authored library files — do not reformat or re-version them. Raise conflicts as
-  numbered decisions instead (like D1–D5 above).
+- `CONTRIBUTING.MD` and `GDC_GCS_v1_1_4.md` are owner-managed — do not edit them. The six shared
+  headers in `include/` are owner-authored library files — do not reformat or re-version them. Raise
+  conflicts as numbered decisions instead (like D1–D6 above).
