@@ -28,9 +28,9 @@ below.
   `Thread-safety: Reentrant`), D4's `#ifndef __AVX2__` + `#error` guard, `#include "typedefs.h"` and
   `si32 main() { return 0; }`, with a one-line note that r11 does not reach the name — the entry
   point is spelled by the language, not chosen, so it is not an en3 deviation and needs no
-  `RULE-DEV` tag. `wmain` is the same case at M2. The Visual Studio default comment and `#include <iostream>` are gone.
-  **Prolog and guard are both temporary**: M2 carries them into `src/main.cpp` and
-  `src/BuildGuards.h` and deletes this file.
+  `RULE-DEV` tag. `wmain` is the same case at M2. The Visual Studio default comment and
+  `#include <iostream>` are gone. **Prolog and guard are both temporary**: M2 carries them into
+  `src/main.cpp` and `src/BuildGuards.h` and deletes this file.
 - `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF) and exposes **only** `Debug|x64` and
   `Release|x64`, matching the project file exactly.
 - `DOCXtoMD.vcxproj` — v143, Unicode, Console, `/W3`, SDLCheck, ConformanceMode, Release
@@ -42,8 +42,8 @@ below.
   `<AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>`,
   so any TU writes `#include "typedefs.h"` with no path prefix. Both configs also carry
   `<EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>` — **D4 is
-  applied**, so both x64 configurations compile with `/arch:AVX2`; that it *builds* is unverified,
-  see M1's marker. No OutDir override. Six `<ClInclude>`s, all `include\…`.
+  applied** and **owner-verified on Windows**, so both x64 configurations compile with `/arch:AVX2`
+  and both build clean at `/W3`. No OutDir override. Six `<ClInclude>`s, all `include\…`.
 - `DOCXtoMD.vcxproj.filters` — lists `DOCXtoMD.cpp` under Source Files and all six headers under
   Header Files. Every `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character;
   keep it that way, or the IDE tree stops reflecting the build.
@@ -374,12 +374,12 @@ forbidden; before D6 it was.
 
 - a3's bare `static_assert(__AVX2__)` needs C++17's single-argument form **and** `/arch:AVX2` (else
   the macro is undefined and the assert reads as `static_assert(0)` — or fails to compile); the
-  two-argument form needs only C++11. C++20 is already set on the x64 configs, so only the flag is
-  missing; D4 settles the form as `#ifndef __AVX2__` + `#error` for a readable message. **M1 has
-  applied both** — the flag on both x64 configs, the guard in `DOCXtoMD.cpp` — though no build has
-  yet confirmed it. `include/spinlocks.h` carries a guard of that shape — copy the **structure, not
-  the text**: its `#error` message names `spinlocks.h`, and the `static_assert(__AVX2__, …)`
-  underneath it is exactly the construct D4 ruled out.
+  two-argument form needs only C++11. C++20 was already set on the x64 configs, so the flag was the
+  only thing missing; D4 settles the form as `#ifndef __AVX2__` + `#error` for a readable message.
+  **M1 applied both** — the flag on both x64 configs, the guard in `DOCXtoMD.cpp` — and the owner
+  verified both on Windows, so this gap is closed. `include/spinlocks.h` carries a guard of that
+  shape — copy the **structure, not the text**: its `#error` message names `spinlocks.h`, and the
+  `static_assert(__AVX2__, …)` underneath it is exactly the construct D4 ruled out.
 - p3 literally says "keep scalar baseline; … run-time CPUID dispatch", which reads as a scalar
   fallback path; a2/a8 plus D5 override that for this project — scalar survives as an *oracle* and as
   the right choice where SIMD is not faster, never as a shipped fallback build.
@@ -588,8 +588,7 @@ commands flips the marker to `[done-unverified]` and lists the unrun commands in
 only a run whose DoD commands pass on Windows flips it to `[done]`, and the next Windows session
 verifies (not reimplements) `[done-unverified]` milestones before starting new work.
 
-- **M1 `[done-unverified]` Compliance bootstrap** — also carries the executable half of D4
-  (D3's landed early):
+- **M1 `[done]` Compliance bootstrap** — also carries the executable half of D4 (D3's landed early):
   - add `CHANGELOG.md` (c2/c3), `.clang-format` per tc1 (IndentWidth 3, UseTab Never, ColumnLimit 180,
     BreakBeforeBraces Attach, AllowShortFunctionsOnASingleLine All, align decls/assigns/comments),
     `.editorconfig` per tc2 (UTF-8, CRLF, indent 3, max_line_length 180), `.gitattributes` (CRLF for
@@ -610,13 +609,12 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   DoD: x64 Debug **and** Release build clean at `/W3`; the prolog passes the r17 regexes; a
   `/p:Platform=Win32` invocation fails instead of building; temporarily clearing
   `EnableEnhancedInstructionSet` makes the build stop on the `#error`.
-  **Status**: the work landed from Linux on 2026-08-19, so only the r17 regexes were actually run
-  (they pass, and so does the `/p:Platform=Win32` check by way of D3's owner verification). The three
-  msbuild checks — Debug clean, Release clean, and the `#error` firing when
-  `EnableEnhancedInstructionSet` is cleared — are **unrun**. A Windows session runs those three, and
-  only then flips this marker to `[done]`; it should also confirm `si32 main()` and
-  `#include "typedefs.h"` compile clean at `/W3`, since neither was ever put through a compiler.
-- **M2 `[todo]` CLI skeleton** — `wmain`, `src/` layout starts (`main.cpp`, `BuildGuards.h`,
+  **Status**: all four checks pass. The work landed from Linux on 2026-08-19 with only the r17
+  regexes run there; the owner verified the rest on Windows the same day — x64 Debug and Release
+  both build clean at `/W3` (so `si32 main()` and `#include "typedefs.h"` compile warning-free),
+  clearing `EnableEnhancedInstructionSet` stops the build on the `#error`, and `/p:Platform=Win32`
+  fails by way of D3.
+- **M2 `[next]` CLI skeleton** — `wmain`, `src/` layout starts (`main.cpp`, `BuildGuards.h`,
   `CliOptions`, `Diag`), usage/help/version, exit codes 0/1/2. Retire `DOCXtoMD.cpp` in the same
   commit: delete it, carry its prolog and the `__AVX2__` guard forward into `src/main.cpp` /
   `src/BuildGuards.h` (updating `File:`/`Description:`), and swap the `.vcxproj` + `.filters` entries
@@ -674,7 +672,7 @@ until the owner rules.
 | D1 | ZIP/DEFLATE: vendor miniz vs hand-rolled inflate vs zlib | **Hand-rolled inflate.** First-party `Inflate` + `Crc32` + `ZipReader`; no `third_party/`, no vendored code | M3 |
 | D2 | XML: hand-rolled pull parser vs pugixml | **Hand-rolled pull parser.** First-party `XmlPull`; pugixml is off the table | M4 |
 | D3 | Win32 configs vs GCS a2 ("32-bit unsupported") | **Drop the Win32 configurations** from `DOCXtoMD.vcxproj`; x64 is the only platform | **done** (owner-verified on Windows 2026-08-19: `/p:Platform=Win32` fails instead of building) |
-| D4 | Adopt a3: `/arch:AVX2` + `__AVX2__` guard on x64 | **Adopt**, with the guard as `#ifndef __AVX2__` + `#error` (not `static_assert`) | **done-unverified** (M1: flag on both x64 configs, guard in `DOCXtoMD.cpp`; never built) |
+| D4 | Adopt a3: `/arch:AVX2` + `__AVX2__` guard on x64 | **Adopt**, with the guard as `#ifndef __AVX2__` + `#error` (not `static_assert`) | **done** (M1: flag on both x64 configs, guard in `DOCXtoMD.cpp`; owner-verified on Windows 2026-08-19 — both configs build clean at `/W3`, and clearing the flag stops the build on the `#error`) |
 | D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD, single-threaded**: AVX2 floor with no sub-baseline fallback; single-threading is an owner-granted exception to a2 *(as ruled 2026-08-18; D6 later narrowed the threading half — the text here is left as the owner wrote it)* | standing |
 | D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | **Yes, for multi-file processing only: one thread per file, `spinlocks.h` included.** *(Derived, not stated: a single document's conversion therefore stays sequential, and `$LoopMT*`//Qpar stay banned as compiler-directed threading — see the threading baseline.)* | M13 |
 | D7 | What batch surface does D6 need? (a) literal thread-per-file or a bounded pool? (b) how are multiple inputs passed? (c) how do per-file failures aggregate? (d) what do `--stdout` and `-o` mean for N files? | **(a) A bounded pool** sized to a user-specified thread count, defaulting to the system's virtual (logical) core count. **(b)** Inputs are repeated command-line operands: `DOCXtoMD [options] <input.docx> [input2.docx […]]`; output filenames are derived automatically. **(c)** Failed conversions are printed to the console before the process terminates, and partial success gets its own exit code. **(d)** `--stdout` is single-file only; `-o` gives the output path — the filename for one input, the directory for many | M13 |
