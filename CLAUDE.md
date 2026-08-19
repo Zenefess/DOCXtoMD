@@ -24,13 +24,50 @@ below.
 
 ## Current state (do not assume more exists)
 
-- `DOCXtoMD.cpp` — placeholder entry point, 25 lines: the r17 prolog (v0.1.0, `ISA: Scalar`,
-  `Thread-safety: Reentrant`), D4's `#ifndef __AVX2__` + `#error` guard, `#include "typedefs.h"` and
-  `si32 main() { return 0; }`, with a one-line note that r11 does not reach the name — the entry
-  point is spelled by the language, not chosen, so it is not an en3 deviation and needs no
-  `RULE-DEV` tag. `wmain` is the same case at M2. The Visual Studio default comment and
-  `#include <iostream>` are gone. **Prolog and guard are both temporary**: M2 carries them into
-  `src/main.cpp` and `src/BuildGuards.h` and deletes this file.
+- `src/` — **exists** and holds the M2 CLI skeleton: six files, all CRLF, tab-free, ASCII-only, none
+  over 150 columns, each carrying a validated r17 prolog at `v0.1.0` with `ISA: Scalar`. Unlike
+  `include/`, `src/` is **not** exempt from the repository style, and the six files are committed in
+  the shape `.clang-format` produces — running the formatter over them is a verified no-op, so a
+  format-on-save cannot manufacture a diff. Keep it that way: format after editing, then re-check the
+  r17 prolog, since the formatter has no opinion about it. `DOCXtoMD.cpp` is **gone**: its prolog and
+  D4's `#ifndef __AVX2__` + `#error` guard were carried into `src/main.cpp` and `src/BuildGuards.h` by
+  the same commit that deleted it, and its note that r11 does not reach the entry-point name (the
+  language spells it, so it is not an en3 deviation and needs no `RULE-DEV` tag) now sits above
+  `wmain`.
+  - `BuildGuards.h` — D4's guard and nothing else; `Thread-safety: N/A`, the token r17 reserves for a
+    file with no executable code. Every project `.cpp` includes it first. That resolves without a new
+    include path because MSVC searches the including file's own directory for a quoted include, so
+    `src\` is deliberately **not** in `<AdditionalIncludeDirectories>`.
+  - `Diag.h`/`Diag.cpp` — the diagnostic sink. Exports `EXIT_CODE` (all seven exit codes as one named
+    enum, so the stable API lives in code rather than only in this file) and four writers:
+    `DiagWriteOut`, `DiagWriteErr`, `DiagError`, `DiagErrorText`. Wide text crosses to UTF-8 through a
+    single local `WideCharToMultiByte` call buffered with `amalloc`/`mdealloc` (p2) — that is the
+    Win32 boundary, and the planned `Utf` module takes over the document side when M4 writes it.
+    `Thread-safety: Reentrant`: it holds no state and takes no lock, because at M2 nothing is shared.
+    **M13 makes it `MT-safe` with `include/spinlocks.h`** (D6); do not read today's `Reentrant` as a
+    promise that survives that.
+  - `CliOptions.h`/`CliOptions.cpp` — `CLI_OPTIONS` plus `CliParse`, `CliFree`, `CliWriteUsage` and
+    `CliWriteVersion`, over a `USAGE_TEXT` constant kept **byte-identical** to the Target CLI block
+    below. The whole documented surface parses; only `--help`, `--version`, `--threads` validation and
+    the `--stdout` conflict checks act at M2, and everything else is recorded for the milestone that
+    consumes it. Inputs are a list from this first commit, and `-o` is *declared* filename-or-directory
+    by input count — the usage text says so and `CLI_OPTIONS` has one field for it either way — but
+    nothing derives an output path yet, because nothing is written yet. What M2 buys is that M5 and M13
+    add derivation on top rather than re-cutting the operand grammar (D7b). Every long option that
+    takes a value accepts `--name value` **and** `--name=value`; the short forms `-o` and `-j` take
+    the following argument only. `--threads` defaults to
+    `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)` (D7a) and refuses `0` or a value above it. `-h`,
+    `--help` and `--version` are answered the moment they are seen, so they beat anything later on the
+    line; a bad option *earlier* on the line still wins. `CliParse` returns an `EXIT_CODE`, not a bool,
+    so `main` can tell a usage error (1, and print the usage text) from a failed allocation (5, and do
+    not — the command line was fine).
+  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, a `CreateFileW` readability probe per input,
+    and the exit-code mapping. There is no positional output operand (D7b).
+  - **What the binary does at M2**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+    the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, and
+    a *readable* input exits **5** with `conversion is not implemented in this build`. Exit 5, not 0,
+    because exit code 0's published contract is "all inputs converted" and M3–M11 build the converter.
+    That is temporary: M5 is the milestone that first makes 0 truthful.
 - `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF) and exposes **only** `Debug|x64` and
   `Release|x64`, matching the project file exactly.
 - `DOCXtoMD.vcxproj` — v143, Unicode, Console, `/W3`, SDLCheck, ConformanceMode, Release
@@ -43,10 +80,17 @@ below.
   so any TU writes `#include "typedefs.h"` with no path prefix. Both configs also carry
   `<EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>` — **D4 is
   applied** and **owner-verified on Windows**, so both x64 configurations compile with `/arch:AVX2`
-  and both build clean at `/W3`. No OutDir override. Six `<ClInclude>`s, all `include\…`.
-- `DOCXtoMD.vcxproj.filters` — lists `DOCXtoMD.cpp` under Source Files and all six headers under
-  Header Files. Every `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character;
-  keep it that way, or the IDE tree stops reflecting the build.
+  and both build clean at `/W3`. No OutDir override. Both configs also define
+  `WIN32_LEAN_AND_MEAN;NOMINMAX` — added at M2, when `<windows.h>` first entered the project; neither
+  hides a header this project needs, because `winnls.h` (`WideCharToMultiByte`) and `wincon.h`
+  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Three
+  `<ClCompile>`s, all `src\…`, and nine `<ClInclude>`s: the six `include\…` headers and three
+  `src\…` ones.
+- `DOCXtoMD.vcxproj.filters` — lists the three `src\*.cpp` files under Source Files and all nine
+  headers under Header Files, in the same order as the `.vcxproj`. Every `<ClCompile Include="…">` and
+  `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character; keep it that way, or
+  the IDE tree stops reflecting the build. The tree is deliberately flat — there is no `src` filter
+  folder, matching how the `include\` headers are already listed.
 - Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
   Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
   - `typedefs.h` v1.0.1 — r1/r2/t1/t2 aliases, the full pointer lattice, `al1`–`al64`, `$LoopMT*`,
@@ -68,7 +112,8 @@ below.
     `#ifndef __AVX2__` + `#error` guard of D4's shape — with a `spinlocks.h`-specific message and an
     extra `static_assert` D4 ruled out. **The sanctioned lock for the one-thread-per-file worker
     layer** (D6) — not for use inside a single document's conversion.
-- Tooling and process files, all five added by M1 and all CRLF except `CHANGELOG.md`:
+- Tooling and process files, all CRLF except `CHANGELOG.md`. The first five landed with M1;
+  `.gitignore` landed with M2, when the project first produced build output worth ignoring:
   - `.clang-format` — `BasedOnStyle: LLVM` first, so anything neither tc1 nor the list below names
     is LLVM's default rather than the GCS's; check that before assuming a rule is covered. Then
     tc1's keys verbatim, and one entry per rule the formatter would otherwise break:
@@ -99,13 +144,18 @@ below.
     `[*.md]` silently misses `CONTRIBUTING.MD` and leaves that owner-managed LF file on `crlf`.
   - `.gitattributes` — see "Line endings" below.
   - `CHANGELOG.md` — c2/c3 Keep-a-Changelog, `[Unreleased]` only; nothing is released yet.
-  None of the five is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
+  - `.gitignore` — the three things an MSVC build or Visual Studio drops here: `/x64/` (no OutDir
+    override, so binaries *and* intermediates share that tree, and D3 leaves no `Win32\` to ignore),
+    `/.vs/` and `*.vcxproj.user`. Both directory patterns are anchored with a leading `/`, so a
+    future `tests/x64/` fixture path would not be swallowed by accident. Nothing here is produced by
+    a Linux session.
+  None of the six is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
   not reach them and neither project file mentions them.
 - `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `docs/CONVERSION_REFERENCE.md`, `LICENSE`
   (MIT, Copyright (c) 2026 David William Bull), this file.
 - Line endings: `.gitattributes` now holds the line, so this no longer needs checking by hand.
   Source and build files (`*.c`, `*.cpp`, `*.h`, `*.hpp`, `*.inl`, `*.sln`, `*.vcxproj`, `*.filters`,
-  `*.props`, and the three tooling dotfiles) are `text eol=crlf`: Git stores LF and materialises
+  `*.props`, and the four tooling dotfiles) are `text eol=crlf`: Git stores LF and materialises
   **CRLF** in every working tree, on Linux exactly as on Windows, so tc2 cannot drift and a
   line-ending change can never reach a diff. Everything else is `* -text` — byte-for-byte as
   committed, whatever `core.autocrlf` a contributor has set — which is what leaves the Markdown docs
@@ -114,9 +164,9 @@ below.
   attributes and nothing shows as modified; **what a checkout produces is byte-identical to before**,
   including for the six owner-authored headers, whose content was not touched.
 - `docs/` **exists** and holds `CONVERSION_REFERENCE.md`; `include/` **exists** and holds the six
-  shared headers. Neither is planned-only any more.
-- **Not yet created** (GCS obligations, see Roadmap): `src/`, `tests/`, `bench/`, CI. Do not
-  reference them as if they exist.
+  shared headers; `src/` **exists** as of M2. None of the three is planned-only any more.
+- **Not yet created** (GCS obligations, see Roadmap): `tests/`, `bench/`, CI. Do not reference them as
+  if they exist.
 
 ## Build & run
 
@@ -131,6 +181,8 @@ msbuild DOCXtoMD.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64
 ```
 
 Default output paths (no OutDir override): `x64\Release\DOCXtoMD.exe`, `x64\Debug\DOCXtoMD.exe`.
+Since M2 the binary has a real command line: `--help` and `--version` exit 0, a usage error exits 1, an
+unopenable input exits 2, and a readable input exits 5 because the converter does not exist yet.
 **x64 is the only supported platform** — GCS a2 declares 32-bit unsupported, and D3 is **executed
 and verified on Windows**: the Win32 configurations are gone from `DOCXtoMD.vcxproj`, and
 `/p:Platform=Win32` fails instead of building. A bare `msbuild DOCXtoMD.vcxproj` with no
@@ -148,15 +200,27 @@ touching the shared headers — they are MSVC-specific (`__declspec(align)`, `__
 `__bfloat16`, `<windows.h>`, `_aligned_malloc`). MSVC v143 is the only supported compiler. **Never
 claim the build passes when you could not run msbuild; state exactly what was and was not verified.**
 
+What a Linux session *can* do, and M2 did, is build the project's own `.cpp` files against **shim**
+headers in a scratch directory: a `windows.h` declaring only the Win32 entry points the code calls, a
+`memory management.h` wrapping `posix_memalign`, and a `typedefs.h` derived from the real one by
+rewriting `__intN` and `__declspec(align(N))`. That runs the code, so parser logic, control flow, exit
+codes and AddressSanitizer/UndefinedBehaviorSanitizer all get exercised. It proves **nothing** about
+the MSVC build: not `/W3`, not `/sdl`, not the real shared headers, and `wchar_t` is 4 bytes there
+rather than 2. Report it as what it is, and never let it stand in for the msbuild DoD.
+
 ### MSBuild file-list rule (silent-failure trap)
 
 MSBuild compiles **only** files listed in the `.vcxproj` — there is no globbing. Every new `.cpp`
 needs a `<ClCompile Include="..."/>` and every new `.h` a `<ClInclude Include="..."/>` in
 `DOCXtoMD.vcxproj`, plus a matching entry in `DOCXtoMD.vcxproj.filters` (the `.filters` file only
 affects the IDE tree, but a mismatched entry breaks project load in VS). Update both **in the same
-commit** that adds the file, and keep the two `Include=` paths byte-identical. Headers live under
-`include\`, which is on the compiler's include path via `<AdditionalIncludeDirectories>`, so
-`Include=` attributes carry the `include\` prefix while `#include` directives in code do not.
+commit** that adds the file, and keep the two `Include=` paths byte-identical. Headers live in two
+places and resolve differently. `include\` is on the compiler's include path via
+`<AdditionalIncludeDirectories>`, so its `Include=` attributes carry the `include\` prefix while
+`#include "typedefs.h"` does not. `src\` is **not** on that path: a project header is included by bare
+name from a `src\*.cpp` only because MSVC searches the including file's own directory first. Either
+way the `<ClInclude>` entry carries the directory prefix — the file list is about what MSBuild tracks,
+not about how `cl` resolves the name.
 
 ## Coding standard (GCS v1.1.4) — the rules you will otherwise break
 
@@ -376,10 +440,11 @@ forbidden; before D6 it was.
   the macro is undefined and the assert reads as `static_assert(0)` — or fails to compile); the
   two-argument form needs only C++11. C++20 was already set on the x64 configs, so the flag was the
   only thing missing; D4 settles the form as `#ifndef __AVX2__` + `#error` for a readable message.
-  **M1 applied both** — the flag on both x64 configs, the guard in `DOCXtoMD.cpp` — and the owner
-  verified both on Windows, so this gap is closed. `include/spinlocks.h` carries a guard of that
-  shape — copy the **structure, not the text**: its `#error` message names `spinlocks.h`, and the
-  `static_assert(__AVX2__, …)` underneath it is exactly the construct D4 ruled out.
+  **M1 applied both** — the flag on both x64 configs, the guard in `DOCXtoMD.cpp`, which M2 moved to
+  `src/BuildGuards.h` — and the owner verified both on Windows, so this gap is closed.
+  `include/spinlocks.h` carries a guard of that shape — copy the **structure, not the text**: its
+  `#error` message names `spinlocks.h`, and the `static_assert(__AVX2__, …)` underneath it is exactly
+  the construct D4 ruled out.
 - p3 literally says "keep scalar baseline; … run-time CPUID dispatch", which reads as a scalar
   fallback path; a2/a8 plus D5 override that for this project — scalar survives as an *oracle* and as
   the right choice where SIMD is not faster, never as a shipped fallback build.
@@ -397,6 +462,12 @@ forbidden; before D6 it was.
   owner-authored files: **report them, do not fix them here.**
 - `memory management.h` documents a dependency on `data tracking.h`, which is absent from this repo
   (see "Shared headers").
+- The project does **not** pass `/utf-8`, and the sources carry no BOM, so every narrow string literal
+  must stay ASCII: a non-ASCII byte would be decoded in whatever code page the compiler runs under and
+  re-encoded into the execution charset, and the tool's own output contract is UTF-8. Nothing enforces
+  this — the r17 prolog is ASCII-only by rule, but a literal in the body is not. M2 keeps `USAGE_TEXT`
+  ASCII by hand. Adding `/utf-8` to both configurations would settle it and is worth raising as a
+  numbered decision the first time a non-ASCII literal is genuinely wanted.
 - r17's `Thread-safety` vocabulary has no token for **thread-compatible** ("safe as long as two
   threads do not share the instance"), which after D6 is the accurate description of every per-worker
   module. `Reentrant` is used for it because it is the nearest legal token and matches the owner's
@@ -469,7 +540,11 @@ implementation session must respect:
 | Soft hyphens | Removed; NBSP and smart punctuation kept verbatim |
 | Output encoding | UTF-8, no BOM, LF line endings (tc2's CRLF governs source files, not program output) |
 
-## Planned architecture (only `docs/` and `include/` exist so far — build the rest via the Roadmap)
+## Planned architecture (`docs/`, `include/` and four `src/` modules exist — build the rest by Roadmap)
+
+**Written so far (M2)**: `src/main.cpp`, `src/BuildGuards.h`, `src/CliOptions.h`/`.cpp` and
+`src/Diag.h`/`.cpp`, plus everything already in `docs/` and `include/`. Every other entry below is
+still to be written — do not reference one as if it exists.
 
 ```
 src/
@@ -493,8 +568,8 @@ src/
    MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)
    MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing
    MediaExtractor.h/.cpp referenced media parts → disk; content-type extensions; dedup; safe names
-   Diag.h/.cpp           error codes/messages → stderr; exit-code mapping. MT-safe: every worker
-                         reports through this one sink, so it locks (D6)
+   Diag.h/.cpp           error codes/messages → stderr; exit-code mapping. MT-safe from M13: every
+                         worker reports through this one sink, so it locks then (D6). Reentrant at M2
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py;
                          run_golden.py; unit tests as a second console .vcxproj with a tiny CHECK header
 bench/                   GCS p4 microbenches (create with the first performance claim)
@@ -536,7 +611,7 @@ Usage: DOCXtoMD [options] <input.docx> [input2.docx [input3.docx [...]]]
   -j, --threads <n>      worker threads (default: system virtual core count)
   --media-dir <dir>      image dir (default <stem>_media\)   --no-images   alt text only
   --hard-break=<backslash|spaces>  (default backslash)      -q, --quiet   errors only
-  --stdout               markdown to stdout — single input only
+  --stdout               markdown to stdout - single input only
   --version              print version, exit 0              -h, --help    usage, exit 0
 ```
 
@@ -554,6 +629,12 @@ derived, not ruled, since D7c only names the partial case.
 
 `-j`/`--threads` is the spelling this file assumes for D7a's user-specified thread count; the owner
 ruled the behaviour, not the flag name.
+
+From M2 this block is **not just documentation**: `USAGE_TEXT` in `src/CliOptions.cpp` reproduces it
+byte for byte, and `--help` prints it. Edit one and you must edit the other. It is pure ASCII on
+purpose — the `--stdout` line carried an em dash until M2 — because the sources have no BOM and the
+project does not pass `/utf-8`, so a non-ASCII byte in a narrow string literal would be read in
+whatever code page the compiler happens to run under. Keep any new line ASCII, or add `/utf-8` first.
 
 D7 settles this surface, so it is no longer provisional. Two consequences reach back into M2, where
 `CliOptions` is first written: **hold the inputs as a list from the start** — retrofitting one later
@@ -600,11 +681,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     M1's `/p:Platform=Win32` DoD check is therefore already discharged);
   - **D4**: add `<EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>`
     to both x64 `ItemDefinitionGroup`s, and put the `#ifndef __AVX2__` + `#error` guard in
-    `DOCXtoMD.cpp` (temporary — it moves to `src/BuildGuards.h` at M2);
+    `DOCXtoMD.cpp` (temporary — M2 moved it to `src/BuildGuards.h`);
   - (the `<ClInclude>` ItemGroup in `DOCXtoMD.vcxproj.filters` is **already done** — all six headers
     sit under Header Files. This M1 sub-task landed early in the `include/` resync commit, because
     listing `include\spinlocks.h` obliged the MSBuild file-list rule to fix `.filters` anyway);
-  - add the r17 prolog to `DOCXtoMD.cpp` (temporary — superseded by `src/main.cpp` at M2).
+  - add the r17 prolog to `DOCXtoMD.cpp` (temporary — M2 superseded it with `src/main.cpp`).
 
   DoD: x64 Debug **and** Release build clean at `/W3`; the prolog passes the r17 regexes; a
   `/p:Platform=Win32` invocation fails instead of building; temporarily clearing
@@ -614,15 +695,38 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   both build clean at `/W3` (so `si32 main()` and `#include "typedefs.h"` compile warning-free),
   clearing `EnableEnhancedInstructionSet` stops the build on the `#error`, and `/p:Platform=Win32`
   fails by way of D3.
-- **M2 `[next]` CLI skeleton** — `wmain`, `src/` layout starts (`main.cpp`, `BuildGuards.h`,
-  `CliOptions`, `Diag`), usage/help/version, exit codes 0/1/2. Retire `DOCXtoMD.cpp` in the same
-  commit: delete it, carry its prolog and the `__AVX2__` guard forward into `src/main.cpp` /
-  `src/BuildGuards.h` (updating `File:`/`Description:`), and swap the `.vcxproj` + `.filters` entries
-  per the MSBuild file-list rule. Shape `CliOptions` for D7 now even while only one input is
-  accepted: inputs are a **list**, `-o` means filename-or-directory by input count, and there is no
-  positional output operand. DoD: no-args prints usage and exits 1; `--version` exits 0; the usage
-  text matches the Target CLI block above.
-- **M3 `[todo]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
+- **M2 `[done]` CLI skeleton** — `wmain`, `src/` layout starts (`main.cpp`,
+  `BuildGuards.h`, `CliOptions`, `Diag`), usage/help/version, exit codes 0/1/2. Retire `DOCXtoMD.cpp`
+  in the same commit: delete it, carry its prolog and the `__AVX2__` guard forward into
+  `src/main.cpp` / `src/BuildGuards.h` (updating `File:`/`Description:`), and swap the `.vcxproj` +
+  `.filters` entries per the MSBuild file-list rule. Shape `CliOptions` for D7 now even while only one
+  input is accepted: inputs are a **list**, `-o` means filename-or-directory by input count, and there
+  is no positional output operand. DoD: no-args prints usage and exits 1; `--version` exits 0; the
+  usage text matches the Target CLI block above.
+  **Status**: the code landed from Linux on 2026-08-19. `CliOptions` was shaped past the minimum — it
+  accepts N inputs, not one — because nothing is converted yet, so the list costs nothing to honour in
+  full. **Verified on Linux**: the r17 prolog regexes, 3-space indent, no tabs, ASCII only, CRLF,
+  ≤150 columns; `.vcxproj`/`.filters` XML well-formedness and mutual sync against what is on disk; and
+  `USAGE_TEXT` diffed byte for byte against the Target CLI block. The three `src/*.cpp` files were also
+  compiled by `g++ -std=c++20 -Wall -Wextra` and run against **shim** `windows.h`/`typedefs.h`/
+  `memory management.h` headers, giving 43 command-line cases the documented exit codes with no
+  AddressSanitizer or UndefinedBehaviorSanitizer diagnostic. **That shim proves the parser's logic,
+  not the build**: it is not MSVC, not the real shared headers, and `wchar_t` is 4 bytes there.
+  The milestone's scope line above says "exit codes 0/1/2", and all three are reachable; the build also
+  returns **5** for a readable input and for a failed allocation, for the reason given under "Current
+  state". That is deliberate, and 5 was already in the published table before this commit.
+  **Owner-verified on Windows, 2026-08-19**: the x64 build succeeds with no warnings and no errors,
+  so the global DoD's zero-warnings-at-`/W3` check passes. That also settles the one real risk this
+  commit carried: M2 is the **first** commit whose TUs compile `memory management.h`, and through it
+  `common functions.h`, `vector structures.h` and `SIMD management.h` — roughly 2,000 lines of
+  owner-authored code M1 never fed to a compiler — and all four come through `/W3` clean. Later
+  milestones inherit that, so a warning appearing from one of them is a regression introduced by the
+  new code, not a latent header problem.
+  The three behavioural checks were run against `x64\Release\DOCXtoMD.exe` the same day and all
+  three behave as documented: no arguments prints the usage text and exits 1, `--version` exits 0, and
+  `--help` reproduces the Target CLI block. With the build and all three checks confirmed on Windows,
+  M2's DoD is fully discharged and the marker is `[done]`.
+- **M3 `[next]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
   fixed-Huffman and dynamic-Huffman blocks; canonical decode tables; 32 KiB window; overlapping match
   copies), `Crc32`, and `ZipReader` (EOCD search over the last 65,557 bytes, central directory, local
   headers, methods 0/8 only, ZIP64, data descriptors, duplicate names, encryption bit) with the
@@ -631,9 +735,14 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   negatives). DoD: extracts `word/document.xml` from both a stored-entry and a deflated-entry fixture
   `.docx` with CRC-32 verified; a dynamic-Huffman payload round-trips against a Python-`zlib`-generated
   fixture; corrupt/encrypted/`.doc` inputs exit 3 with clear messages.
-- **M4 `[todo]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `XmlPull`, `OpcPackage`,
-  plus the unit-test harness (second console `.vcxproj` + tiny CHECK header under `tests/`). DoD: unit
-  tests drive token streams from string literals; main part resolved via rels, not hardcoded.
+- **M4 `[todo]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `Utf`, `XmlPull`,
+  `OpcPackage`, plus the unit-test harness (second console `.vcxproj` + tiny CHECK header under
+  `tests/`). **`Utf` is scheduled here** — owner ruling, 2026-08-19, closing the gap that no milestone
+  named it. It belongs with `XmlPull` because the tokenizer runs over the inflated part bytes and must
+  not tokenise what has not been validated; UTF-16 stays at the Win32 boundary only, and `Diag`'s local
+  `WideCharToMultiByte` moves behind `Utf` once it exists. DoD: unit tests drive token streams from
+  string literals; a part carrying invalid UTF-8 is rejected with a clear message rather than reaching
+  the walker; the main part is resolved via rels, not hardcoded.
 - **M5 `[todo]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal `DocWalker`/
   `Ir`/`MdEmitter`, plus `tests/run_golden.py` (exe runner + byte-compare + exit-code assertions).
   DoD: first golden fixture converts byte-exact.
@@ -672,7 +781,7 @@ until the owner rules.
 | D1 | ZIP/DEFLATE: vendor miniz vs hand-rolled inflate vs zlib | **Hand-rolled inflate.** First-party `Inflate` + `Crc32` + `ZipReader`; no `third_party/`, no vendored code | M3 |
 | D2 | XML: hand-rolled pull parser vs pugixml | **Hand-rolled pull parser.** First-party `XmlPull`; pugixml is off the table | M4 |
 | D3 | Win32 configs vs GCS a2 ("32-bit unsupported") | **Drop the Win32 configurations** from `DOCXtoMD.vcxproj`; x64 is the only platform | **done** (owner-verified on Windows 2026-08-19: `/p:Platform=Win32` fails instead of building) |
-| D4 | Adopt a3: `/arch:AVX2` + `__AVX2__` guard on x64 | **Adopt**, with the guard as `#ifndef __AVX2__` + `#error` (not `static_assert`) | **done** (M1: flag on both x64 configs, guard in `DOCXtoMD.cpp`; owner-verified on Windows 2026-08-19 — both configs build clean at `/W3`, and clearing the flag stops the build on the `#error`) |
+| D4 | Adopt a3: `/arch:AVX2` + `__AVX2__` guard on x64 | **Adopt**, with the guard as `#ifndef __AVX2__` + `#error` (not `static_assert`) | **done** (M1: flag on both x64 configs, guard in `DOCXtoMD.cpp`, moved to `src/BuildGuards.h` at M2; owner-verified on Windows 2026-08-19 — both configs build clean at `/W3`, and clearing the flag stops the build on the `#error`) |
 | D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD, single-threaded**: AVX2 floor with no sub-baseline fallback; single-threading is an owner-granted exception to a2 *(as ruled 2026-08-18; D6 later narrowed the threading half — the text here is left as the owner wrote it)* | standing |
 | D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | **Yes, for multi-file processing only: one thread per file, `spinlocks.h` included.** *(Derived, not stated: a single document's conversion therefore stays sequential, and `$LoopMT*`//Qpar stay banned as compiler-directed threading — see the threading baseline.)* | M13 |
 | D7 | What batch surface does D6 need? (a) literal thread-per-file or a bounded pool? (b) how are multiple inputs passed? (c) how do per-file failures aggregate? (d) what do `--stdout` and `-o` mean for N files? | **(a) A bounded pool** sized to a user-specified thread count, defaulting to the system's virtual (logical) core count. **(b)** Inputs are repeated command-line operands: `DOCXtoMD [options] <input.docx> [input2.docx […]]`; output filenames are derived automatically. **(c)** Failed conversions are printed to the console before the process terminates, and partial success gets its own exit code. **(d)** `--stdout` is single-file only; `-o` gives the output path — the filename for one input, the directory for many | M13 |
