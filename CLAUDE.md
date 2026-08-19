@@ -86,15 +86,14 @@ msbuild DOCXtoMD.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64
 ```
 
 Default output paths (no OutDir override): `x64\Release\DOCXtoMD.exe`, `x64\Debug\DOCXtoMD.exe`.
-**x64 is the only supported platform** — GCS a2 declares 32-bit unsupported, and D3 has been
-executed: the Win32 configurations are gone from `DOCXtoMD.vcxproj`, so `/p:Platform=Win32` should
-now fail rather than build, and so should a bare `msbuild DOCXtoMD.vcxproj` with no `/p:Platform`
-(MSBuild defaults `$(Platform)` to `Win32` for `.vcxproj`, giving MSB8013) — that is the guard
-working, not a broken project file, so always pass `/p:Platform=x64` or build the `.sln`, whose
-default configuration is `Debug|x64`. Both of those are **unverified**: the session that deleted the
-configurations could not run msbuild, and the next Windows session should confirm them. Do not add
-them back, and do not add a new
-numbered decision.
+**x64 is the only supported platform** — GCS a2 declares 32-bit unsupported, and D3 is **executed
+and verified on Windows**: the Win32 configurations are gone from `DOCXtoMD.vcxproj`, and
+`/p:Platform=Win32` fails instead of building. A bare `msbuild DOCXtoMD.vcxproj` with no
+`/p:Platform` fails the same way and for the same reason — MSBuild defaults `$(Platform)` to `Win32`
+for `.vcxproj`, so it lands on the missing configuration and reports MSB8013. That is the guard
+working, not a broken project file: pass `/p:Platform=x64`, or build the `.sln`, whose default
+configuration is `Debug|x64`. Do not add the Win32 configurations back, and do not add a new
+platform without a new numbered decision.
 
 **Linux/remote sessions cannot run MSVC — nothing in this project can be compiled or executed there.**
 What you can still verify on Linux: `.vcxproj`/`.filters`/`.sln` XML/text well-formedness and mutual
@@ -544,10 +543,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     BreakBeforeBraces Attach, AllowShortFunctionsOnASingleLine All, align decls/assigns/comments),
     `.editorconfig` per tc2 (UTF-8, CRLF, indent 3, max_line_length 180), `.gitattributes` (CRLF for
     source; leave the Markdown docs as they are);
-  - (**D3** is **already done** — the `Win32` `ProjectConfiguration`s and every `…|Win32`
+  - (**D3** is **done and owner-verified** — the `Win32` `ProjectConfiguration`s and every `…|Win32`
     `PropertyGroup` / `ImportGroup` / `ItemDefinitionGroup` were deleted from `DOCXtoMD.vcxproj` on
     the owner's instruction, ahead of M1. The `.sln` already listed x64 only, so it needed no change,
-    and `<LanguageStandard>stdcpp20</LanguageStandard>` was already set on both surviving configs);
+    and `<LanguageStandard>stdcpp20</LanguageStandard>` was already set on both surviving configs.
+    M1's `/p:Platform=Win32` DoD check is therefore already discharged);
   - **D4**: add `<EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>`
     to both x64 `ItemDefinitionGroup`s, and put the `#ifndef __AVX2__` + `#error` guard in
     `DOCXtoMD.cpp` (temporary — it moves to `src/BuildGuards.h` at M2);
@@ -616,7 +616,7 @@ until the owner rules.
 |---|---|---|---|
 | D1 | ZIP/DEFLATE: vendor miniz vs hand-rolled inflate vs zlib | **Hand-rolled inflate.** First-party `Inflate` + `Crc32` + `ZipReader`; no `third_party/`, no vendored code | M3 |
 | D2 | XML: hand-rolled pull parser vs pugixml | **Hand-rolled pull parser.** First-party `XmlPull`; pugixml is off the table | M4 |
-| D3 | Win32 configs vs GCS a2 ("32-bit unsupported") | **Drop the Win32 configurations** from `DOCXtoMD.vcxproj`; x64 is the only platform | **done-unverified** (deleted on Linux; `/p:Platform=Win32` failing is unconfirmed) |
+| D3 | Win32 configs vs GCS a2 ("32-bit unsupported") | **Drop the Win32 configurations** from `DOCXtoMD.vcxproj`; x64 is the only platform | **done** (owner-verified on Windows 2026-08-19: `/p:Platform=Win32` fails instead of building) |
 | D4 | Adopt a3: `/arch:AVX2` + `__AVX2__` guard on x64 | **Adopt**, with the guard as `#ifndef __AVX2__` + `#error` (not `static_assert`) | M1 |
 | D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD, single-threaded**: AVX2 floor with no sub-baseline fallback; single-threading is an owner-granted exception to a2 *(as ruled 2026-08-18; D6 later narrowed the threading half — the text here is left as the owner wrote it)* | standing |
 | D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | **Yes, for multi-file processing only: one thread per file, `spinlocks.h` included.** *(Derived, not stated: a single document's conversion therefore stays sequential, and `$LoopMT*`//Qpar stay banned as compiler-directed threading — see the threading baseline.)* | M13 |
