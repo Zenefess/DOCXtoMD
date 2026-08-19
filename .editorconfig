@@ -13,16 +13,27 @@ max_line_length = 180
 # RULE-DEV:tc2 The Markdown documents are not GCS source files. CLAUDE.md,
 # CONTRIBUTING.MD and docs/ are authored LF while GDC_GCS_v1_1_4.md is CRLF, and
 # .gitattributes deliberately leaves all of them at whatever they were written
-# with; "unset" stops an editor converting them behind Git's back.
-[*.md]
+# with; "unset" stops an editor converting them behind Git's back. EditorConfig
+# globs are case-sensitive, so the brace list is what actually reaches
+# CONTRIBUTING.MD -- a bare [*.md] would leave that one file on crlf.
+[*.{md,MD}]
 end_of_line = unset
 
 # RULE-DEV:tc2 The MIT licence text is not a source file, and is authored LF.
 [LICENSE]
 end_of_line = unset
 
-# RULE-DEV:r8 Visual Studio writes .sln files with tab indentation and rewrites
-# the whole file itself; matching it keeps a hand edit from mixing tabs into a
-# file the IDE will re-emit with tabs anyway.
+# RULE-DEV:r8,tc2 Visual Studio writes DOCXtoMD.sln with tab indentation and a
+# UTF-8 BOM, and rewrites the whole file itself; matching it keeps a hand edit
+# from fighting the IDE. "utf-8-bom" is tc2's UTF-8 with the mark VS puts back --
+# plain "utf-8" here means "no BOM", which would strip it on the next save.
 [*.sln]
+charset = utf-8-bom
 indent_style = tab
+
+# RULE-DEV:tc2 The .filters file also carries a UTF-8 BOM from Visual Studio, and
+# its Include= paths must stay byte-identical to the .vcxproj (see the MSBuild
+# file-list rule in CLAUDE.md), so nothing should rewrite it behind the IDE.
+# DOCXtoMD.vcxproj itself has no BOM and stays on the [*] charset.
+[*.filters]
+charset = utf-8-bom

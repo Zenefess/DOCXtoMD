@@ -4,7 +4,7 @@
 Language: Cpp
 BasedOnStyle: LLVM
 
-# tc1
+# tc1 (TabWidth mirrors IndentWidth so a stray tab renders at the r8 width)
 IndentWidth: 3
 TabWidth: 3
 UseTab: Never
@@ -17,6 +17,17 @@ AlignTrailingComments: true
 
 # r12: tables, macros and global constants are UPPER_SNAKE and read as columns.
 AlignConsecutiveMacros: Consecutive
+
+# r3/r4: same-line statements are legal where they read better. LLVM's defaults
+# break every one of them onto its own line, so the short-statement options are
+# turned back on. Note the limit: clang-format has no option that keeps two
+# statements on one line, so r4's three-space form (`va_list val;   va_start(...)`,
+# as `memory management.h` writes it) is split whatever this file says. Reformat
+# a file carrying that idiom only if you intend to lose it.
+AllowShortBlocksOnASingleLine: Always
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
 
 # r13: no space before '(' in a control structure -- if(x), for(...), while(...).
 SpaceBeforeParens: Never

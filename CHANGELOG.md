@@ -11,13 +11,25 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 
 - `.clang-format` per GCS tc1 — 3-space indent, no tabs, 180-column limit, attached braces,
   short function bodies on one line, and aligned declarations, assignments and trailing
-  comments. `SpaceBeforeParens: Never` enforces r13, and `SortIncludes: Never` keeps the
-  formatter from reordering the shared headers, whose include order is load-bearing.
+  comments. Five further keys keep the formatter from breaking rules stated elsewhere:
+  `AlignConsecutiveMacros` (r12), `SpaceBeforeParens: Never` (r13), the three
+  `AllowShort*OnASingleLine` keys that preserve r3/r4 same-line statements, `SortIncludes: Never`
+  (the shared headers' include order is load-bearing), and `ReflowComments: false` (an r17
+  prolog is regex-validated byte for byte). `NamespaceIndentation: All` matches
+  `SIMD management.h`.
+- `include/.clang-format` with `DisableFormat: true` — the six headers there are owner-authored
+  and must not be reformatted, and the repository style would otherwise rewrite them by
+  thousands of lines. Verified: formatting all six is now a no-op.
 - `.editorconfig` per GCS tc2 — UTF-8, CRLF, 3-space indent, 180-column limit. The Markdown
-  documents, `LICENSE`, and `.sln` indentation carry `RULE-DEV` exemptions.
-- `.gitattributes` — sources and MSBuild files are stored LF and checked out CRLF on every
-  platform, so tc2's CRLF requirement can no longer drift in a session on a non-Windows host.
-  Every other path is `-text`, which leaves the prose files at whatever they were authored with.
+  documents and `LICENSE` keep their authored line endings, `.sln` keeps Visual Studio's tab
+  indentation, and `.sln` and `.filters` are `utf-8-bom` because both ship with a BOM that a plain
+  `utf-8` charset would strip — four `RULE-DEV`-tagged exemptions in all. The Markdown glob is
+  `[*.{md,MD}]`, not `[*.md]`: EditorConfig globs are case-sensitive and the repository holds a
+  `CONTRIBUTING.MD`.
+- `.gitattributes` — sources, MSBuild files and the tooling dotfiles (`.clang-format`,
+  `.editorconfig`, `.gitattributes`) are stored LF and checked out CRLF on every platform, so
+  tc2's CRLF requirement can no longer drift in a session on a non-Windows host. Every other
+  path is `-text`, which leaves the prose files at whatever they were authored with.
 - This changelog.
 - `/arch:AVX2` on both x64 configurations of `DOCXtoMD.vcxproj`
   (`<EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>`),
@@ -28,7 +40,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ### Changed
 
 - `DOCXtoMD.cpp` no longer includes `<iostream>`; it includes `typedefs.h` — resolved through
-  the project's `$(ProjectDir)include` search path — and returns `si32` per r1.
+  the project's `$(ProjectDir)include` search path — and returns `si32` per r1. A note records that
+  r11 does not reach `main`: the entry point is spelled by the language, not chosen by the author.
 - Source and MSBuild files are now stored in the repository with LF and materialised as CRLF
   in the working tree. The bytes a checkout produces are unchanged.
 

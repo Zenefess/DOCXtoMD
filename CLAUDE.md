@@ -24,9 +24,11 @@ below.
 
 ## Current state (do not assume more exists)
 
-- `DOCXtoMD.cpp` — placeholder entry point, 24 lines: the r17 prolog (v0.1.0, `ISA: Scalar`,
+- `DOCXtoMD.cpp` — placeholder entry point, 25 lines: the r17 prolog (v0.1.0, `ISA: Scalar`,
   `Thread-safety: Reentrant`), D4's `#ifndef __AVX2__` + `#error` guard, `#include "typedefs.h"` and
-  `si32 main() { return 0; }`. The Visual Studio default comment and `#include <iostream>` are gone.
+  `si32 main() { return 0; }`, with a one-line note that r11 does not reach the name — the entry
+  point is spelled by the language, not chosen, so it is not an en3 deviation and needs no
+  `RULE-DEV` tag. `wmain` is the same case at M2. The Visual Studio default comment and `#include <iostream>` are gone.
   **Prolog and guard are both temporary**: M2 carries them into `src/main.cpp` and
   `src/BuildGuards.h` and deletes this file.
 - `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF) and exposes **only** `Debug|x64` and
@@ -66,19 +68,33 @@ below.
     `#ifndef __AVX2__` + `#error` guard of D4's shape — with a `spinlocks.h`-specific message and an
     extra `static_assert` D4 ruled out. **The sanctioned lock for the one-thread-per-file worker
     layer** (D6) — not for use inside a single document's conversion.
-- Tooling and process files, all four added by M1 and all CRLF except `CHANGELOG.md`:
-  - `.clang-format` — tc1's keys verbatim, plus three that stop the formatter breaking something:
-    `SpaceBeforeParens: Never` (r13), `SortIncludes: Never` (the shared headers have a load-bearing
-    include order — see "Shared headers"), `ReflowComments: false` (an r17 prolog is regex-validated
-    byte-for-byte and must not be rewrapped), and `NamespaceIndentation: All` to match
-    `SIMD management.h`.
-  - `.editorconfig` — tc2's four properties plus `indent_style = space` from r8, with three
-    `RULE-DEV` exemptions: `*.md` and `LICENSE` keep their authored line endings, and `*.sln` keeps
-    the tab indentation Visual Studio writes into it.
+- Tooling and process files, all five added by M1 and all CRLF except `CHANGELOG.md`:
+  - `.clang-format` — tc1's keys verbatim, plus five groups that stop the formatter breaking a
+    rule stated elsewhere: `AlignConsecutiveMacros: Consecutive` (r12), `SpaceBeforeParens: Never`
+    (r13), the three `AllowShort*OnASingleLine` keys that keep r3/r4 same-line statements from
+    being exploded onto separate lines, `SortIncludes: Never` (the shared headers have a
+    load-bearing include order — see "Shared headers"), and `ReflowComments: false` (an r17 prolog
+    is regex-validated byte-for-byte and must not be rewrapped). `NamespaceIndentation: All`
+    matches `SIMD management.h`. **Known limit**: clang-format has no option that keeps two
+    statements on one line, so r4's three-space form — `va_list val;   va_start(val, pointer);` as
+    `memory management.h` writes it — is split no matter what this file says. Format a file
+    carrying that idiom only if you mean to lose it.
+  - `include/.clang-format` — `DisableFormat: true` (plus `SortIncludes: Never`, because a
+    directory `.clang-format` **replaces** the parent rather than merging with it). Without it the
+    repository style rewrites the owner-authored headers by thousands of lines — 874 in
+    `typedefs.h`, 986 in `vector structures.h` — which "Shared headers" forbids. With it,
+    formatting all six is a verified no-op.
+  - `.editorconfig` — tc2's four properties plus `indent_style = space` from r8, with four
+    `RULE-DEV`-tagged exemptions: Markdown and `LICENSE` keep their authored line endings; `*.sln`
+    keeps Visual Studio's tab indentation; and `*.sln` and `*.filters` are `charset = utf-8-bom`
+    because both ship with a BOM and EditorConfig's plain `utf-8` means *no* BOM, so an honest
+    `[*]` charset would strip it on the next save (`DOCXtoMD.vcxproj` has no BOM and is unaffected).
+    The Markdown glob is `[*.{md,MD}]`: EditorConfig globs are **case-sensitive**, so a bare
+    `[*.md]` silently misses `CONTRIBUTING.MD` and leaves that owner-managed LF file on `crlf`.
   - `.gitattributes` — see "Line endings" below.
   - `CHANGELOG.md` — c2/c3 Keep-a-Changelog, `[Unreleased]` only; nothing is released yet.
-  None of the four is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does not
-  reach them and neither project file mentions them.
+  None of the five is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
+  not reach them and neither project file mentions them.
 - `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `docs/CONVERSION_REFERENCE.md`, `LICENSE`
   (MIT, Copyright (c) 2026 David William Bull), this file.
 - Line endings: `.gitattributes` now holds the line, so this no longer needs checking by hand.
@@ -252,7 +268,9 @@ check, or raise a decision to widen the baseline — do not just assume it.
 
 They live in `include/` and are owner-authored library files shared with other projects, not
 repo-local code. **Do not reformat, refactor, or re-version them**; if one needs a change, raise it
-as a numbered decision (D8+) the way D1–D7 were raised. What sessions need to know:
+as a numbered decision (D8+) the way D1–D7 were raised. `include/.clang-format` enforces that
+mechanically — `DisableFormat: true`, so a stray "Format Document" in the IDE is a no-op there. What
+sessions need to know:
 
 - `include\` is on the compiler's include path (`<AdditionalIncludeDirectories>` in every config), so
   write `#include "typedefs.h"`, never `#include "include/typedefs.h"` or a `..\` path. The headers

@@ -21,4 +21,5 @@
 
 #include "typedefs.h"
 
+// r11 does not reach this name: the entry point is spelled by the language, not chosen here.
 si32 main() { return 0; }
