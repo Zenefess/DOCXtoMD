@@ -1,0 +1,29 @@
+# .gitattributes -- line-ending policy for the DOCXtoMD repository.
+#
+# GCS tc2 requires CRLF source files. Git stores those files with LF and
+# materialises CRLF in every working tree, so a session on any platform checks
+# out CRLF, and a line-ending change can never reach a diff.
+
+# Never guess. Any path this file does not name keeps exactly the bytes it was
+# committed with, whatever core.autocrlf a contributor has set globally. That is
+# what leaves the prose alone: CLAUDE.md, CONTRIBUTING.MD and docs/ are LF,
+# GDC_GCS_v1_1_4.md is CRLF, and every one of them stays as authored.
+* -text
+
+# C and C++ sources and headers.
+*.c            text eol=crlf
+*.cpp          text eol=crlf
+*.h            text eol=crlf
+*.hpp          text eol=crlf
+*.inl          text eol=crlf
+
+# MSBuild solution, project and property files.
+*.sln          text eol=crlf
+*.vcxproj      text eol=crlf
+*.filters      text eol=crlf
+*.props        text eol=crlf
+
+# Tooling configuration that travels with the source.
+.clang-format  text eol=crlf
+.editorconfig  text eol=crlf
+.gitattributes text eol=crlf

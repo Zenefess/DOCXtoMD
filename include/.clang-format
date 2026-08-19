@@ -1,0 +1,10 @@
+# The six headers in this directory are owner-authored library files shared with
+# other projects. CLAUDE.md: "Do not reformat, refactor, or re-version them."
+# Without this file the repository's own .clang-format rewrites them by thousands
+# of lines -- 874 in typedefs.h, 986 in vector structures.h -- so formatting is
+# switched off for the whole directory. A directory .clang-format REPLACES the
+# parent rather than merging with it, hence SortIncludes is restated: include
+# order here is load-bearing and must survive even if DisableFormat ever stops
+# covering it.
+DisableFormat: true
+SortIncludes: Never
