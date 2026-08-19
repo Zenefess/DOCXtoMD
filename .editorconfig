@@ -1,0 +1,28 @@
+# .editorconfig -- GCS tc2: UTF-8, CRLF, indent_size 3, max_line_length 180.
+# The indent style itself comes from r8: three spaces, never a tab.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+indent_style = space
+indent_size = 3
+tab_width = 3
+max_line_length = 180
+
+# RULE-DEV:tc2 The Markdown documents are not GCS source files. CLAUDE.md,
+# CONTRIBUTING.MD and docs/ are authored LF while GDC_GCS_v1_1_4.md is CRLF, and
+# .gitattributes deliberately leaves all of them at whatever they were written
+# with; "unset" stops an editor converting them behind Git's back.
+[*.md]
+end_of_line = unset
+
+# RULE-DEV:tc2 The MIT licence text is not a source file, and is authored LF.
+[LICENSE]
+end_of_line = unset
+
+# RULE-DEV:r8 Visual Studio writes .sln files with tab indentation and rewrites
+# the whole file itself; matching it keeps a hand edit from mixing tabs into a
+# file the IDE will re-emit with tabs anyway.
+[*.sln]
+indent_style = tab

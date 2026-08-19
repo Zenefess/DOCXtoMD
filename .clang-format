@@ -1,0 +1,34 @@
+# .clang-format -- GCS tc1. The first block is tc1 verbatim; the rest stops the
+# formatter breaking rules the standard states elsewhere, or breaking the build.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# tc1
+IndentWidth: 3
+TabWidth: 3
+UseTab: Never
+ColumnLimit: 180
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: All
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveAssignments: Consecutive
+AlignTrailingComments: true
+
+# r12: tables, macros and global constants are UPPER_SNAKE and read as columns.
+AlignConsecutiveMacros: Consecutive
+
+# r13: no space before '(' in a control structure -- if(x), for(...), while(...).
+SpaceBeforeParens: Never
+
+# The shared headers in include/ have a required include order: typedefs.h first,
+# and <windows.h> before "common functions.h", whose Idle() calls Sleep(). Sorting
+# includes would break the build, so the formatter never reorders them.
+SortIncludes: Never
+
+# r17 prologs are validated byte-for-byte by regex, and reflowing a block comment
+# would rewrite them. Comment width stays the author's responsibility.
+ReflowComments: false
+
+# include/SIMD management.h indents the body of `namespace simd` by one level.
+NamespaceIndentation: All
