@@ -86,8 +86,9 @@ msbuild DOCXtoMD.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64
 
 Default output paths (no OutDir override): `x64\Release\DOCXtoMD.exe`, `x64\Debug\DOCXtoMD.exe`.
 **x64 is the only supported platform** — GCS a2 declares 32-bit unsupported, and D3 has been
-executed: the Win32 configurations are gone from `DOCXtoMD.vcxproj`, so `/p:Platform=Win32` now
-fails instead of building. Do not add them back, and do not add a new platform without a new
+executed: the Win32 configurations are gone from `DOCXtoMD.vcxproj`, so `/p:Platform=Win32` should
+now fail rather than build. That last part is **unverified** — the session that deleted them could
+not run msbuild; the next Windows session should confirm it. Do not add them back, and do not add a new
 numbered decision.
 
 **Linux/remote sessions cannot run MSVC — nothing in this project can be compiled or executed there.**
@@ -167,23 +168,41 @@ five operative rules:
    splitting it buys nothing. Concurrency lives one level up, in the driver that walks the input list
    and hands each file to a worker. What follows from that:
    - **each worker owns its whole pipeline**: its own `ZipReader`, `XmlPull`, `StyleModel`,
-     `DocWalker`, `MdEmitter`, buffers and output file. Nothing converts two documents at once
-     through one object, so these modules need to be **reentrant, not locked**, and a buffer must
+     `DocWalker`, `MdEmitter`, buffers and output file. No object is ever touched by two workers, so
+     these modules take **no locks at all** — they are only ever safe *because* they are unshared,
+     which is a weaker promise than thread-safety and must not be mistaken for one. A buffer must
      never travel between workers.
    - **what the workers genuinely share is locked with `include/spinlocks.h`** — the diagnostics
      sink, the console, the exit-code accumulator, the index into the work list. That header is the
-     sanctioned primitive and D6 is what put it in scope; `SpinLock`/`SpinUnlock` is the default
-     pair. Keep the critical sections tiny: these are spin locks, not mutexes.
-   - **allocation is safe from any worker.** The `memory management.h` family holds no global state
-     and bottoms out in `_aligned_malloc`, so `amalloc`/`mdealloc` need no lock of their own.
-   - **`$LoopMT*` and `/Qpar` stay banned.** Those are MSVC auto-parallelizer hints
-     (`$LoopMT` is `__pragma(loop(hint_parallel(0)))`) that split *inner loops* — the granularity
-     D6 explicitly did not sanction. File-level threads are written explicitly, not hinted for.
+     sanctioned primitive and D6 is what put it in scope. Match the profile to the hold time:
+     `SpinLock` (pause + backoff, **no yield path**) only for sections that are provably short, such
+     as bumping the work-list cursor or folding an exit code; `SpinLockMin`, which escalates to
+     `Sleep(0)`/`Sleep(1)`, for anything that performs I/O — console and stderr writes are syscalls
+     that can block for milliseconds on a redirected pipe, and spinning through that burns a core.
+   - **allocation is safe from any worker.** The `memory management.h` family declares no global
+     state and bottoms out in `_aligned_malloc`, which the MSVC CRT serialises internally, so
+     `amalloc`/`mdealloc` need no lock of their own. That holds **only because `DATA_TRACKING` is
+     never defined** — its hooks call unsynchronised `MemTrack`/`MemUntrack` on every alloc and
+     free, so defining it would introduce exactly the shared mutable state this bullet denies.
+   - **`$LoopMT*` and `/Qpar` stay banned.** `$LoopMT` is `__pragma(loop(hint_parallel(0)))`, a
+     *hint* to MSVC's auto-parallelizer that does nothing at all without `/Qpar` and, with it,
+     hands the compiler discretion over whether and how a loop is split. D6's threading is a
+     deliberate, per-file worker the code owns and can join, size and account for — not a compiler
+     hint. (The pragma applies to whichever loop follows it, inner or outer, so this is a control
+     argument, not a granularity one.)
    - **the single-file case is still effectively single-threaded**, which is the common invocation;
      do not let the worker layer complicate it.
-   a2's single-threaded exception is spent: the tool is multithreaded at the file level, so stop
-   writing `// RULE-DEV:a2` for threading. p3's "expose thread status via atomics; document memory
-   order" now has real work to do — say in the prolog what a shared object's locking contract is.
+   - **start workers with `_beginthreadex`, not `CreateThread`.** Every worker calls CRT code —
+     `_aligned_malloc` through `amalloc`, and file I/O — and a raw `CreateThread` leaks the
+     per-thread CRT block. `std::thread` is CRT-correct and is not third-party (D1/D2 bar vendored
+     libraries, not the standard library), so it is also fine; pick one at M13 and say which.
+   D5's a2 exception is **still live**, not spent: threading only arrives at M13, so every binary
+   from M2 through M12 is strictly single-threaded, and even after M13 a single document's
+   conversion is deliberately sequential — which is exactly the a2 deviation D5 was granted for.
+   Keep writing `// RULE-DEV:a2 single-threaded by owner ruling (D5)` where a reader would expect
+   threading inside the per-file pipeline; what D6 removed is the reason to write it on the
+   file-list loop, which is now threaded on purpose. p3's "expose thread status via atomics;
+   document memory order" is only partly discharged here — see Known gaps.
 
 MSVC macro trap: MSVC defines `__AVX__`/`__AVX2__`/`__AVX512*__` but **never** `__FMA__` or
 `__BMI2__`. Guard on `__AVX2__` alone — that is why the `defined(__FMA__) || defined(__AVX2__)` tests
@@ -195,7 +214,7 @@ check, or raise a decision to widen the baseline — do not just assume it.
 
 They live in `include/` and are owner-authored library files shared with other projects, not
 repo-local code. **Do not reformat, refactor, or re-version them**; if one needs a change, raise it
-as a numbered decision (D7+) the way D1–D6 were raised. What sessions need to know:
+as a numbered decision (D8+) the way D1–D7 were raised. What sessions need to know:
 
 - `include\` is on the compiler's include path (`<AdditionalIncludeDirectories>` in every config), so
   write `#include "typedefs.h"`, never `#include "include/typedefs.h"` or a `..\` path. The headers
@@ -233,10 +252,11 @@ as a numbered decision (D7+) the way D1–D6 were raised. What sessions need to 
   the build, they do not fork it.
 - **No third-party code, period** (D1 + D2): no vendored libraries, no `third_party/` directory, no
   package manager. ZIP, inflate and XML are all first-party. Adding a dependency needs a new decision.
-- No scalar/SSE fallback paths, no CPUID dispatch below the AVX2 baseline, no `$LoopMT*`, no
-  `/Qpar` (D4/D5, a8).
-- No threading *inside* one document's conversion, and no thread pool finer than one worker per
-  input file (D6). Concurrency belongs to the file-list driver, nowhere else.
+- No scalar/SSE fallback paths and no CPUID dispatch below the AVX2 baseline (D4, a8).
+- No `$LoopMT*` and no `/Qpar` (**D6** — auto-parallelizer hints hand the compiler control over
+  threading that D6 gives to an explicit per-file worker).
+- No threading *inside* one document's conversion (D6). Concurrency belongs to the file-list driver
+  and nowhere else; how that driver is bounded is D7, unruled.
 - No performance *claim* without a `bench/` diff (bd1/bd2) — using intrinsics needs no permission,
   asserting they are faster does.
 - No hand-rolled allocators or bare `new`/`malloc` — `memory management.h` owns that (p2).
@@ -272,10 +292,14 @@ token wrong, do not copy it); Thread-safety ∈ {N/A, Reentrant, MT-safe}.
 
 `ISA:` describes the code in the file, not the compiler flag: a file whose only vectorization comes
 from `/arch:AVX2` auto-vectorizing scalar loops stays `ISA: Scalar`; write `ISA: Scalar | AVX2` once
-the file actually carries intrinsics or vector aliases. `Thread-safety:` now follows D6's boundary:
-per-file conversion modules are `Reentrant` (one instance per worker, no shared mutable state),
-anything the workers share — diagnostics sink, console writer, work-list cursor — is `MT-safe` and
-must document its locking contract, and stateless headers stay `N/A`. `MT-safe` is no longer
+the file actually carries intrinsics or vector aliases. `Thread-safety:` follows D6's boundary, but
+r17 only offers three tokens, so map onto them the way the owner's own headers do: anything the
+workers share — diagnostics sink, console writer, work-list cursor — is `MT-safe` (and must say in
+the prolog what its locking contract is); everything else in the pipeline is `Reentrant`, which is
+how `common functions.h` and `memory management.h` already tag stateless-or-per-instance code;
+`N/A` is reserved for files with no executable code at all, as `typedefs.h` uses it. Strictly, a
+per-worker `ZipReader` or `MdEmitter` is *thread-compatible* rather than reentrant — r17 has no
+token for that, so `Reentrant` is the nearest legal one (see Known gaps). `MT-safe` is no longer
 forbidden; before D6 it was.
 
 ### Known gaps in the GCS you must not paper over
@@ -302,6 +326,16 @@ forbidden; before D6 it was.
   owner-authored files: **report them, do not fix them here.**
 - `memory management.h` documents a dependency on `data tracking.h`, which is absent from this repo
   (see "Shared headers").
+- r17's `Thread-safety` vocabulary has no token for **thread-compatible** ("safe as long as two
+  threads do not share the instance"), which after D6 is the accurate description of every per-worker
+  module. `Reentrant` is used for it because it is the nearest legal token and matches the owner's
+  headers — not because these types are reentrant in the strict sense. Do not read `Reentrant` in a
+  project prolog as a promise about recursion or signal handlers.
+- p3's [MUST] to "expose thread status via atomics; document memory order" is only half discharged
+  by D6. `spinlocks.h` is the sanctioned primitive and it uses `_Interlocked*` intrinsics over
+  `volatile ui32` with unconditional full barriers — there is no `std::atomic` and no memory-order
+  argument to document. Record the locking contract in the prolog instead; adopting `std::atomic`
+  anywhere would need a new decision.
 
 ## Conversion engine — non-negotiable correctness rules
 
@@ -387,8 +421,8 @@ src/
    MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)
    MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing
    MediaExtractor.h/.cpp referenced media parts → disk; content-type extensions; dedup; safe names
-   Diag.h/.cpp           error codes/messages → stderr; exit-code mapping. MT-safe: the workers all
-                         report through it, so it locks (D6); everything above it is per-worker
+   Diag.h/.cpp           error codes/messages → stderr; exit-code mapping. MT-safe: every worker
+                         reports through this one sink, so it locks (D6)
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py;
                          run_golden.py; unit tests as a second console .vcxproj with a tiny CHECK header
 bench/                   GCS p4 microbenches (create with the first performance claim)
@@ -405,10 +439,18 @@ steady state), `DocWalker`, `RunCoalescer`, `MdEmitter` (single growable buffer)
 allocating through `memory management.h`. The parsed-once models (`StyleModel`, `NumberingModel`,
 `OpcPackage`, `CliOptions`) use the same allocators but are not hot.
 
-Everything from `ZipReader` down to `MdEmitter` is instantiated **once per worker** under D6 and
-holds no cross-file state, so it is `Reentrant` rather than locked; `Batch` and `Diag` are the only
-`MT-safe` modules. Design each module that way from its first commit — retrofitting a shared cache
-into a per-worker pipeline later is exactly the kind of rework D6 exists to avoid.
+Under D6, **`Batch` and `Diag` are the only `MT-safe` modules**. Everything that converts a document
+— `Utf`, `Inflate`, `Crc32`, `ZipReader`, `XmlPull`, `OpcPackage`, `StyleModel`, `NumberingModel`,
+`Ir`, `DocWalker`, `RunCoalescer`, `MdEscape`, `MdEmitter`, `MediaExtractor` — is instantiated once
+per worker, holds no cross-file state and is never shared, so it needs no lock. `CliOptions` is
+parsed once before any worker starts and is then read-only, so workers may share it by const
+reference. Design each module that way from its first commit: retrofitting a shared cache into a
+per-worker pipeline later is exactly the rework D6 exists to avoid.
+
+One hazard this does **not** cover: `MediaExtractor` and the output writer share the *filesystem*,
+not memory. Two inputs with the same stem, or an explicit `--media-dir` common to several inputs,
+put two workers on the same `.md` and the same `imageN.png`. No amount of per-worker isolation fixes
+that — it is an output-naming question, and it belongs to D7(d).
 
 ### Target CLI (implemented incrementally from M2)
 
@@ -423,10 +465,12 @@ Usage: DOCXtoMD [options] <input.docx> [output.md]
 Exit codes (stable API): 0 success · 1 usage error · 2 input not found/readable · 3 not a valid DOCX ·
 4 output write failure · 5 internal error.
 
-D6 requires multiple inputs (one thread per file has nothing to thread otherwise), so this single-input
-usage line is provisional — the batch surface and how per-file codes collapse into one process exit
-code is **D7, unruled**. Shape `CliOptions` to hold a *list* of inputs from M2 even while only one is
-accepted, so the batch mode is an extension rather than a rewrite.
+D6 needs multiple inputs — one thread per file has nothing to thread otherwise — so this
+single-input usage line is **provisional pending D7**. Open with it: how inputs are passed, how
+per-file exit codes aggregate, and what `--stdout` and a file-valued `-o` even mean when N files
+convert concurrently (N workers writing one stdout interleaves into garbage; one `-o` path cannot
+name N outputs). Holding `CliOptions`' input as a list from M2 would make batch mode an extension
+rather than a rewrite — a suggestion, not a directive, while D7 is open.
 
 ## Testing & definition of done
 
@@ -454,7 +498,7 @@ commands flips the marker to `[done-unverified]` and lists the unrun commands in
 only a run whose DoD commands pass on Windows flips it to `[done]`, and the next Windows session
 verifies (not reimplements) `[done-unverified]` milestones before starting new work.
 
-- **M1 `[next]` Compliance bootstrap** — now also carries the executable half of D3 and D4:
+- **M1 `[next]` Compliance bootstrap** — also carries the executable half of D4 (D3's landed early):
   - add `CHANGELOG.md` (c2/c3), `.clang-format` per tc1 (IndentWidth 3, UseTab Never, ColumnLimit 180,
     BreakBeforeBraces Attach, AllowShortFunctionsOnASingleLine All, align decls/assigns/comments),
     `.editorconfig` per tc2 (UTF-8, CRLF, indent 3, max_line_length 180), `.gitattributes` (CRLF for
@@ -505,13 +549,17 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   (Google Docs / LibreOffice / Pandoc exports).
 - **M12 `[todo]` CI** — GitHub Actions `windows-latest`: msbuild x64 Release (the only platform) +
   fixture build + golden runner.
-- **M13 `[todo]` Multi-file batch + one thread per file** *(D6 ruled; gated on D7 for the CLI
-  surface)* — `Batch` over a list of inputs, one worker thread per file, `Diag` made `MT-safe` with
-  `include/spinlocks.h`, per-file exit codes aggregated. Land it **after** the converter is correct:
-  every module below `Batch` must already be reentrant and per-worker, which M2–M11 deliver by
-  construction. DoD: converting N files yields byte-identical output to converting them one at a
-  time; a golden fixture runs the same batch at `-j 1` and `-j 8` with identical results and
-  identical exit code; no data race under a stress fixture of duplicate inputs.
+- **M13 `[todo]` Multi-file batch + one thread per file** *(D6 ruled; **blocked on D7** — the batch
+  surface, the literal-vs-bounded question and the output-collision rules all have to be ruled
+  before this can be specified)* — `Batch` over a list of inputs, threading per D6, `Diag` made
+  `MT-safe` with `include/spinlocks.h`, per-file exit codes aggregated. Land it **after** the
+  converter is correct: every module below `Batch` must already be per-worker, which M2–M11 deliver
+  by construction. DoD (as far as D6 alone settles it): `run_golden.py` converts a fixture set as
+  one batch and file-by-file and byte-compares the two output trees; the batch's process exit code
+  matches the aggregation rule D7 picks; converting the same fixture set twice produces identical
+  bytes. Anything phrased in terms of a `-j` flag waits for D7. Note there is no thread sanitizer
+  on MSVC v143 (`/fsanitize=address` only), so "no data races" cannot be a DoD command — the
+  determinism comparisons above are what is actually checkable.
 
 ## Decisions (ruled rows are settled — do not re-litigate; open rows await the owner)
 
@@ -524,18 +572,21 @@ until the owner rules.
 |---|---|---|---|
 | D1 | ZIP/DEFLATE: vendor miniz vs hand-rolled inflate vs zlib | **Hand-rolled inflate.** First-party `Inflate` + `Crc32` + `ZipReader`; no `third_party/`, no vendored code | M3 |
 | D2 | XML: hand-rolled pull parser vs pugixml | **Hand-rolled pull parser.** First-party `XmlPull`; pugixml is off the table | M4 |
-| D3 | Win32 configs vs GCS a2 ("32-bit unsupported") | **Drop the Win32 configurations** from `DOCXtoMD.vcxproj`; x64 is the only platform | **done** |
+| D3 | Win32 configs vs GCS a2 ("32-bit unsupported") | **Drop the Win32 configurations** from `DOCXtoMD.vcxproj`; x64 is the only platform | **done-unverified** (deleted on Linux; `/p:Platform=Win32` failing is unconfirmed) |
 | D4 | Adopt a3: `/arch:AVX2` + `__AVX2__` guard on x64 | **Adopt**, with the guard as `#ifndef __AVX2__` + `#error` (not `static_assert`) | M1 |
-| D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD**: AVX2 floor with no sub-baseline fallback. The single-threaded half is superseded by D6 | standing |
-| D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | **Yes, at one granularity only: multi-file processing, one thread per file.** A single document's conversion stays sequential; `spinlocks.h` guards what the workers share. `$LoopMT*`/`/Qpar` remain banned — wrong granularity | M13 |
-| D7 | What is the batch CLI surface D6 implies — how are multiple inputs passed, how do per-file failures aggregate into one exit code, and is worker count user-visible? | *Open — owner call.* Recommendation: accept repeated `<input.docx>` operands (shell globbing does the expansion, no in-process wildcards), require `-o` to name a directory when inputs > 1, exit 0 only if every file converted and otherwise the highest per-file code, and default workers to the hardware thread count with `-j <n>` to override | — |
+| D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD, single-threaded**: AVX2 floor with no sub-baseline fallback; single-threading is an owner-granted exception to a2 *(as ruled 2026-08-18; D6 later narrowed the threading half — the text here is left as the owner wrote it)* | standing |
+| D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | **Yes, for multi-file processing only: one thread per file.** A single document's conversion stays sequential; `spinlocks.h` guards what the workers share. `$LoopMT*`/`/Qpar` remain banned | M13 |
+| D7 | What batch surface does D6 need? Sub-questions: (a) is "one thread per file" literal for any input count, or a bounded pool of workers each taking one file at a time? (b) how are multiple inputs passed? (c) how do per-file failures aggregate into one process exit code? (d) what do `--stdout` and a single-file `-o` mean once N files convert at once? | *Open — owner call.* Recommendations: (a) **owner's call — the ruling reads literally and this file states it literally**; a bounded pool is the usual engineering answer for large batches but it is a different concurrency model, so it needs saying out loud. (b) repeated `<input.docx>` operands, shell globbing, no in-process wildcards. (c) exit 0 only if every file converted, else the highest per-file code. (d) reject `--stdout` and file-valued `-o` when inputs > 1; `-o` names a directory instead | — |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the
 CRC-32-vs-CRC-32C trap in rule 11 (D1); the x64-only Build & run section and the two-configuration
 `.vcxproj` (D3); the "ISA and threading baseline" subsection, which is where D4, D5 and D6 actually
-live; and D6's reach beyond that subsection — the `Thread-safety:` guidance under r17, the `Batch`
-and `Diag` entries in the architecture, the per-worker/reentrant note under it, and milestone M13.
+live. **What the owner actually ruled in D6** is two sentences: threading is for multi-file
+processing, one thread per file, and `spinlocks.h` is in scope for it. Everything downstream of that
+— the `Thread-safety:` mapping under r17, the `Batch` and `Diag` entries in the architecture, the
+per-worker classification, milestone M13 and the D7 questions — is **derived by a session, not
+stated by the owner**, and may be revised without re-litigating D6.
 
 ## Repo conventions
 
