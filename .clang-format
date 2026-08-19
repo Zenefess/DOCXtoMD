@@ -1,6 +1,8 @@
 # .clang-format -- GCS tc1. The first block is tc1 verbatim; the rest stops the
 # formatter breaking rules the standard states elsewhere, or breaking the build.
 ---
+# BasedOnStyle is the floor: every option neither tc1 nor the blocks below name
+# is LLVM's default, not the GCS's. Check it before assuming a rule is covered.
 Language: Cpp
 BasedOnStyle: LLVM
 
@@ -18,16 +20,25 @@ AlignTrailingComments: true
 # r12: tables, macros and global constants are UPPER_SNAKE and read as columns.
 AlignConsecutiveMacros: Consecutive
 
-# r3/r4: same-line statements are legal where they read better. LLVM's defaults
-# break every one of them onto its own line, so the short-statement options are
-# turned back on. Note the limit: clang-format has no option that keeps two
-# statements on one line, so r4's three-space form (`va_list val;   va_start(...)`,
-# as `memory management.h` writes it) is split whatever this file says. Reformat
-# a file carrying that idiom only if you intend to lose it.
-AllowShortBlocksOnASingleLine: Always
+# r3/r4: same-line statements are legal where they read better, and LLVM's
+# defaults break every one of them onto its own line. These three put the
+# brace-less short forms back: `if(n) return;`, `for(ui32 i = 0; i < n; ++i) F(i);`.
 AllowShortIfStatementsOnASingleLine: AllIfsAndElse
 AllowShortLoopsOnASingleLine: true
 AllowShortCaseLabelsOnASingleLine: true
+
+# r14, set explicitly so a later pass does not "helpfully" relax it: a control
+# structure's `}` belongs on its own line, so a braced block must never collapse
+# to `while(n) { --n; }`. The only body that may close on its opening line is a
+# function's, under r15 -- that is tc1's AllowShortFunctionsOnASingleLine above,
+# a different key. Setting this one to Always makes the formatter manufacture
+# r14 breaches in code that already conformed.
+AllowShortBlocksOnASingleLine: Never
+
+# Known limit: no clang-format option keeps two statements on one line, so r4's
+# three-space form -- `va_list val;   va_start(val, pointer);`, as
+# `memory management.h` writes it -- is split whatever this file says. Reformat a
+# file carrying that idiom only if you intend to lose it.
 
 # r13: no space before '(' in a control structure -- if(x), for(...), while(...).
 SpaceBeforeParens: Never

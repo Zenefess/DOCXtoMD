@@ -69,10 +69,14 @@ below.
     extra `static_assert` D4 ruled out. **The sanctioned lock for the one-thread-per-file worker
     layer** (D6) — not for use inside a single document's conversion.
 - Tooling and process files, all five added by M1 and all CRLF except `CHANGELOG.md`:
-  - `.clang-format` — tc1's keys verbatim, plus five groups that stop the formatter breaking a
-    rule stated elsewhere: `AlignConsecutiveMacros: Consecutive` (r12), `SpaceBeforeParens: Never`
-    (r13), the three `AllowShort*OnASingleLine` keys that keep r3/r4 same-line statements from
-    being exploded onto separate lines, `SortIncludes: Never` (the shared headers have a
+  - `.clang-format` — `BasedOnStyle: LLVM` first, so anything neither tc1 nor the list below names
+    is LLVM's default rather than the GCS's; check that before assuming a rule is covered. Then
+    tc1's keys verbatim, and one entry per rule the formatter would otherwise break:
+    `AlignConsecutiveMacros: Consecutive` (r12), `SpaceBeforeParens: Never` (r13),
+    `AllowShortIfStatements`/`Loops`/`CaseLabelsOnASingleLine` so r3/r4's brace-less short forms
+    survive, `AllowShortBlocksOnASingleLine: **Never**` so r14's `}`-on-its-own-line is never
+    collapsed — setting that one to `Always` makes the formatter manufacture r14 breaches in code
+    that already conformed, so do not — `SortIncludes: Never` (the shared headers have a
     load-bearing include order — see "Shared headers"), and `ReflowComments: false` (an r17 prolog
     is regex-validated byte-for-byte and must not be rewrapped). `NamespaceIndentation: All`
     matches `SIMD management.h`. **Known limit**: clang-format has no option that keeps two
@@ -84,7 +88,8 @@ below.
     repository style rewrites the owner-authored headers by thousands of lines — 874 in
     `typedefs.h`, 986 in `vector structures.h` — which "Shared headers" forbids. With it,
     formatting all six is a verified no-op.
-  - `.editorconfig` — tc2's four properties plus `indent_style = space` from r8, with four
+  - `.editorconfig` — tc2's four properties plus `indent_style = space` (r8) and `tab_width = 3`
+    (so a stray tab at least renders at the r8 width), with four
     `RULE-DEV`-tagged exemptions: Markdown and `LICENSE` keep their authored line endings; `*.sln`
     keeps Visual Studio's tab indentation; and `*.sln` and `*.filters` are `charset = utf-8-bom`
     because both ship with a BOM and EditorConfig's plain `utf-8` means *no* BOM, so an honest

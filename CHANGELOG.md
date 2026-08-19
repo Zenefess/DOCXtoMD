@@ -11,16 +11,19 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 
 - `.clang-format` per GCS tc1 — 3-space indent, no tabs, 180-column limit, attached braces,
   short function bodies on one line, and aligned declarations, assignments and trailing
-  comments. Five further keys keep the formatter from breaking rules stated elsewhere:
-  `AlignConsecutiveMacros` (r12), `SpaceBeforeParens: Never` (r13), the three
-  `AllowShort*OnASingleLine` keys that preserve r3/r4 same-line statements, `SortIncludes: Never`
-  (the shared headers' include order is load-bearing), and `ReflowComments: false` (an r17
-  prolog is regex-validated byte for byte). `NamespaceIndentation: All` matches
-  `SIMD management.h`.
+  comments, over a `BasedOnStyle: LLVM` base — so every option tc1 does not name is LLVM's
+  default. Further keys keep the formatter from breaking rules stated elsewhere:
+  `AlignConsecutiveMacros` (r12), `SpaceBeforeParens: Never` (r13),
+  `AllowShortIfStatements`/`Loops`/`CaseLabelsOnASingleLine` to preserve r3/r4's brace-less short
+  forms, `AllowShortBlocksOnASingleLine: Never` so a braced control block never collapses and
+  breaks r14, `SortIncludes: Never` (the shared headers' include order is load-bearing), and
+  `ReflowComments: false` (an r17 prolog is regex-validated byte for byte).
+  `NamespaceIndentation: All` matches `SIMD management.h`.
 - `include/.clang-format` with `DisableFormat: true` — the six headers there are owner-authored
   and must not be reformatted, and the repository style would otherwise rewrite them by
   thousands of lines. Verified: formatting all six is now a no-op.
-- `.editorconfig` per GCS tc2 — UTF-8, CRLF, 3-space indent, 180-column limit. The Markdown
+- `.editorconfig` per GCS tc2 — UTF-8, CRLF, 3-space indent, 180-column limit, plus
+  `indent_style = space` (r8) and `tab_width = 3`. The Markdown
   documents and `LICENSE` keep their authored line endings, `.sln` keeps Visual Studio's tab
   indentation, and `.sln` and `.filters` are `utf-8-bom` because both ship with a BOM that a plain
   `utf-8` charset would strip — four `RULE-DEV`-tagged exemptions in all. The Markdown glob is
