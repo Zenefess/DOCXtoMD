@@ -130,11 +130,11 @@
     <ClCompile Include="DOCXtoMD.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="common functions.h" />
-    <ClInclude Include="memory management.h" />
-    <ClInclude Include="SIMD management.h" />
-    <ClInclude Include="typedefs.h" />
-    <ClInclude Include="vector structures.h" />
+    <ClInclude Include="include\common functions.h" />
+    <ClInclude Include="include\memory management.h" />
+    <ClInclude Include="include\SIMD management.h" />
+    <ClInclude Include="include\typedefs.h" />
+    <ClInclude Include="include\vector structures.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
