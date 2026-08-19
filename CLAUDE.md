@@ -168,8 +168,11 @@ per input file** (D6). Together they settle into five operative rules:
    pointer-chasing; the genuinely data-parallel candidates are the byte-scanning hot spots: UTF-8
    validation, XML token scanning, escape-class scanning, LZ77 match copies, CRC-32 folding. Scalar
    reference implementations of those kernels double as the p3/a1 oracle for testing them.
-5. **Threading is one thread per input file, and nothing finer** (D6). Converting a single document
-   stays strictly sequential — that is the owner's ruling, not a measurement, so do not argue it
+5. **A file is the unit of work, and nothing finer** (D6 + D7a). One worker converts one whole
+   document at a time; workers come from a **bounded pool** sized by `--threads`, defaulting to the
+   system's virtual core count, so with more inputs than workers a thread converts several files in
+   sequence. Converting a single document stays strictly sequential — that is the owner's ruling,
+   not a measurement, so do not argue it
    either way without a `bench/` diff (bd1/bd2). Concurrency lives one level up, in the driver that
    walks the input list and hands each file to a worker. What follows from that:
    - **each worker owns its whole pipeline**: its own `ZipReader`, `XmlPull`, `StyleModel`,
@@ -203,6 +206,12 @@ per input file** (D6). Together they settle into five operative rules:
      `_aligned_malloc` through `amalloc`, and file I/O — and a raw `CreateThread` leaks the
      per-thread CRT block. `std::thread` is CRT-correct and is not third-party (D1/D2 bar vendored
      libraries, not the standard library), so it is also fine; pick one at M13 and say which.
+   - **read the default worker count with `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`.** D7's
+     default is the system's virtual core count, and the obvious ways to ask — `GetSystemInfo`'s
+     `dwNumberOfProcessors` and `std::thread::hardware_concurrency()` — report only the calling
+     thread's processor group, capping at 64 on large machines. Clamp the result to at least 1, and
+     treat `--threads 0` or a value above the core count as a usage error rather than silently
+     coercing it.
    D5's a2 exception is **still live**, not spent: threading only arrives at M13, so every binary
    from M2 through M12 is strictly single-threaded, and even after M13 a single document's
    conversion is deliberately sequential — which is exactly the a2 deviation D5 was granted for.
@@ -266,7 +275,8 @@ as a numbered decision (D8+) the way D1–D7 were raised. What sessions need to 
 - No `$LoopMT*` and no `/Qpar` (**D6** — auto-parallelizer hints hand the compiler control over
   threading that D6 gives to an explicit per-file worker).
 - No threading *inside* one document's conversion (D6). Concurrency belongs to the file-list driver
-  and nowhere else; how that driver is bounded is D7, unruled.
+  and nowhere else, bounded by the `--threads` pool (D7a) — never a thread spawned per file with no
+  ceiling, and never a second pool layered under the first.
 - No performance *claim* without a `bench/` diff (bd1/bd2) — using intrinsics needs no permission,
   asserting they are faster does.
 - No hand-rolled allocators or bare `new`/`malloc` — `memory management.h` owns that (p2).
@@ -415,8 +425,9 @@ implementation session must respect:
 ```
 src/
    main.cpp              wmain + SetConsoleOutputCP(CP_UTF8) + wiring only; wide APIs for all paths
-   Batch.h/.cpp          input list → one worker thread per file (D6); interlocked work cursor and
-                         exit-code fold; the only module in the tree that starts a thread
+   Batch.h/.cpp          input list → bounded worker pool, one file per worker at a time (D6/D7a);
+                         interlocked work cursor and exit-code fold; failed-input list for the
+                         end-of-run report; the only module in the tree that starts a thread
    BuildGuards.h         #ifndef __AVX2__ + #error (D4); included first by every project TU
    CliOptions.h/.cpp     argv → options struct; usage/version text
    Utf.h/.cpp            UTF-8 validate/transcode (UTF-16 only at the Win32 boundary)
@@ -454,35 +465,53 @@ allocating through `memory management.h`. The parsed-once models (`StyleModel`, 
 Under D6, **`Batch` and `Diag` are the only `MT-safe` modules**. Everything that converts a document
 — `Utf`, `Inflate`, `Crc32`, `ZipReader`, `XmlPull`, `OpcPackage`, `StyleModel`, `NumberingModel`,
 `Ir`, `DocWalker`, `RunCoalescer`, `MdEscape`, `MdEmitter`, `MediaExtractor` — is instantiated once
-per worker, holds no cross-file state and is never shared, so it needs no lock. `CliOptions` is
-parsed once before any worker starts and is then read-only, so workers may share it by const
-reference. Design each module that way from its first commit: retrofitting a shared cache into a
+per worker, holds no cross-file state and is never shared, so it needs no lock. `CliOptions` holds
+the input **list** (D7b) plus the worker count, is parsed once before any worker starts and is then
+read-only, so workers may share it by const reference. Design each module that way from its first commit: retrofitting a shared cache into a
 per-worker pipeline later is exactly the rework D6 exists to avoid.
 
 One hazard this does **not** cover: `MediaExtractor` and the output writer share the *filesystem*,
-not memory. Two inputs with the same stem, or an explicit `--media-dir` common to several inputs,
-put two workers on the same `.md` and the same `imageN.png`. No amount of per-worker isolation fixes
-that — it is an output-naming question, and it belongs to D7(d).
+not memory. D7b derives output names from input stems, so `a\report.docx` and `b\report.docx` in one
+run both target `report.md` and `report_media\`, and an explicit `--media-dir` shared by several
+inputs collides the same way. No amount of per-worker isolation fixes that. Recommended (derived,
+not ruled): `Batch` detects duplicate output targets up front, before any worker starts, and fails
+those inputs into D7c's failure list rather than letting two workers race — a pre-flight check is
+cheap and the alternative is silent data loss.
 
 ### Target CLI (implemented incrementally from M2)
 
 ```
-Usage: DOCXtoMD [options] <input.docx> [output.md]
-  -o, --output <path>    explicit output path        --media-dir <dir>   image dir (default <stem>_media\)
-  --no-images            alt text only               --hard-break=<backslash|spaces>  (default backslash)
-  --stdout               markdown to stdout          -q, --quiet         errors only
-  --version              print version, exit 0       -h, --help          usage, exit 0
+Usage: DOCXtoMD [options] <input.docx> [input2.docx [input3.docx [...]]]
+  -o, --output <path>    output path: the .md filename for a single input,
+                         the destination directory when several are given
+  -j, --threads <n>      worker threads (default: system virtual core count)
+  --media-dir <dir>      image dir (default <stem>_media\)   --no-images   alt text only
+  --hard-break=<backslash|spaces>  (default backslash)      -q, --quiet   errors only
+  --stdout               markdown to stdout — single input only
+  --version              print version, exit 0              -h, --help    usage, exit 0
 ```
 
-Exit codes (stable API): 0 success · 1 usage error · 2 input not found/readable · 3 not a valid DOCX ·
-4 output write failure · 5 internal error.
+Note what D7 removed: there is **no positional output operand** any more. `<input.docx> [output.md]`
+could not coexist with repeated inputs — a second path would be ambiguous — so every operand is an
+input and output goes through `-o`. Output filenames are otherwise derived from each input stem.
 
-D6 needs multiple inputs — one thread per file has nothing to thread otherwise — so this
-single-input usage line is **provisional pending D7**. Open with it: how inputs are passed, how
-per-file exit codes aggregate, and what `--stdout` and a file-valued `-o` even mean when N files
-convert concurrently (N workers writing one stdout interleaves into garbage; one `-o` path cannot
-name N outputs). Holding `CliOptions`' input as a list from M2 would make batch mode an extension
-rather than a rewrite — a suggestion, not a directive, while D7 is open.
+Exit codes (stable API): 0 all inputs converted · 1 usage error · 2 input not found/readable ·
+3 not a valid DOCX · 4 output write failure · 5 internal error · **6 partial success** (at least one
+input converted and at least one failed). Per D7c, the failures are listed on the console before the
+process exits, so code 6 is a summary and never the only diagnosis. Codes 2–5 stay per-file
+verdicts: with a single input they are the exit code directly, and when **every** input fails they
+are what the process returns (the highest code among them if they differ) — that last rule is
+derived, not ruled, since D7c only names the partial case.
+
+`-j`/`--threads` is the spelling this file assumes for D7a's user-specified thread count; the owner
+ruled the behaviour, not the flag name.
+
+D7 settles this surface, so it is no longer provisional. Two consequences reach back into M2, where
+`CliOptions` is first written: **hold the inputs as a list from the start** — retrofitting one later
+means re-cutting argument parsing, `-o` semantics and the output-naming rule together — and **give
+`-o` its two meanings from the start** (a filename when exactly one input is given, a directory
+otherwise), because that branch is the whole reason the positional output operand had to go. M2 may
+still accept only one input; what it must not do is assume there will only ever be one.
 
 ## Testing & definition of done
 
@@ -534,7 +563,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   `CliOptions`, `Diag`), usage/help/version, exit codes 0/1/2. Retire `DOCXtoMD.cpp` in the same
   commit: delete it, carry its prolog and the `__AVX2__` guard forward into `src/main.cpp` /
   `src/BuildGuards.h` (updating `File:`/`Description:`), and swap the `.vcxproj` + `.filters` entries
-  per the MSBuild file-list rule. DoD: no-args prints usage and exits 1; `--version` exits 0.
+  per the MSBuild file-list rule. Shape `CliOptions` for D7 now even while only one input is
+  accepted: inputs are a **list**, `-o` means filename-or-directory by input count, and there is no
+  positional output operand. DoD: no-args prints usage and exits 1; `--version` exits 0; the usage
+  text matches the Target CLI block above.
 - **M3 `[todo]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
   fixed-Huffman and dynamic-Huffman blocks; canonical decode tables; 32 KiB window; overlapping match
   copies), `Crc32`, and `ZipReader` (EOCD search over the last 65,557 bytes, central directory, local
@@ -561,21 +593,21 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   (Google Docs / LibreOffice / Pandoc exports).
 - **M12 `[todo]` CI** — GitHub Actions `windows-latest`: msbuild x64 Release (the only platform) +
   fixture build + golden runner.
-- **M13 `[todo]` Multi-file batch + one thread per file** *(D6 ruled; **blocked on D7** — the batch
-  surface, the literal-vs-bounded question and the output-collision rules all have to be ruled
-  before this can be specified)* — `Batch` over a list of inputs, threading per D6, `Diag` made
-  `MT-safe` with `include/spinlocks.h`, per-file exit codes aggregated. Land it **after** the
+- **M13 `[todo]` Multi-file batch + bounded worker pool** *(D6 and D7 both ruled — specifiable)*
+  — `Batch` over a list of inputs, threading per D6/D7a, `Diag` made
+  `MT-safe` with `include/spinlocks.h`, `--threads` parsing with the virtual-core-count default,
+  per-file failures listed on the console, exit code 6 for partial success. Land it **after** the
   converter is correct: every module below `Batch` must already be per-worker, which M2–M11 deliver
-  by construction. DoD (as far as D6 alone settles it): `run_golden.py` converts a fixture set as
-  one batch and file-by-file and byte-compares the two output trees; the batch's process exit code
-  matches the aggregation rule D7 picks; converting the same fixture set twice produces identical
-  bytes. Anything phrased in terms of a `-j` flag waits for D7. Note there is no thread sanitizer
-  on MSVC v143 (`/fsanitize=address` only), so "no data races" cannot be a DoD command — the
-  determinism comparisons above are what is actually checkable.
+  by construction. DoD: `run_golden.py` converts a fixture set as one batch and file-by-file and
+  byte-compares the two output trees; the same batch at `--threads 1` and `--threads 8` produces
+  identical bytes and the same exit code; a fixture set mixing valid and corrupt inputs exits 6,
+  converts every valid input, and names every failed one on the console; `--stdout` with two inputs
+  exits 1. Note MSVC v143 ships no thread sanitizer (`/fsanitize=address` only), so "no data races"
+  cannot be a DoD command — the determinism comparisons are what is actually checkable.
 
 ## Decisions (ruled rows are settled — do not re-litigate; open rows await the owner)
 
-D1–D5 were ruled by the owner on 2026-08-18, D6 on 2026-08-19. Keep the IDs stable:
+D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19. Keep the IDs stable:
 `docs/CONVERSION_REFERENCE.md` §6.2 cites "D2 in CLAUDE.md" by name. New questions get the next free
 ID (D8, D9, …) with the same question/recommendation/status shape, and stay `Open — owner call`
 until the owner rules.
@@ -588,16 +620,20 @@ until the owner rules.
 | D4 | Adopt a3: `/arch:AVX2` + `__AVX2__` guard on x64 | **Adopt**, with the guard as `#ifndef __AVX2__` + `#error` (not `static_assert`) | M1 |
 | D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD, single-threaded**: AVX2 floor with no sub-baseline fallback; single-threading is an owner-granted exception to a2 *(as ruled 2026-08-18; D6 later narrowed the threading half — the text here is left as the owner wrote it)* | standing |
 | D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | **Yes, for multi-file processing only: one thread per file, `spinlocks.h` included.** *(Derived, not stated: a single document's conversion therefore stays sequential, and `$LoopMT*`//Qpar stay banned as compiler-directed threading — see the threading baseline.)* | M13 |
-| D7 | What batch surface does D6 need? Sub-questions: (a) is "one thread per file" literal for any input count, or a bounded pool of workers each taking one file at a time? (b) how are multiple inputs passed? (c) how do per-file failures aggregate into one process exit code? (d) what do `--stdout` and a single-file `-o` mean once N files convert at once? | *Open — owner call.* Recommendations: (a) **owner's call — the ruling reads literally and this file states it literally**; a bounded pool is the usual engineering answer for large batches but it is a different concurrency model, so it needs saying out loud. (b) repeated `<input.docx>` operands, shell globbing, no in-process wildcards. (c) exit 0 only if every file converted, else the highest per-file code. (d) reject `--stdout` and file-valued `-o` when inputs > 1; `-o` names a directory instead | — |
+| D7 | What batch surface does D6 need? (a) literal thread-per-file or a bounded pool? (b) how are multiple inputs passed? (c) how do per-file failures aggregate? (d) what do `--stdout` and `-o` mean for N files? | **(a) A bounded pool** sized to a user-specified thread count, defaulting to the system's virtual (logical) core count. **(b)** Inputs are repeated command-line operands: `DOCXtoMD [options] <input.docx> [input2.docx […]]`; output filenames are derived automatically. **(c)** Failed conversions are printed to the console before the process terminates, and partial success gets its own exit code. **(d)** `--stdout` is single-file only; `-o` gives the output path — the filename for one input, the directory for many | M13 |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the
 CRC-32-vs-CRC-32C trap in rule 11 (D1); the x64-only Build & run section and the two-configuration
 `.vcxproj` (D3); the "ISA and threading baseline" subsection, which is where D4, D5 and D6 actually
-live. **What the owner actually ruled in D6** is two sentences: threading is for multi-file
-processing, one thread per file, and `spinlocks.h` is in scope for it. Everything downstream of that
-— the `Thread-safety:` mapping under r17, the `Batch` and `Diag` entries in the architecture, the
-per-worker classification, milestone M13 and the D7 questions — is **derived by a session, not
+live. **What the owner ruled** is D6 (threading is for multi-file processing, one thread per file,
+`spinlocks.h` in scope) and D7 (a bounded pool sized by a `--threads` count defaulting to the virtual
+core count; repeated input operands with derived output names; failures printed and a distinct
+partial-success exit code; `--stdout` single-input only, `-o` a filename for one input and a
+directory for many). Everything downstream of those — the `Thread-safety:` mapping under r17, the
+`Batch` and `Diag` entries in the architecture, the per-worker classification, the `-j` flag
+spelling, exit code 6's number, the all-inputs-failed rule, the duplicate-output pre-flight check
+and milestone M13 — is **derived by a session, not
 stated by the owner**, and may be revised without re-litigating D6.
 
 ## Repo conventions
