@@ -74,9 +74,10 @@ below.
     tc1's keys verbatim, and one entry per rule the formatter would otherwise break:
     `AlignConsecutiveMacros: Consecutive` (r12), `SpaceBeforeParens: Never` (r13),
     `AllowShortIfStatements`/`Loops`/`CaseLabelsOnASingleLine` so r3/r4's brace-less short forms
-    survive, `AllowShortBlocksOnASingleLine: **Never**` so r14's `}`-on-its-own-line is never
-    collapsed — setting that one to `Always` makes the formatter manufacture r14 breaches in code
-    that already conformed, so do not — `SortIncludes: Never` (the shared headers have a
+    survive, `AllowShortBlocksOnASingleLine: Never` so a braced control block never collapses to
+    `while(n) { --n; }` and breaks r14 — it is deliberately `Never`, and setting it to `Always`
+    makes the formatter manufacture r14 breaches in code that already conformed —
+    `SortIncludes: Never` (the shared headers have a
     load-bearing include order — see "Shared headers"), and `ReflowComments: false` (an r17 prolog
     is regex-validated byte-for-byte and must not be rewrapped). `NamespaceIndentation: All`
     matches `SIMD management.h`. **Known limit**: clang-format has no option that keeps two
