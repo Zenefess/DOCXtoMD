@@ -63,6 +63,11 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - `WIN32_LEAN_AND_MEAN` and `NOMINMAX` on both x64 configurations. `<windows.h>` enters the project at
   M2 and CLAUDE.md asks for both when it does; neither hides a header this project needs, because
   `winnls.h` (`WideCharToMultiByte`) and `wincon.h` (`SetConsoleOutputCP`) sit outside that guard.
+- `.gitignore`, plus the `.gitattributes` line that keeps it CRLF alongside the other tooling
+  dotfiles. It covers the three things an MSVC build or Visual Studio drops into the working tree:
+  `/x64/` — the project sets no OutDir, so binaries and intermediates share that one tree, and D3
+  leaves no `Win32\` tree to ignore — together with `/.vs/` and `*.vcxproj.user`. Both directory
+  patterns are anchored with a leading `/`, so a future path such as `tests/x64/` is not swallowed.
 
 ### Changed
 

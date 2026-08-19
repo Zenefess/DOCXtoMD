@@ -112,7 +112,8 @@ below.
     `#ifndef __AVX2__` + `#error` guard of D4's shape — with a `spinlocks.h`-specific message and an
     extra `static_assert` D4 ruled out. **The sanctioned lock for the one-thread-per-file worker
     layer** (D6) — not for use inside a single document's conversion.
-- Tooling and process files, all five added by M1 and all CRLF except `CHANGELOG.md`:
+- Tooling and process files, all CRLF except `CHANGELOG.md`. The first five landed with M1;
+  `.gitignore` landed with M2, when the project first produced build output worth ignoring:
   - `.clang-format` — `BasedOnStyle: LLVM` first, so anything neither tc1 nor the list below names
     is LLVM's default rather than the GCS's; check that before assuming a rule is covered. Then
     tc1's keys verbatim, and one entry per rule the formatter would otherwise break:
@@ -143,13 +144,18 @@ below.
     `[*.md]` silently misses `CONTRIBUTING.MD` and leaves that owner-managed LF file on `crlf`.
   - `.gitattributes` — see "Line endings" below.
   - `CHANGELOG.md` — c2/c3 Keep-a-Changelog, `[Unreleased]` only; nothing is released yet.
-  None of the five is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
+  - `.gitignore` — the three things an MSVC build or Visual Studio drops here: `/x64/` (no OutDir
+    override, so binaries *and* intermediates share that tree, and D3 leaves no `Win32\` to ignore),
+    `/.vs/` and `*.vcxproj.user`. Both directory patterns are anchored with a leading `/`, so a
+    future `tests/x64/` fixture path would not be swallowed by accident. Nothing here is produced by
+    a Linux session.
+  None of the six is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
   not reach them and neither project file mentions them.
 - `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `docs/CONVERSION_REFERENCE.md`, `LICENSE`
   (MIT, Copyright (c) 2026 David William Bull), this file.
 - Line endings: `.gitattributes` now holds the line, so this no longer needs checking by hand.
   Source and build files (`*.c`, `*.cpp`, `*.h`, `*.hpp`, `*.inl`, `*.sln`, `*.vcxproj`, `*.filters`,
-  `*.props`, and the three tooling dotfiles) are `text eol=crlf`: Git stores LF and materialises
+  `*.props`, and the four tooling dotfiles) are `text eol=crlf`: Git stores LF and materialises
   **CRLF** in every working tree, on Linux exactly as on Windows, so tc2 cannot drift and a
   line-ending change can never reach a diff. Everything else is `* -text` — byte-for-byte as
   committed, whatever `core.autocrlf` a contributor has set — which is what leaves the Markdown docs
@@ -689,7 +695,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   both build clean at `/W3` (so `si32 main()` and `#include "typedefs.h"` compile warning-free),
   clearing `EnableEnhancedInstructionSet` stops the build on the `#error`, and `/p:Platform=Win32`
   fails by way of D3.
-- **M2 `[done-unverified]` CLI skeleton** — `wmain`, `src/` layout starts (`main.cpp`,
+- **M2 `[done]` CLI skeleton** — `wmain`, `src/` layout starts (`main.cpp`,
   `BuildGuards.h`, `CliOptions`, `Diag`), usage/help/version, exit codes 0/1/2. Retire `DOCXtoMD.cpp`
   in the same commit: delete it, carry its prolog and the `__AVX2__` guard forward into
   `src/main.cpp` / `src/BuildGuards.h` (updating `File:`/`Description:`), and swap the `.vcxproj` +
@@ -716,12 +722,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   owner-authored code M1 never fed to a compiler — and all four come through `/W3` clean. Later
   milestones inherit that, so a warning appearing from one of them is a regression introduced by the
   new code, not a latent header problem.
-  **Still unrun**: the three behavioural DoD checks against the real binary — no arguments prints the
-  usage text and exits 1, `--version` exits 0, and `--help` reproduces the Target CLI block. All three
-  hold on the shim, but not yet on `x64\Release\DOCXtoMD.exe`, which is the only reason the marker is
-  `[done-unverified]` rather than `[done]`; run them and flip it. There is **no `.gitignore`**, so a
-  build leaves `x64\`, `.vs\` and the `.vcxproj.user` file untracked — do not commit them, and
-  consider raising a `.gitignore` with the owner.
+  The three behavioural checks were run against `x64\Release\DOCXtoMD.exe` the same day and all
+  three behave as documented: no arguments prints the usage text and exits 1, `--version` exits 0, and
+  `--help` reproduces the Target CLI block. With the build and all three checks confirmed on Windows,
+  M2's DoD is fully discharged and the marker is `[done]`.
 - **M3 `[next]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
   fixed-Huffman and dynamic-Huffman blocks; canonical decode tables; 32 KiB window; overlapping match
   copies), `Crc32`, and `ZipReader` (EOCD search over the last 65,557 bytes, central directory, local

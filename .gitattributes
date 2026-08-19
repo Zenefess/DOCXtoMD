@@ -27,3 +27,4 @@
 .clang-format  text eol=crlf
 .editorconfig  text eol=crlf
 .gitattributes text eol=crlf
+.gitignore     text eol=crlf
