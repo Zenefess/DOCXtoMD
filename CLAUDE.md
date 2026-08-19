@@ -37,8 +37,8 @@ below.
   `<AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>`,
   so any TU writes `#include "typedefs.h"` with no path prefix. Six `<ClInclude>`s, all `include\…`.
 - `DOCXtoMD.vcxproj.filters` — lists `DOCXtoMD.cpp` under Source Files and all six headers under
-  Header Files. Every `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character
-  (a mismatch breaks project load in VS).
+  Header Files. Every `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character;
+  keep it that way, or the IDE tree stops reflecting the build.
 - Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
   Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
   - `typedefs.h` v1.0.1 — r1/r2/t1/t2 aliases, the full pointer lattice, `al1`–`al64`, `$LoopMT*`,
@@ -55,9 +55,10 @@ below.
     no `ISA:` field.
   - `spinlocks.h` v1.0.0 — user-space spin locks: `SpinLockMin`/`SpinLock`/`SpinLockMax` (long-wait,
     balanced and minimum-latency profiles), `SpinLockTry`, `SpinUnlock`, and the `SPIN_*` tuning
-    constants. r17 prolog; `ISA: AVX2`; `Thread-safety: MT-safe`. It also already carries the exact
-    `#ifndef __AVX2__` + `#error` guard D4 settled on. **Added for future multithreaded work and
-    unused today** — D5 still rules this project single-threaded; see D6.
+    constants. r17 prolog; `ISA: AVX2` (but see Known gaps); `Thread-safety: MT-safe`. It carries an
+    `#ifndef __AVX2__` + `#error` guard of D4's shape — with a `spinlocks.h`-specific message and an
+    extra `static_assert` D4 ruled out. **Added for future multithreaded work and unused today** —
+    D5 still rules this project single-threaded; see D6.
 - `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `docs/CONVERSION_REFERENCE.md`, `LICENSE`
   (MIT, Copyright (c) 2026 David William Bull), this file.
 - Line endings: every source/build file (`*.h`, `.cpp`, `.vcxproj`, `.filters`, `.sln`) is already
@@ -162,9 +163,10 @@ The owner's ruling on D5 is: **for this project the baseline is SIMD, single-thr
    not re-litigate it per session and do not tag every file; write
    `// RULE-DEV:a2 single-threaded by owner ruling (D5)` only where a reader would otherwise expect
    threading (e.g. a loop over multiple input files). No threads, no thread pool, **no `$LoopMT*`
-   macros from `typedefs.h`**, and do not enable `/Qpar`. p3's "expose thread status via atomics;
-   document memory order" is vacuous here: prologs say `Thread-safety: N/A` or `Reentrant`, never
-   `MT-safe`.
+   macros from `typedefs.h`**, **no locks from `include/spinlocks.h`** (present but unused — D6), and
+   do not enable `/Qpar`. p3's "expose thread status via atomics; document memory order" is vacuous
+   here: **project** prologs say `Thread-safety: N/A` or `Reentrant`, never `MT-safe` — the shared
+   `include/spinlocks.h` declares `MT-safe` as a library header, which D5 does not govern.
 
 MSVC macro trap: MSVC defines `__AVX__`/`__AVX2__`/`__AVX512*__` but **never** `__FMA__` or
 `__BMI2__`. Guard on `__AVX2__` alone — that is why the `defined(__FMA__) || defined(__AVX2__)` tests
@@ -213,8 +215,8 @@ as a numbered decision (D7+) the way D1–D6 were raised. What sessions need to 
   the build, they do not fork it.
 - **No third-party code, period** (D1 + D2): no vendored libraries, no `third_party/` directory, no
   package manager. ZIP, inflate and XML are all first-party. Adding a dependency needs a new decision.
-- No scalar/SSE fallback paths, no CPUID dispatch below the AVX2 baseline, no `$LoopMT*`, no `/Qpar`
-  (D4/D5, a8).
+- No scalar/SSE fallback paths, no CPUID dispatch below the AVX2 baseline, no `$LoopMT*`, no locks
+  from `include/spinlocks.h` (D6 is unruled), no `/Qpar` (D4/D5, a8).
 - No performance *claim* without a `bench/` diff (bd1/bd2) — using intrinsics needs no permission,
   asserting they are faster does.
 - No hand-rolled allocators or bare `new`/`malloc` — `memory management.h` owns that (p2).
@@ -257,11 +259,13 @@ shared headers offer.
 
 ### Known gaps in the GCS you must not paper over
 
-- a3's `static_assert(__AVX2__)` needs C++17's single-argument form **and** `/arch:AVX2` (else the
-  macro is undefined and the assert reads as `static_assert(0)` — or fails to compile). C++20 is
-  already set on the x64 configs, so only the flag is missing; D4 settles the form as
-  `#ifndef __AVX2__` + `#error` for a readable message. M1 applies both. `include/spinlocks.h`
-  already carries exactly that guard (plus a two-argument `static_assert`) — copy its wording.
+- a3's bare `static_assert(__AVX2__)` needs C++17's single-argument form **and** `/arch:AVX2` (else
+  the macro is undefined and the assert reads as `static_assert(0)` — or fails to compile); the
+  two-argument form needs only C++11. C++20 is already set on the x64 configs, so only the flag is
+  missing; D4 settles the form as `#ifndef __AVX2__` + `#error` for a readable message. M1 applies
+  both. `include/spinlocks.h` carries a guard of that shape — copy the **structure, not the text**:
+  its `#error` message names `spinlocks.h`, and the `static_assert(__AVX2__, …)` underneath it is
+  exactly the construct D4 ruled out.
 - p3 literally says "keep scalar baseline; … run-time CPUID dispatch", which reads as a scalar
   fallback path; a2/a8 plus D5 override that for this project — scalar survives as an *oracle* and as
   the right choice where SIMD is not faster, never as a shipped fallback build.
@@ -269,7 +273,10 @@ shared headers offer.
   enforces it — Linux sessions default to LF. M1 adds `.gitattributes` (`*.cpp`/`*.h` etc.
   `text eol=crlf`) so this cannot drift. Until it exists, check line endings manually before committing.
 - Two shared headers (`SIMD management.h`, `vector structures.h`) still carry the pre-r17 boxed
-  banner, `typedefs.h` writes the nonconforming ISA token `AVX512` and un-numbered `To Do:` items, and
+  banner, `typedefs.h` writes the nonconforming ISA token `AVX512` and un-numbered `To Do:` items,
+  `spinlocks.h` declares `ISA: AVX2` although it carries no AVX2 code (its only intrinsics are
+  `_mm_pause`, `__rdtsc` and the `_Interlocked*` family — by the rule above that reads as
+  `ISA: Scalar`; the token appears to describe its `/arch:AVX2` build guard instead), and
   the allocator family is lowercase (`amalloc`, `salloc`, `mzero`) against r11's PascalCase. These are
   owner-authored files: **report them, do not fix them here.**
 - `memory management.h` documents a dependency on `data tracking.h`, which is absent from this repo
@@ -336,7 +343,7 @@ implementation session must respect:
 | Soft hyphens | Removed; NBSP and smart punctuation kept verbatim |
 | Output encoding | UTF-8, no BOM, LF line endings (tc2's CRLF governs source files, not program output) |
 
-## Planned architecture (none of this exists yet — build it via the Roadmap)
+## Planned architecture (only `docs/` and `include/` exist so far — build the rest via the Roadmap)
 
 ```
 src/
@@ -428,7 +435,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     to both x64 `ItemDefinitionGroup`s, and put the `#ifndef __AVX2__` + `#error` guard in
     `DOCXtoMD.cpp` (temporary — it moves to `src/BuildGuards.h` at M2);
   - (the `<ClInclude>` ItemGroup in `DOCXtoMD.vcxproj.filters` is **already done** — all six headers
-    sit under Header Files, added with the `include/` restructure);
+    sit under Header Files. This M1 sub-task landed early in the `include/` resync commit, because
+    listing `include\spinlocks.h` obliged the MSBuild file-list rule to fix `.filters` anyway);
   - add the r17 prolog to `DOCXtoMD.cpp` (temporary — superseded by `src/main.cpp` at M2).
 
   DoD: x64 Debug **and** Release build clean at `/W3`; the prolog passes the r17 regexes; a
@@ -466,7 +474,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
 - **M12 `[todo]` CI** — GitHub Actions `windows-latest`: msbuild x64 Release (the only platform) +
   fixture build + golden runner.
 
-## Decisions (settled — do not re-litigate per session)
+## Decisions (ruled rows are settled — do not re-litigate; open rows await the owner)
 
 D1–D5 were ruled by the owner on 2026-08-18. Keep the IDs stable: `docs/CONVERSION_REFERENCE.md`
 §6.2 cites "D2 in CLAUDE.md" by name. New questions get the next free ID (D7, D8, …) with the same
