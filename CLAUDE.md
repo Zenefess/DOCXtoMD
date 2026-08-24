@@ -1003,7 +1003,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   thing that proves them. And `tests/run_container.py` is a third file beyond the two the milestone
   names; it exists because "corrupt/encrypted/`.doc` inputs exit 3 with clear messages" is a DoD
   bullet, and a DoD bullet with no command behind it is an adjective.
-- **M4 `[done-unverified]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `Utf`,
+- **M4 `[done]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `Utf`,
   `XmlPull`,
   `OpcPackage`, plus the unit-test harness (second console `.vcxproj` + tiny CHECK header under
   `tests/`). **`Utf` is scheduled here** — owner ruling, 2026-08-19, closing the gap that no milestone
@@ -1012,9 +1012,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   `WideCharToMultiByte` moves behind `Utf` once it exists. DoD: unit tests drive token streams from
   string literals; a part carrying invalid UTF-8 is rejected with a clear message rather than reaching
   the walker; the main part is resolved via rels, not hardcoded.
-  **Status**: the code landed from Linux on 2026-08-24. All three DoD bullets are discharged and each
-  has a command behind it, but **no msbuild ran**, so the marker is `[done-unverified]` and the next
-  Windows session verifies rather than reimplements.
+  **Status**: the code landed from Linux on 2026-08-24 as `[done-unverified]`, and the owner verified it
+  on Windows the same day: both x64 configurations compile, `python tests\run_container.py` passes all
+  **89** checks against the real MSVC binary and `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
+  **356**. That discharges every DoD bullet with a command behind it, so the marker is `[done]`.
   - **The three DoD bullets, and what proves each.** (1) `tests/unit/` drives every case from a string
     literal and opens no file: 356 checks over the ill-formed UTF-8 classes, the XML token stream, the
     namespace rules and the relationship-target resolver. (2) `OpcLoadXmlPart` is the only door to a
@@ -1073,11 +1074,23 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     relationship lookup by id is exercised, but the claim it is there to support -- that ids are scoped
     per part, so `rId3` in `document.xml` and `rId3` in `footnotes.xml` are unrelated -- has no test,
     because M4 loads only one part's relationships. It gets one at M7, when a second part's are loaded.
-  - **What the Linux run could not reach**: `/W3`, `/sdl`, `/arch:AVX2`, the real `include/` headers, and
-    whether Visual Studio loads the second project. **Unrun DoD commands, for the next Windows session**:
-    `msbuild DOCXtoMD.sln /m /p:Configuration=Release /p:Platform=x64`, the same at `Debug`, both
-    expected to build with **zero warnings at `/W3`**; then `python tests\run_container.py` and
-    `tests\x64\Release\DOCXtoMD.Tests.exe`.
+  - **What the Linux run could not reach, and the owner's Windows run did**: `/W3`, `/sdl`, `/arch:AVX2`,
+    the real `include/` headers, and whether the second project builds at all. All four are now covered.
+    Both configurations compile; the container suite returns the same **89** and the unit suite the same
+    **356** the shim produced on Linux, so for the second milestone running a Linux session's harness
+    predicted the real binary exactly rather than only itself. Two things the third command proves in
+    passing, because it could not otherwise have been typed: the test project builds, and its pinned
+    `<OutDir>` really does put the exe at `tests\x64\Release\`. Two of the four defects the adversarial
+    review fixed were reachable **only** on this path — the `mzero` alignment fault, which the Linux
+    allocator hid, and the two test files missing `<stdio.h>`, which g++ supplies transitively — and
+    either one would have stopped this run dead had it survived to it.
+  - **One half of the global DoD is reported rather than measured.** The owner's report says both
+    configurations compiled **without errors**; the standing bullet asks for **zero warnings at `/W3`**,
+    and M2's and M3's reports said "no warnings and no errors" in those words. Read the marker as
+    covering the three commands, which were reported with counts, and treat the warning count as
+    unconfirmed until someone says so explicitly. It matters beyond bookkeeping: M2 established that the
+    shared headers come through `/W3` clean, so a warning from here on belongs to the commit that
+    introduces it, and that inheritance only holds if each milestone actually checks.
 - **M5 `[todo]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal `DocWalker`/
   `Ir`/`MdEmitter`, plus `tests/run_golden.py` (exe runner + byte-compare + exit-code assertions).
   DoD: first golden fixture converts byte-exact.
