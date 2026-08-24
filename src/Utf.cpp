@@ -254,7 +254,10 @@ cUTF8_RESULT UtfFromWide(cwchptr text, ui8ptrc dest, cui64 destBytes, ui64ptrc p
       cui32 length = UtfEncode(point, scratch);
 
       if(dest) {
-         if(ui64(length) > destBytes - produced) return UTF8_ERROR_SPACE;
+         if(ui64(length) > destBytes - produced) {
+            *producedBytes = produced; // What was written before the room ran out, not a bare zero
+            return UTF8_ERROR_SPACE;
+         }
          for(ui32 index = 0; index < length; ++index) dest[produced + index] = scratch[index];
       }
       produced += ui64(length);
@@ -266,11 +269,15 @@ cUTF8_RESULT UtfFromWide(cwchptr text, ui8ptrc dest, cui64 destBytes, ui64ptrc p
 cUTF8_RESULT UtfTranscodeUtf16(cui8ptr bytes, cui64 byteCount, cbool bigEndian, ui8ptrptrc out, ui64ptrc outBytes) {
    *out      = nullptr;
    *outBytes = 0;
+   if(!bytes) return UTF8_OK; // A null part is empty and owns nothing, so there is nothing to hand back
    if(byteCount & 1u) return UTF8_ERROR_ODD_LENGTH;
-   if(!bytes || !byteCount) return UTF8_OK;
 
-   cui64 skip  = UtfBomBytes(bytes, byteCount);
-   cui64 units = (byteCount - skip) / 2u;
+   // Only a UTF-16 mark may be skipped here. UtfBomBytes would also report the three bytes of a UTF-8
+   // one, and skipping three would put every code unit one byte out of phase with the even-length
+   // invariant the check above just established.
+   cbool marked = (byteCount >= 2u && ((bytes[0] == 0xFFu && bytes[1] == 0xFEu) || (bytes[0] == 0xFEu && bytes[1] == 0xFFu)));
+   cui64 skip   = (marked ? 2u : 0u);
+   cui64 units  = (byteCount - skip) / 2u;
 
    // Two passes over the same units: the first says exactly how large the buffer must be, so the second
    // cannot overrun it and nothing has to grow. A code unit produces at most three UTF-8 bytes, and a

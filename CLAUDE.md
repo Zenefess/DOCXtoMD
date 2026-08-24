@@ -1008,7 +1008,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   has a command behind it, but **no msbuild ran**, so the marker is `[done-unverified]` and the next
   Windows session verifies rather than reimplements.
   - **The three DoD bullets, and what proves each.** (1) `tests/unit/` drives every case from a string
-    literal and opens no file: 297 checks over the ill-formed UTF-8 classes, the XML token stream, the
+    literal and opens no file: 312 checks over the ill-formed UTF-8 classes, the XML token stream, the
     namespace rules and the relationship-target resolver. (2) `OpcLoadXmlPart` is the only door to a
     tokenizer — all three `XmlOpen` call sites in `src/` sit behind it — and `bad-utf8.docx` and
     `truncated-utf8.docx` assert the exit code and the sentence, which names the failing part.
@@ -1025,12 +1025,21 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     packages exit 5 after their main part is resolved and tokenized, 30 refused ones exit 3 with the
     documented sentence, an absent input exits 2, four command lines behave as M2 published them, and
     Python's `zipfile` reads back all 33 archives that are well-formed ZIPs. The unit binary passes all
-    **297** checks. On top of that, three scratch harnesses the commit does not carry: 1.2M mutated XML
+    **312** checks. On top of that, three scratch harnesses the commit does not carry: 1.2M mutated XML
     parts over three bases (a minimal body, a rich one carrying namespaces, entities, CDATA, a PI and an
     `mc:AlternateContent`, and a `.rels` part) plus all 2,039 proper prefixes of those bases; 6M random
     relationship targets built from an alphabet of `/`, `.`, `\`, `%`, `:`, `?`, `#` and letters through
     `OpcResolveTarget`; and 6,000 mutated `.docx` archives through the exe, which produced only exit
     codes 3 and 5. No AddressSanitizer or UndefinedBehaviorSanitizer diagnostic anywhere.
+  - **Cross-checked against an independent implementation**, which is the evidence M3 got from Python's
+    `zlib` and M4 gets from Python's expat: 3,000 generated documents — nested elements, prefixed and
+    default namespaces, re-binding, entity and character references, CDATA, comments, processing
+    instructions and mixed whitespace — tokenized by both `XmlPull` and expat produce byte-identical
+    streams of namespace URI, local name, attribute and text, and the two agree on every document that
+    is refused. Every part of both committed fixture trees matches too. That is what found the one real
+    tokenizer defect in M4: attributes were compared by their resolved namespace *value* rather than by
+    their URI, so two attributes in two namespaces this build does not know looked like one attribute
+    twice.
   - **Reviewed** by a survey-and-critique workflow before the code was written and by a six-dimension
     adversarial review after it, each finding then put to a skeptic told to refute it. What the critique
     changed: the `Diag` rewire had been overlooked, the failure sentences did not name the failing part,

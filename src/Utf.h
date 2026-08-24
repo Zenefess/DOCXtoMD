@@ -107,6 +107,7 @@ cui32 UtfEncode(cui32 codePoint, ui8ptrc dest);
 /// @param dest           Receives the UTF-8 bytes, unterminated. Null measures instead of writing.
 /// @param destBytes      Bytes available at dest; ignored when dest is null.
 /// @param producedBytes  Receives the number of bytes written, or needed when dest is null.
+///                       On UTF8_ERROR_SPACE it is what was written before the room ran out.
 /// @return UTF8_OK, or UTF8_ERROR_SPACE when a non-null dest is too small to hold the result.
 /// @note A lone surrogate becomes U+FFFD rather than failing. This is the console and path boundary,
 ///       where a name that cannot be represented should still be reported rather than swallowed; part
@@ -116,7 +117,9 @@ cui32 UtfEncode(cui32 codePoint, ui8ptrc dest);
 cUTF8_RESULT UtfFromWide(cwchptr text, ui8ptrc dest, cui64 destBytes, ui64ptrc producedBytes);
 
 /// Transcodes a UTF-16 part into a freshly allocated UTF-8 buffer.
-/// @param bytes      First byte of the part, byte-order mark included; the mark is consumed here.
+/// @param bytes      First byte of the part. A leading UTF-16 mark is consumed here; a UTF-8 one is
+///                   not, because this entry point reads UTF-16 and three bytes is not a whole
+///                   number of code units. A null pointer is an empty part and yields a null out.
 /// @param byteCount  Bytes in the part.
 /// @param bigEndian  true for UTF-16BE, false for UTF-16LE, as UtfDetectEncoding reported.
 /// @param out        Receives the buffer, which the caller releases with mdealloc. Null on failure.

@@ -248,6 +248,21 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - A run in which several inputs fail now returns the **highest** of their per-file verdicts. Exit code 6
   stays unreachable, because D7c reserves it for a run that converted something.
 
+### Fixed
+
+- `XmlPull` compared two attributes by their resolved namespace *value* rather than by their URI, so two
+  attributes from two namespaces the build does not know — `w14:id` and `w15:id`, say, which both resolve
+  to `XML_NS_OTHER` — were refused as the same attribute twice. Attribute identity is now the URI plus the
+  local name, as Namespaces in XML defines it, and the URI is reported beside each attribute. Found by
+  differential-testing the tokenizer against Python's expat over generated documents.
+- `UtfTranscodeUtf16` asked `UtfBomBytes` for the mark to skip, which also reports the three bytes of a
+  UTF-8 one; skipping three put every UTF-16 code unit one byte out of phase with the even-length
+  invariant checked immediately above it. It now recognises only the two-byte marks it can act on.
+- `UtfTranscodeUtf16` returned `UTF8_OK` with a null buffer for a zero-length part, though the header
+  promises a buffer on success and the caller treats a null one as "not loaded yet".
+- `UtfFromWide` reported zero bytes produced after `UTF8_ERROR_SPACE`, even where it had already filled
+  part of the destination.
+
 ### Removed
 
 - The `Win32` project configurations, and every `…|Win32` `PropertyGroup`, `ImportGroup` and

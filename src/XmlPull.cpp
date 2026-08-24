@@ -481,7 +481,7 @@ static cXML_TOKEN XmlParseStartTag(XML_READERptrc reader) {
       if(reader->attributeCount >= XML_MAX_ATTRIBUTES) return XmlFail(reader, XML_ERROR_ATTRIBUTES, at);
       // The qualified name is what is stored for now; the resolution pass below splits it, because a
       // declaration further along the same tag can still change what its prefix means.
-      reader->attributes[reader->attributeCount++] = {attribute, value, XML_NS_NONE};
+      reader->attributes[reader->attributeCount++] = {attribute, value, {nullptr, 0}, XML_NS_NONE};
    }
 
    // Resolution comes after the whole tag has been read, so a prefix declared on this element resolves
@@ -511,13 +511,17 @@ static cXML_TOKEN XmlParseStartTag(XML_READERptrc reader) {
          }
       }
       reader->attributes[index].name = attributeLocal;
+      reader->attributes[index].uri  = attributeUri;
       if(reader->attributes[index].space == XML_NS_XML && XmlViewEqual(attributeLocal, "space")) {
          preserve = XmlViewEqual(reader->attributes[index].value, "preserve");
       }
    }
+   // Two attributes are the same one when their namespace URI and local name both match. Comparing the
+   // resolved namespace *value* instead would be wrong: every namespace this build does not know is
+   // XML_NS_OTHER, so w14:id and w15:id -- two different namespaces, both unknown -- would collide.
    for(ui32 index = 1u; index < reader->attributeCount; ++index) {
       for(ui32 earlier = 0; earlier < index; ++earlier) {
-         if(reader->attributes[index].space != reader->attributes[earlier].space) continue;
+         if(!XmlViewsEqual(reader->attributes[index].uri, reader->attributes[earlier].uri)) continue;
          if(XmlViewsEqual(reader->attributes[index].name, reader->attributes[earlier].name)) {
             return XmlFail(reader, XML_ERROR_ATTRIBUTES, tagAt);
          }

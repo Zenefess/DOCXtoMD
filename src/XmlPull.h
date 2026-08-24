@@ -113,9 +113,13 @@ typedef const XML_TEXT *const cXML_TEXTptrc;
 /// One attribute of the element the reader is on.
 /// @note An unprefixed attribute is in no namespace at all -- a default xmlns binds element names only,
 ///       which is why Id, Type and Target in a relationship part read as XML_NS_NONE.
+/// @note The uri is what distinguishes two attributes, not the space: every namespace this build does
+///       not know is XML_NS_OTHER, so comparing the space alone would make two attributes from two
+///       different extension namespaces -- w14 and w15, say -- look like the same attribute twice.
 struct XML_ATTRIBUTE {
    XML_TEXT name;  ///< Local name, with any prefix stripped
    XML_TEXT value; ///< Value, with references resolved and whitespace normalised
+   XML_TEXT uri;   ///< URI the prefix resolved to; empty for an attribute in no namespace
    XML_NS   space; ///< Namespace the prefix resolved to
 };
 
@@ -218,10 +222,14 @@ void XmlClose(XML_READERptrc reader);
 /// @note A text token never arrives empty and never arrives trimmed: whitespace is content until the
 ///       walker decides otherwise, and allWhitespace is a convenience for that decision rather than a
 ///       licence to drop it -- what may be dropped is xml:space's business, not the tokenizer's.
-/// @note Two relaxations of XML 1.0, both deliberate and both safe for OOXML, which spells every name in
+/// @note Three relaxations of XML 1.0, all deliberate, all in the accepting direction, and all safe for
+///       OOXML, which spells every name in
 ///       ASCII: a name may hold any byte above 0x7F without consulting the Unicode NameChar tables, and
-///       the ban on a literal "]]>" inside character data is not enforced, because enforcing it costs a
-///       scan and rejects nothing a producer emits.
+///       the bans on a literal "]]>" inside character data and on "--" inside a comment are not
+///       enforced, because enforcing either costs a
+///       scan and rejects nothing a producer emits. A stricter parser -- expat, for one -- refuses both,
+///       so a document this accepts is not always one every reader accepts; accepting more is the right
+///       direction for a converter, and it is recorded here so nobody mistakes it for an oversight.
 /// @note No attribute is ever defaulted here. There is no document type declaration to define one --
 ///       the tokenizer refuses those -- so an absent attribute is absent, and a caller applies
 ///       whatever default ISO/IEC 29500 gives it.

@@ -163,6 +163,15 @@ void TestUtf(void) {
 
    CHECK(UtfFromWide(nullptr, nullptr, 0, &produced) == UTF8_OK && produced == 0);
    CHECK(UtfFromWide(euro, cramped, sizeof(cramped), &produced) == UTF8_ERROR_SPACE);
+   CHECK(!produced); // U+20AC needs three bytes and two were offered, so nothing was written
+
+   ui8 narrow[3] = {};
+
+   // A buffer that fits the first character and not the second reports the first, not a bare zero.
+   cwchar mixed[] = {wchar('A'), wchar(0x20ACu), 0};
+
+   CHECK(UtfFromWide(mixed, narrow, sizeof(narrow), &produced) == UTF8_ERROR_SPACE);
+   CHECK(produced == 1u && narrow[0] == 'A');
 
    CheckGroup("Utf: transcoding a UTF-16 part");
 
@@ -178,11 +187,24 @@ void TestUtf(void) {
    CHECK(outBytes == 2u && out && out[0] == 'h' && out[1] == 'i');
    mdealloc(out);
    CHECK(UtfTranscodeUtf16((cui8ptr) "\x3D\xD8\x00\xDE", 4u, false, &out, &outBytes) == UTF8_OK);
-   CHECK(outBytes == 4u && out && out[0] == 0xF0u && out[3] == 0x80u); // U+1F600 without a mark
+   CHECK(outBytes == 4u && out && out[0] == 0xF0u && out[1] == 0x9Fu && out[2] == 0x98u && out[3] == 0x80u);
    mdealloc(out);
    CHECK(UtfTranscodeUtf16((cui8ptr) "h\0i", 3u, false, &out, &outBytes) == UTF8_ERROR_ODD_LENGTH);
    CHECK(UtfTranscodeUtf16((cui8ptr) "\x3D\xD8", 2u, false, &out, &outBytes) == UTF8_ERROR_UNPAIRED);
    CHECK(!out); // Nothing is handed back when the transcode fails
+
+   // A UTF-8 mark is not a whole number of UTF-16 code units, so it is left where it is rather than
+   // skipped: skipping three bytes would read every unit after it one byte out of phase.
+   CHECK(UtfTranscodeUtf16((cui8ptr) "\xEF\xBB\xBF\x41\x00\x42", 6u, false, &out, &outBytes) == UTF8_OK);
+   // Three code units of nonsense at three UTF-8 bytes each, not one character and a dropped byte.
+   CHECK(outBytes == 9u && out);
+   mdealloc(out);
+
+   // An empty part still hands back a buffer, because UTF8_OK promises one.
+   CHECK(UtfTranscodeUtf16((cui8ptr) "", 0, false, &out, &outBytes) == UTF8_OK);
+   CHECK(out && !outBytes);
+   mdealloc(out);
+   CHECK(UtfTranscodeUtf16(nullptr, 0, false, &out, &outBytes) == UTF8_OK && !out);
 
    CheckGroup("Utf: sentences");
    CHECK(UtfResultText(UTF8_OK) && UtfResultText(UTF8_ERROR_MEMORY));

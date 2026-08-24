@@ -273,6 +273,10 @@ void TestXmlPull(void) {
    CHECK(XmlCase("<a b=1/>", "!2"));
    CHECK(XmlCase("<a b=\"1\" b=\"2\"/>", "!7"));
    CHECK(XmlCase("<a xmlns:p=\"u\" xmlns:p=\"v\"/>", "!7"));
+   // Two attributes from two namespaces this build does not know are two attributes, not one twice.
+   // Comparing the resolved namespace value rather than the URI would collapse them onto XML_NS_OTHER.
+   CHECK(XmlCase("<a xmlns:p=\"urn:one\" xmlns:q=\"urn:two\" p:x=\"1\" q:x=\"2\"/>", "(a)a$"));
+   CHECK(XmlCase("<a xmlns:p=\"urn:one\" xmlns:q=\"urn:one\" p:x=\"1\" q:x=\"2\"/>", "!7"));
    CHECK(XmlCase("<p:a/>", "!6"));
    CHECK(XmlCase("<a p:b=\"1\"/>", "!6"));
    CHECK(XmlCase("<a:b:c/>", "!6"));
@@ -347,6 +351,13 @@ void TestXmlPull(void) {
    CHECK(XmlTextEqual(XmlAttribute(&reader, XML_NS_NONE, "Target"), "word/document.xml"));
    CHECK(!XmlAttribute(&reader, XML_NS_PR, "Id").bytes);
    CHECK(!XmlAttribute(&reader, XML_NS_NONE, "Type").bytes);
+   XmlClose(&reader);
+   // The URI is reported beside each attribute, which is what tells two unknown namespaces apart.
+   CHECK(XmlFirst(&reader, "<a xmlns:p=\"urn:one\" xmlns:q=\"urn:two\" p:x=\"1\" q:x=\"2\" y=\"3\"/>") == XML_TOKEN_START_ELEMENT);
+   CHECK(reader.attributeCount == 3u);
+   CHECK(XmlTextEqual(reader.attributes[0].uri, "urn:one") && XmlTextEqual(reader.attributes[0].value, "1"));
+   CHECK(XmlTextEqual(reader.attributes[1].uri, "urn:two") && XmlTextEqual(reader.attributes[1].value, "2"));
+   CHECK(!reader.attributes[2].uri.length); // An unprefixed attribute is in no namespace at all
    XmlClose(&reader);
    CHECK(XmlFirst(&reader, "<a b=\"x&amp;y\" c='single' d=\"tab\there\"/>") == XML_TOKEN_START_ELEMENT);
    CHECK(XmlTextEqual(XmlAttribute(&reader, XML_NS_NONE, "b"), "x&y"));
