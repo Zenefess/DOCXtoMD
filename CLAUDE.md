@@ -1013,9 +1013,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   string literals; a part carrying invalid UTF-8 is rejected with a clear message rather than reaching
   the walker; the main part is resolved via rels, not hardcoded.
   **Status**: the code landed from Linux on 2026-08-24 as `[done-unverified]`, and the owner verified it
-  on Windows the same day: both x64 configurations compile, `python tests\run_container.py` passes all
-  **89** checks against the real MSVC binary and `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
-  **356**. That discharges every DoD bullet with a command behind it, so the marker is `[done]`.
+  on Windows the same day: both x64 configurations build with **zero warnings at `/W3`**,
+  `python tests\run_container.py` passes all **89** checks against the real MSVC binary and
+  `tests\x64\Release\DOCXtoMD.Tests.exe` passes all **356**. That discharges the milestone's own three
+  DoD bullets and the global one, so the marker is `[done]` with nothing outstanding.
   - **The three DoD bullets, and what proves each.** (1) `tests/unit/` drives every case from a string
     literal and opens no file: 356 checks over the ill-formed UTF-8 classes, the XML token stream, the
     namespace rules and the relationship-target resolver. (2) `OpcLoadXmlPart` is the only door to a
@@ -1084,13 +1085,12 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     review fixed were reachable **only** on this path — the `mzero` alignment fault, which the Linux
     allocator hid, and the two test files missing `<stdio.h>`, which g++ supplies transitively — and
     either one would have stopped this run dead had it survived to it.
-  - **One half of the global DoD is reported rather than measured.** The owner's report says both
-    configurations compiled **without errors**; the standing bullet asks for **zero warnings at `/W3`**,
-    and M2's and M3's reports said "no warnings and no errors" in those words. Read the marker as
-    covering the three commands, which were reported with counts, and treat the warning count as
-    unconfirmed until someone says so explicitly. It matters beyond bookkeeping: M2 established that the
-    shared headers come through `/W3` clean, so a warning from here on belongs to the commit that
-    introduces it, and that inheritance only holds if each milestone actually checks.
+  - **Zero warnings at `/W3`, confirmed on a rebuild.** The owner's first report said both configurations
+    compiled without errors, which is not the same claim; a rebuild of Debug and Release the same day
+    produced **no warnings** in either. That closes the last half of the global DoD, and it matters
+    beyond bookkeeping: M2 established that the six shared headers come through `/W3` clean, so a
+    warning appearing from here on belongs to the commit that introduces it rather than being a latent
+    header problem. M4 puts six new `src/` files and six `tests/unit/` ones under that inheritance.
 - **M5 `[todo]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal `DocWalker`/
   `Ir`/`MdEmitter`, plus `tests/run_golden.py` (exe runner + byte-compare + exit-code assertions).
   DoD: first golden fixture converts byte-exact.
