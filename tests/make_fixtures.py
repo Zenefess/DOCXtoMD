@@ -421,7 +421,9 @@ def build_all(verbose=True, writing=True):
            "a dangling officeDocument relationship, recovered through the content-type override")
     # The relationship names a part that is there but is typed as something else. The relationship is the
     # specification's discovery mechanism and [Content_Types].xml is metadata, so the relationship wins.
-    # That reading of "cross-check" is decision D9, and this fixture is what stops it changing silently.
+    # That reading of "cross-check" is decision D9, ruled 2026-08-24, and this fixture is what stops it
+    # changing silently: a session that starts refusing the file fails here rather than only contradicting
+    # CLAUDE.md, which is the whole reason a ruled decision gets a fixture and not just a table row.
     mistyped = swap(parts, [("[Content_Types].xml",
                              b'PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-'
                              b'officedocument.wordprocessingml.document.main+xml"',

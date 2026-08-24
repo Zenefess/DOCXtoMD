@@ -5,7 +5,7 @@
  * Created: 2026-08-19
  * Last Modified: 2026-08-24
  * Description: First-party ZIP container reader: directory parsing, entry lookup, and verified extraction.
- * To Do: 1) Validate entry names against ZIP path-traversal shapes, once decision D10 settles which to refuse.
+ * To Do: 1) Validate entry names against ZIP path-traversal shapes at M11, which decision D10 gave the question to.
  *        2) Expose the decompression caps on the command line as --max-decompressed and friends.
  *        3) Read entry names as CP437 when the UTF-8 flag is clear; every OPC part name seen so far is ASCII.
  * Dependencies: Inflate.h, typedefs.h

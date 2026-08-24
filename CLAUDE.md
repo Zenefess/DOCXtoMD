@@ -119,6 +119,8 @@ below.
     assumes `wchar_t` is 16 bits (one file-scope `static_assert` pins it). The two directions differ on
     purpose: the console path replaces a lone surrogate with U+FFFD, because a path that cannot be
     represented should still be reported, while a **part** is refused, because that is document content.
+    That split is **D8**, ruled 2026-08-24 — not a session's choice — and `docs/CONVERSION_REFERENCE.md` 5.12
+    was corrected to match it, so the two documents no longer disagree.
     `Diag`'s `WideCharToMultiByte` is gone — every wide-to-UTF-8 conversion in the project is this module
     now. It is deliberately scalar: an AVX2 ASCII skip is the obvious next step and it is a p4 performance
     *claim*, so it waits for `bench/` (bd1/bd2).
@@ -151,7 +153,7 @@ below.
     content-type table takes over in exactly one case — the relationship *resolved* to a part the archive
     does not contain. A target that was refused outright, or one declared External, never reaches that
     path, so a traversal target can never turn into a silent conversion of whichever part happened to be
-    typed as the body. That reading of "cross-check" is **D9**, and `tests/build/content-type-mismatch.docx`
+    typed as the body. That reading of "cross-check" is **D9**, ruled 2026-08-24, and `tests/build/content-type-mismatch.docx`
     pins it. `OpcResolveTarget` is pure, allocation-free and therefore the piece the unit tests hammer:
     dot segments are removed inside the package namespace only, a climb above the root is **refused**
     rather than clamped the way RFC 3986 discards it, percent escapes are decoded *after* normalising and
@@ -526,7 +528,7 @@ check, or raise a decision to widen the baseline — do not just assume it.
 
 They live in `include/` and are owner-authored library files shared with other projects, not
 repo-local code. **Do not reformat, refactor, or re-version them**; if one needs a change, raise it
-as a numbered decision (D8+) the way D1–D7 were raised. `include/.clang-format` enforces that
+as a numbered decision (D12+) the way D1–D11 were raised. `include/.clang-format` enforces that
 mechanically — `DisableFormat: true`, so a stray "Format Document" in the IDE is a no-op there. What
 sessions need to know:
 
@@ -640,7 +642,10 @@ forbidden; before D6 it was.
   (`text eol=crlf` on every source and build pattern), so a Linux session cannot drift a source file
   to LF: whatever it writes, the checkout is CRLF. What is still unenforced is tc2's *other* half —
   no tool checks `indent_size = 3` or `max_line_length = 180`; `.editorconfig` only asks editors
-  nicely, and there is no CI (M12) or pre-commit hook to fail a violation.
+  nicely, and there is no CI or pre-commit hook to fail a violation. **D11 ruled who fixes this**: M12 commits
+  the mechanical validator and runs it in CI, so this gap has an owner and a milestone rather than being a
+  standing complaint. Until then it stays real — a Linux session cannot drift line endings, but nothing
+  stops it from committing a 4-space indent.
 - Two shared headers (`SIMD management.h`, `vector structures.h`) still carry the pre-r17 boxed
   banner, `typedefs.h` writes the nonconforming ISA token `AVX512` and un-numbered `To Do:` items,
   `spinlocks.h` declares `ISA: AVX2` although it carries no AVX2 code (its only intrinsics are
@@ -650,11 +655,12 @@ forbidden; before D6 it was.
   owner-authored files: **report them, do not fix them here.**
 - `memory management.h` documents a dependency on `data tracking.h`, which is absent from this repo
   (see "Shared headers").
-- `docs/CONVERSION_REFERENCE.md` 5.12 and M4's definition of done give opposite instructions for
-  ill-formed UTF-8 in a part — substitute U+FFFD, or refuse and report. M4 implements the roadmap's
-  reading (refuse), because that is the one with a runnable check behind it today, and **D8** puts the
-  conflict to the owner. Do not treat either document as settled until it is ruled; do not "fix" the
-  other one to match.
+- Ill-formed UTF-8 in a part is **settled**: refuse and report, per **D8**, ruled 2026-08-24. This entry used to
+  record `docs/CONVERSION_REFERENCE.md` 5.12 contradicting M4's definition of done; 5.12 was rewritten to match the
+  ruling in the same commit, so there is no longer a conflict to navigate and neither document should be "fixed"
+  toward the other. U+FFFD substitution is not gone, but it is now confined to one place with a stated reason: the
+  console path in `Utf`, where a path that cannot be represented should still be reportable. Document content is
+  refused; a filename being printed at a human is repaired.
 - The project does **not** pass `/utf-8`, and the sources carry no BOM, so every narrow string literal
   must stay ASCII: a non-ASCII byte would be decoded in whatever code page the compiler runs under and
   re-encoded into the execution charset, and the tool's own output contract is UTF-8. Nothing enforces
@@ -1083,9 +1089,22 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
 - **M10 `[todo]` Fields, notes, tracked changes** — field state machine, footnotes/endnotes, sdt,
   accept-all revisions.
 - **M11 `[todo]` Hostile-input hardening** — bombs, traversal, XXE, producer-variance fixtures
-  (Google Docs / LibreOffice / Pandoc exports).
+  (Google Docs / LibreOffice / Pandoc exports). **D10 lands here**: the milestone owns the question of what a ZIP
+  *entry name* carrying `\`, a leading `/`, `..`, a drive letter or an NTFS stream suffix should do — refuse the
+  archive, or normalise while building the part index — and the ruling defers it to this point precisely so the
+  producer-variance corpus can answer it rather than a guess. Do not close M11 without recording an answer and a
+  fixture for it; "we looked and left it alone" is an answer, silence is not. Note what is *not* deferred: a
+  relationship **target** of any of those shapes is already refused by `OpcResolveTarget`, and no archive name has
+  ever reached disk. DoD: as before, plus a fixture per decided entry-name shape.
 - **M12 `[todo]` CI** — GitHub Actions `windows-latest`: msbuild x64 Release (the only platform) +
-  fixture build + golden runner.
+  fixture build + golden runner. **D11 lands here too**: commit the mechanical GCS validator every session since M1
+  has written into a scratch directory and thrown away — r17 prolog regexes, 3-space indent, no tabs, ASCII,
+  CRLF, the 150/180 widths — and run it in CI over `src/` and `tests/`, with **`include/` exempt**, because a
+  validator pointed at the owner-authored headers would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners
+  this file says to report rather than fix. The exemption is the ruled part, not an implementation detail: encode it
+  in the validator itself, not only in the CI invocation, so running it by hand cannot produce a different verdict.
+  DoD: a red CI run on a deliberately broken prolog, a green one on `main`, and the `.clang-format` no-op check
+  alongside it.
 - **M13 `[todo]` Multi-file batch + bounded worker pool** *(D6 and D7 both ruled — specifiable)*
   — `Batch` over a list of inputs, threading per D6/D7a, `Diag` made
   `MT-safe` with `include/spinlocks.h`, `--threads` parsing with the virtual-core-count default,
@@ -1098,16 +1117,14 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   exits 1. Note MSVC v143 ships no thread sanitizer (`/fsanitize=address` only), so "no data races"
   cannot be a DoD command — the determinism comparisons are what is actually checkable.
 
-## Decisions (ruled rows are settled — do not re-litigate; open rows await the owner)
+## Decisions (every row is ruled and settled — do not re-litigate)
 
-D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19. D8–D11 were raised by M4 on
-2026-08-24 and are **open**: each names what the code does in the meantime, so nothing is blocked on a
-ruling, and each is a question a session should not answer for itself — D8 and D9 because two governing
-documents disagree, D10 because it is a security leniency, D11 because it would bind every future file.
-Keep the IDs stable:
-`docs/CONVERSION_REFERENCE.md` §6.2 cites "D2 in CLAUDE.md" by name. New questions get the next free
-ID (D8, D9, …) with the same question/recommendation/status shape, and stay `Open — owner call`
-until the owner rules.
+D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19, and D8–D11 on 2026-08-24, the day M4
+raised them: the owner accepted all four session recommendations as written. **No decision is open.** Keep the
+IDs stable — `docs/CONVERSION_REFERENCE.md` cites D1, D2, D8 and D10 by name — and keep a ruled row's question and
+the reasoning that was put to the owner rather than trimming it to the answer, because a ruling records what was
+asked as much as what was decided. New questions get the next free ID (D12, D13, …) with the same
+question/recommendation/status shape, and stay `Open — owner call` until the owner rules.
 
 | ID | Question | **Ruling** | Executed? |
 |---|---|---|---|
@@ -1118,10 +1135,10 @@ until the owner rules.
 | D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD, single-threaded**: AVX2 floor with no sub-baseline fallback; single-threading is an owner-granted exception to a2 *(as ruled 2026-08-18; D6 later narrowed the threading half — the text here is left as the owner wrote it)* | standing |
 | D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | **Yes, for multi-file processing only: one thread per file, `spinlocks.h` included.** *(Derived, not stated: a single document's conversion therefore stays sequential, and `$LoopMT*`//Qpar stay banned as compiler-directed threading — see the threading baseline.)* | M13 |
 | D7 | What batch surface does D6 need? (a) literal thread-per-file or a bounded pool? (b) how are multiple inputs passed? (c) how do per-file failures aggregate? (d) what do `--stdout` and `-o` mean for N files? | **(a) A bounded pool** sized to a user-specified thread count, defaulting to the system's virtual (logical) core count. **(b)** Inputs are repeated command-line operands: `DOCXtoMD [options] <input.docx> [input2.docx […]]`; output filenames are derived automatically. **(c)** Failed conversions are printed to the console before the process terminates, and partial success gets its own exit code. **(d)** `--stdout` is single-file only; `-o` gives the output path — the filename for one input, the directory for many | M13 |
-| D8 | Ill-formed UTF-8 inside a part: refuse the input, or substitute U+FFFD and carry on? CLAUDE.md's M4 definition of done says "rejected with a clear message"; `docs/CONVERSION_REFERENCE.md` 5.12 says "replace invalid sequences with U+FFFD rather than aborting". Sub-question: should the answer differ between a structural part (`[Content_Types].xml`, any `.rels`, the main part) and an optional one (`styles.xml`, `settings.xml`, an unreferenced footnote part)? | *Session recommendation, not a ruling:* **refuse**, as M4 implements. It is testable today as an exit code plus a substring, while U+FFFD substitution is only checkable against a golden `.md` that does not exist until M5; and refuse → replace is a strict relaxation, while replace → refuse would break output users already have. If ruled the other way it lands as a policy parameter beside the one the console path already uses. | **Open — owner call** |
-| D9 | When the `officeDocument` relationship resolves to a part whose content type is **not** one of the four WordprocessingML main-document types, does the tool convert it (trusting the relationship and reporting the disagreement) or refuse it as not a valid DOCX? "Cross-check" in correctness rule 1 is ambiguous between *verify and fail* and *fall back*, and the two readings give opposite exit codes for the same file. | *Session recommendation:* **trust the relationship and convert**, as M4 implements: the relationship is the specification's discovery mechanism and `[Content_Types].xml` is metadata, and refusing loses documents from producers that omit the Override. `tests/build/content-type-mismatch.docx` pins it so the choice can never change silently. | **Open — owner call** |
-| D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | *Session recommendation:* **leave it as it is until M11** and decide with the producer-variance corpus in hand. Nothing is exposed today: part names are only ever compared in memory and no path is used on disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Open — owner call** |
-| D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | *Session recommendation:* **yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it at M4 would oblige every future file to pass a session-authored checker with no CI behind it. | **Open — owner call** |
+| D8 | Ill-formed UTF-8 inside a part: refuse the input, or substitute U+FFFD and carry on? CLAUDE.md's M4 definition of done says "rejected with a clear message"; `docs/CONVERSION_REFERENCE.md` 5.12 says "replace invalid sequences with U+FFFD rather than aborting". Sub-question: should the answer differ between a structural part (`[Content_Types].xml`, any `.rels`, the main part) and an optional one (`styles.xml`, `settings.xml`, an unreferenced footnote part)? | **Refuse**, as M4 implements, adopting the session recommendation in full. It is testable today as an exit code plus a substring, while U+FFFD substitution is only checkable against a golden `.md` that does not exist until M5; and refuse → replace is a strict relaxation still open later, while replace → refuse would break output users already had. The sub-question goes the same way: a part is a part, structural or optional. *(Consequence: `docs/CONVERSION_REFERENCE.md` 5.12 said the opposite and was corrected to match, which is what the ruling was for. U+FFFD survives only on the console path in `Utf`, where an unrepresentable path should still be reportable.)* | M4 (already implemented; `bad-utf8.docx` and `truncated-utf8.docx` pin it) |
+| D9 | When the `officeDocument` relationship resolves to a part whose content type is **not** one of the four WordprocessingML main-document types, does the tool convert it (trusting the relationship and reporting the disagreement) or refuse it as not a valid DOCX? "Cross-check" in correctness rule 1 is ambiguous between *verify and fail* and *fall back*, and the two readings give opposite exit codes for the same file. | **Trust the relationship and convert**, as M4 implements: the relationship is the specification's discovery mechanism and `[Content_Types].xml` is metadata, and refusing loses documents from producers that omit the Override. The content-type table stays a cross-check in the one case M4 already gives it — a relationship that resolved to a part the archive does not contain. | M4 (already implemented; `content-type-mismatch.docx` pins it, so the choice cannot change silently) |
+| D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | **Leave it as it is until M11** and decide there with the producer-variance corpus in hand. Nothing is exposed meanwhile: part names are only ever compared in memory and no path reaches disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Deferred to M11 by the ruling** — that milestone owns the decision and must not close without recording it |
+| D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | **Yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it earlier would oblige every future file to pass a session-authored checker with no CI behind it. | M12 |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the
@@ -1137,6 +1154,17 @@ directory for many). Everything downstream of those — the `Thread-safety:` map
 spelling, exit code 6's number, the all-inputs-failed rule, the duplicate-output pre-flight check
 and milestone M13 — is **derived by a session, not
 stated by the owner**, and may be revised without re-litigating D6.
+
+D8–D11's consequences, folded in on the day they were ruled: `docs/CONVERSION_REFERENCE.md` 5.12 now
+refuses ill-formed UTF-8 instead of substituting U+FFFD, and the Known-gaps entry that recorded the two documents
+disagreeing is replaced by the ruling (D8); the `officeDocument` relationship decides even when
+`[Content_Types].xml` disagrees, which is what M4 already does (D9); M11 inherits the ZIP-entry-name question and
+may not close without recording an answer (D10); and M12 gains the committed mechanical validator, with `include/`
+exempt (D11). Two of the four are pinned by a fixture rather than by prose — `bad-utf8.docx` and
+`content-type-mismatch.docx` — so a session that quietly reverses one fails a test rather than merely
+contradicting this file. Note what the owner ruled and what a session then derived: the rulings are the four
+recommendations as the table stated them; **which milestone owns D10 and D11's work, and the wording of the
+roadmap and reference edits, is session-derived** and may be revised without re-litigating the rulings.
 
 ## Repo conventions
 

@@ -6,7 +6,7 @@
  * Last Modified: 2026-08-24
  * Description: Package model implementation: content types, relationship parsing, target resolution.
  * To Do: 1) Cache a folded copy of each part name if profiling ever shows the comparator mattering.
- *        2) Normalise a backslash in an entry name once decision D9 settles whether to accept one.
+ *        2) Normalise a backslash in an entry name at M11, which decision D10 gave that question to.
  *        3) Read docProps/core.xml for a title, once the emitter has somewhere to put one.
  * Dependencies: BuildGuards.h, Diag.h, OpcPackage.h, Utf.h, XmlPull.h, ZipReader.h, typedefs.h,
  *               memory management.h, windows.h

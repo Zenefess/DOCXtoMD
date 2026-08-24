@@ -191,14 +191,32 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   `traversal-target`, `encoded-traversal`, `drive-letter-target`, `bad-document-rels`, `bad-rels-root` and
   `too-many-overrides` are refused with the sentence each one earns. 297 unit checks and 85 container
   checks in total.
-- Decisions **D8**, **D9**, **D10** and **D11**, all open and all named in the code that anticipates them.
-  D8 is a direct conflict between two governing documents over ill-formed UTF-8; D9 is what "cross-check"
-  means when a relationship and a content type disagree; D10 is whether a ZIP entry name carrying a
-  backslash or a traversal shape should be refused or normalised; D11 is whether the mechanical GCS
-  validator every session has written and thrown away should be committed.
+- Decisions **D8**, **D9**, **D10** and **D11**, raised by M4 and **ruled by the owner the same day**, who
+  accepted all four recommendations as written. D8 settles a direct conflict between two governing
+  documents over ill-formed UTF-8, in favour of refusing the part. D9 settles what "cross-check" means
+  when a relationship and a content type disagree: the relationship decides. D10 leaves ZIP entry names
+  carrying a backslash or a traversal shape exactly as they are and hands the question to M11, to be
+  answered against the producer-variance corpus rather than guessed. D11 commits the mechanical GCS
+  validator at M12 with CI, `include/` exempt. No decision is open.
 
 ### Changed
 
+- `docs/CONVERSION_REFERENCE.md` 5.12 no longer says to "replace invalid sequences with U+FFFD rather
+  than aborting". It says to refuse a part that is not valid UTF-8, naming the part and the byte offset,
+  which is what the code has always done and what decision D8 ruled. This is the edit the ruling was for:
+  until it, two governing documents told a session opposite things and CLAUDE.md had to carry a standing
+  note not to "fix" either one toward the other. That note is gone with the conflict.
+- `docs/CONVERSION_REFERENCE.md`'s path-traversal bullet now separates the two halves that decision D10
+  found tangled: a relationship **target** of a traversal shape has been refused since M4, while what a
+  ZIP **entry name** of that shape should do is deferred to M11 by the ruling.
+- The roadmap entries for **M11** and **M12** carry the work D10 and D11 handed them, with a definition of
+  done each, so a deferred decision is a scheduled task rather than a note. M11 may not close without
+  recording an answer on entry names; M12's validator must hold `include/`'s exemption in the validator
+  itself rather than only in the CI invocation, so running it by hand cannot produce a different verdict.
+- The `To Do` items that named an unruled decision now name the milestone that owns the work:
+  `Utf.h` drops its "substitute U+FFFD should D8 be ruled that way" item outright, and `ZipReader.h`,
+  `ZipReader.cpp` and `OpcPackage.cpp` point their entry-name items at M11. `OpcPackage.cpp`'s item cited
+  **D9** for a question that was always **D10**'s; that miscitation is corrected.
 - `main.cpp`'s per-input check is a **package** probe rather than a container probe. It resolves the main
   document part through `_rels/.rels`, loads it through the validating loader, tokenizes it end to end and
   reports the entry count, the resolved part with its size and element count, and which of styles,

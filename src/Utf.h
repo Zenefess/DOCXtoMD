@@ -7,7 +7,6 @@
  * Description: UTF-8 validation and decoding, and the UTF-16 transcoding the Win32 boundary needs.
  * To Do: 1) Benchmark an AVX2 ASCII fast path through UtfValidate before adopting one (bd1/bd2).
  *        2) Add UTF-8 to UTF-16 when an output path first has to be built out of document text.
- *        3) Substitute U+FFFD instead of refusing a part, should decision D8 be ruled that way.
  * Dependencies: typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -22,9 +21,11 @@
 
 /// Why a byte range is not well-formed UTF-8. The classes are Unicode 15.0 table 3-7's, split so that a
 /// message can say what is actually wrong rather than only that something is.
-/// @note A part is refused outright when one of these is found, which is what M4's definition of done
-///       asks for. docs/CONVERSION_REFERENCE.md 5.12 recommends substituting U+FFFD instead; the two
-///       documents disagree, and decision D8 in CLAUDE.md puts that to the owner.
+/// @note A part is refused outright when one of these is found. Decision D8 in CLAUDE.md ruled that on
+///       2026-08-24, settling a disagreement between M4's definition of done and an earlier reading of
+///       docs/CONVERSION_REFERENCE.md 5.12, which has since been corrected to match. U+FFFD is still
+///       substituted in one place, UtfFromWide, because a console path reports a name rather than
+///       converting document content.
 enum UTF8_RESULT : si32 {
    UTF8_OK = 0,             ///< Every byte in the range is part of a well-formed sequence
    UTF8_ERROR_LEAD,         ///< A sequence began with a continuation byte, or with F8..FF
