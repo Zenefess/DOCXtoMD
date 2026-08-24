@@ -14,3 +14,10 @@
 
 # Per-user project settings. Visual Studio writes this on first open; it is never shared.
 *.vcxproj.user
+
+# Fixtures tests/make_fixtures.py generates. The reviewable part trees under tests/fixtures/ are
+# committed; the .docx files zipped from them, and the synthesised hostile ones, are not.
+/tests/build/
+
+# CPython's bytecode cache, which appears the moment run_container.py imports make_fixtures.
+__pycache__/

@@ -79,8 +79,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\CliOptions.cpp" />
+    <ClCompile Include="src\Crc32.cpp" />
     <ClCompile Include="src\Diag.cpp" />
+    <ClCompile Include="src\Inflate.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\ZipReader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\common functions.h" />
@@ -91,7 +94,10 @@
     <ClInclude Include="include\vector structures.h" />
     <ClInclude Include="src\BuildGuards.h" />
     <ClInclude Include="src\CliOptions.h" />
+    <ClInclude Include="src\Crc32.h" />
     <ClInclude Include="src\Diag.h" />
+    <ClInclude Include="src\Inflate.h" />
+    <ClInclude Include="src\ZipReader.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

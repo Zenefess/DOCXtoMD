@@ -23,6 +23,10 @@
 *.filters      text eol=crlf
 *.props        text eol=crlf
 
+# Test tooling. Python is happy with CRLF on every platform, so the fixture scripts follow tc2 with
+# the rest of the tree rather than becoming the one exception; they carry no shebang for that reason.
+*.py           text eol=crlf
+
 # Tooling configuration that travels with the source.
 .clang-format  text eol=crlf
 .editorconfig  text eol=crlf
