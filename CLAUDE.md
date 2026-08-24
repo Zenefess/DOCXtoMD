@@ -820,7 +820,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   three behave as documented: no arguments prints the usage text and exits 1, `--version` exits 0, and
   `--help` reproduces the Target CLI block. With the build and all three checks confirmed on Windows,
   M2's DoD is fully discharged and the marker is `[done]`.
-- **M3 `[done-unverified]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
+- **M3 `[done]` ZIP container + inflate** *(D1 settled: first-party)* — `Inflate` (RFC 1951: stored,
   fixed-Huffman and dynamic-Huffman blocks; canonical decode tables; 32 KiB window; overlapping match
   copies), `Crc32`, and `ZipReader` (EOCD search over the last 65,557 bytes, central directory, local
   headers, methods 0/8 only, ZIP64, data descriptors, duplicate names, encryption bit) with the
@@ -829,8 +829,18 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   negatives). DoD: extracts `word/document.xml` from both a stored-entry and a deflated-entry fixture
   `.docx` with CRC-32 verified; a dynamic-Huffman payload round-trips against a Python-`zlib`-generated
   fixture; corrupt/encrypted/`.doc` inputs exit 3 with clear messages.
-  **Status**: the code landed from Linux on 2026-08-19, so the marker is `[done-unverified]` — **no
-  Windows session has run msbuild against it**. What was verified on Linux, and what was not:
+  **Status**: the code landed from Linux on 2026-08-19 as `[done-unverified]`, and the owner verified it
+  on Windows the same day: **x64 Release and x64 Debug both build with zero warnings at `/W3`**, and
+  `python tests\run_container.py` passes all 45 checks against the real MSVC binary. That discharges
+  every DoD bullet — the 45 checks are what extract `word/document.xml` from a stored-entry and a
+  deflated-entry fixture with CRC-32 verified, round-trip the dynamic-Huffman payload against the
+  Python-`zlib`-generated fixture, and put the corrupt, encrypted and legacy-`.doc` inputs through exit 3
+  with their documented message — so the marker is `[done]`. Two things that verification settles beyond
+  the milestone: the shim build and MSVC agree on every exit code and every message substring those 45
+  checks assert, which is the first evidence that a Linux session's harness predicts the real binary
+  rather than only itself; and the new code comes through `/W3` clean on top of M2's headers, so a
+  warning appearing from here on is a regression the commit that introduces it owns.
+  What had been verified on Linux before that, kept because it is how the code was actually exercised:
   - **Verified on Linux, mechanically**: the r17 prolog regexes from the GCS, 3-space indent, no tabs,
     ASCII only, CRLF, and ≤150 columns on all twelve `src/` files and both `tests/*.py`;
     `.vcxproj`/`.filters` XML well-formedness and mutual sync with what is on disk; and
@@ -859,12 +869,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     13.45 s versus 0.05 s on four megabytes of empty fixed blocks, and the name heap, measured at a
     41.9 MB allocation versus none on an archive whose directory declares far more extent than its five
     records use. The rest were either already fixed in the same working tree or refuted on the code.
-  - **Not verified, and not claimable**: the msbuild DoD. Nothing here says anything about `/W3`,
-    `/sdl`, `/arch:AVX2`, the real `include/` headers, or 2-byte `wchar_t`. The shim is a scratch
-    `windows.h`/`typedefs.h`/`memory management.h` trio in a session directory, exactly as M2's was,
-    and it is not committed. A Windows session must run
-    `msbuild DOCXtoMD.sln /m /p:Configuration=Release /p:Platform=x64` and then
-    `python tests\run_container.py` before this becomes `[done]`.
+  - **What the Linux run could not reach, and the owner's Windows run did**: `/W3`, `/sdl`,
+    `/arch:AVX2`, the real `include/` headers and 2-byte `wchar_t`. The shim is a scratch
+    `windows.h`/`typedefs.h`/`memory management.h` trio in a session directory, exactly as M2's was, and
+    it is not committed — so a Linux session's evidence never stands in for the msbuild DoD, however
+    much of it there is. That remains the rule for M4 onwards.
   Two scope notes. The fixture set is wider than the milestone asked for — it also covers ZIP64, data
   descriptors, archive comments, duplicate names, a truthful 300 MiB bomb, a 1024:1 ratio bomb and an
   over-count archive — because those paths are in `ZipReader` either way and a fixture is the only
