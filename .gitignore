@@ -9,6 +9,10 @@
 # tree to ignore.
 /x64/
 
+# The unit-test project sits in tests\, so MSBuild's default paths put its binaries and
+# intermediates under tests\x64\ rather than in the root tree above.
+/tests/x64/
+
 # Visual Studio's per-solution state directory, which also holds the IntelliSense database.
 /.vs/
 
