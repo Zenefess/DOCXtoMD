@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-08-19
+ * Last Modified: 2026-08-24
  * Description: Diagnostic sink: UTF-8 stdout and stderr writers, and the stable process exit codes.
  * To Do: 1) Take include/spinlocks.h and become MT-safe when M13 gives every worker this one sink (D6).
  *        2) Collect the per-file failure list that exit code 6 summarises at M13 (D7c).

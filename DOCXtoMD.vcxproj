@@ -83,6 +83,9 @@
     <ClCompile Include="src\Diag.cpp" />
     <ClCompile Include="src\Inflate.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\OpcPackage.cpp" />
+    <ClCompile Include="src\Utf.cpp" />
+    <ClCompile Include="src\XmlPull.cpp" />
     <ClCompile Include="src\ZipReader.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -97,6 +100,9 @@
     <ClInclude Include="src\Crc32.h" />
     <ClInclude Include="src\Diag.h" />
     <ClInclude Include="src\Inflate.h" />
+    <ClInclude Include="src\OpcPackage.h" />
+    <ClInclude Include="src\Utf.h" />
+    <ClInclude Include="src\XmlPull.h" />
     <ClInclude Include="src\ZipReader.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

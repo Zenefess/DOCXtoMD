@@ -3,9 +3,9 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-08-19
+ * Last Modified: 2026-08-24
  * Description: ZIP container reader: EOCD and ZIP64 discovery, directory parsing, and capped extraction.
- * To Do: 1) Return the parsed parts to OpcPackage rather than to a probe, once M4 resolves them by relationship.
+ * To Do: 1) Validate entry names against ZIP path-traversal shapes, once decision D10 settles which to refuse.
  *        2) Expose the decompression caps on the command line as --max-decompressed and friends.
  *        3) Read entry names as CP437 when the UTF-8 flag is clear; every OPC part name seen so far is ASCII.
  * Dependencies: BuildGuards.h, Crc32.h, Inflate.h, ZipReader.h, typedefs.h, memory management.h, windows.h

@@ -3,11 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-08-19
- * Description: Diagnostic sink implementation; wide arguments cross to UTF-8 at the Win32 boundary.
+ * Last Modified: 2026-08-24
+ * Description: Diagnostic sink implementation; wide arguments cross to UTF-8 through the Utf module.
  * To Do: 1) Guard every writer with include/spinlocks.h when M13 gives every worker this one sink (D6).
- *        2) Replace the local WideCharToMultiByte call with the Utf module once M4 lands it.
- * Dependencies: BuildGuards.h, Diag.h, typedefs.h, memory management.h, windows.h, stdio.h
+ *        2) Take over -q from the callers, so a note is suppressed here rather than at each call site.
+ * Dependencies: BuildGuards.h, Diag.h, Utf.h, typedefs.h, memory management.h, windows.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -21,34 +21,33 @@
 #include <stdio.h>
 #include "typedefs.h"
 #include "memory management.h"
+#include "Utf.h"
 #include "Diag.h"
 
 //-- Boundary transcoding
 
-// Writes a wide argument to stderr as UTF-8. UTF-16 exists only at the Win32 boundary, so the conversion
-// stays here rather than becoming an interface: M4's Utf module owns the document-side transcoding.
+// Writes a wide argument to stderr as UTF-8. UTF-16 exists only at the Win32 boundary, and Utf owns
+// the transcoding for the whole project, so this is a measure, allocate and convert and nothing more.
 static void DiagWriteWideErr(cwchptr text) {
-   csi32 byteCount = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+   ui64 byteCount = 0;
 
-   if(byteCount <= 0) {
+   if(UtfFromWide(text, nullptr, 0, &byteCount) != UTF8_OK) {
       fputs("<unprintable>", stderr);
       return;
    }
-   if(byteCount == 1) return; // Empty argument: the count covers the terminator alone
+   if(!byteCount) return; // An empty argument has nothing to print, not even a terminator
 
-   chptrc buffer = (chptrc)amalloc(size_t(byteCount), 16u);
+   ui8ptr buffer = (ui8ptr)amalloc(byteCount, 16u);
 
    if(!buffer) {
       fputs("<unprintable>", stderr);
       return;
    }
-   // amalloc does not clear the block, so the second conversion's own count decides what is written:
-   // trusting the first call's size would put uninitialised heap on stderr if this one ever failed.
-   csi32 written = WideCharToMultiByte(CP_UTF8, 0, text, -1, buffer, byteCount, nullptr, nullptr);
 
-   if(written > 1) fwrite(buffer, 1u, size_t(written - 1), stderr);
-   else if(written <= 0) fputs("<unprintable>", stderr);
+   ui64 written = 0;
 
+   if(UtfFromWide(text, buffer, byteCount, &written) == UTF8_OK) fwrite(buffer, 1u, size_t(written), stderr);
+   else fputs("<unprintable>", stderr);
    mdealloc(buffer);
 }
 
