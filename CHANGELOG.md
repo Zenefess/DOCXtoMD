@@ -135,8 +135,93 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - `/tests/build/` in `.gitignore` — the `.docx` files `make_fixtures.py` writes are generated, the part
   trees are not. And `*.py text eol=crlf` in `.gitattributes`, so the test scripts follow tc2 with the
   rest of the tree; they carry no shebang, because a CRLF shebang does not survive on a POSIX host.
+- `src/Utf.h`/`.cpp` — UTF-8 validation over a 256-row lead-byte table built by a `constexpr` function,
+  so no run-time initialiser exists for a worker to race. The table is Unicode 15.0 table 3-7: each row
+  carries the sequence length, the range the *first* continuation byte may take, and what a byte inside
+  `80..BF` but outside that range means, which is how an overlong form, an encoded surrogate and a code
+  point above U+10FFFF are each reported as their own class rather than lumped together — and each with
+  the offset of the offending sequence. Also `UtfDecode`/`UtfEncode` for one code point, `UtfFromWide`
+  for the console and path boundary, and `UtfTranscodeUtf16` for a part that turns out to be UTF-16.
+  The two UTF-16 directions differ deliberately: the console path substitutes U+FFFD for a lone
+  surrogate, because a path that cannot be represented should still be reported; a part is refused,
+  because that is document content. It is scalar on purpose — an AVX2 ASCII skip is a p4 performance
+  *claim*, so it waits for a `bench/` diff (bd1/bd2).
+- `src/XmlPull.h`/`.cpp` — the first-party streaming pull tokenizer decision D2 settled on. Namespaces
+  resolve by **URI**, never by prefix, with the ECMA-376 Transitional and ISO 29500 Strict families
+  mapped onto one value, so a Strict document walks the same code as a Transitional one. `<!DOCTYPE` is
+  refused at the byte it starts, before its internal subset is looked at, which is the whole
+  billion-laughs and XXE defence and costs nothing; there is no entity table, so any reference but XML's
+  five and a valid character reference is an error. A decoded reference is never re-scanned — `&#38;#38;`
+  yields the five bytes `&#38;` — which is a security property rather than a nicety. Elements, attributes
+  and namespace bindings live in inline arrays with ceilings (256, 128, 128), so deep nesting is a
+  refusal rather than a blown stack. Steady state allocates nothing: a text run or attribute value
+  holding no reference, carriage return or CDATA is handed back as a view into the part itself, and the
+  one scratch arena is allocated lazily at the part's own size and never grows, because decoding always
+  produces fewer bytes than it consumes. XML 1.0's `Char` production is enforced, which matters above
+  this module: a NUL is well-formed UTF-8, and `OpcPackage` copies attribute values into NUL-terminated
+  storage.
+- `src/OpcPackage.h`/`.cpp` — the package model, and where "resolve, never hardcode" is actually kept.
+  The only names read by name are `[Content_Types].xml` and `_rels/.rels`, the two ISO/IEC 29500-2
+  guarantees; the main document part comes from the `officeDocument` relationship. `OpcResolveTarget` is
+  pure and allocation-free: dot segments are removed inside the package namespace only, a climb above
+  the root is refused rather than clamped the way RFC 3986 discards it, percent escapes are decoded
+  *after* normalising and the result re-checked (closing the `%2e%2e` bypass), and a URI scheme is
+  refused outright — one rule covering `file://`, an `http://` target mislabelled Internal, and a bare
+  `C:` drive letter, which is a grammatically valid one-letter scheme. Parts are inflated once and
+  cached, which is a correctness matter and not only a speed one: `ZipReadEntry` charges its
+  decompression cap on every read and never credits it back. `OpcLoadXmlPart` is the only door to a
+  tokenizer, which is how M4's "rather than reaching the walker" is structural rather than a convention.
+- `tests/unit/` and `tests/DOCXtoMD.Tests.vcxproj` — the unit-test harness the roadmap asks for: a
+  `CHECK` macro over `<stdio.h>` and nothing else, and one suite per module, 274 checks in all, every
+  case driven from a string literal so the binary needs no working directory and no fixture path. The
+  project is modelled on `DOCXtoMD.vcxproj` line for line and compiles every `src\*.cpp` but `main.cpp`.
+  It differs in two ways, both deliberate: `$(ProjectDir)..\src` on the include path, because a file in
+  `tests\unit\` cannot reach a `src\` header by the quoted-include rule; and a pinned `OutDir`/`IntDir`,
+  because MSBuild's default is `$(SolutionDir)`-relative and the binary would otherwise move depending on
+  whether the solution or the project was built. `DOCXtoMD.sln` gains the project and `.gitignore` gains
+  `/tests/x64/`.
+- `tests/fixtures/relocated/src/` — M4's definition-of-done fixture, built so that a by-name
+  implementation cannot pass it: no `word/` folder anywhere, the body at `parts/body.xml` reached through
+  `rId7` rather than `rId1`, the styles part at `shared/theme-styles.xml` reached through a `../` target,
+  and the body spelled with the prefix `x:` rather than `w:`.
+- Eighteen new fixtures in `make_fixtures.py`, all of them sound archives so that the failure under test
+  is the package's and never the container's: `relocated-main`, `strict-namespaces`, `bom-part`,
+  `utf16-part`, `main-by-content-type` and `content-type-mismatch` convert as far as M4 goes; `bad-utf8`,
+  `truncated-utf8`, `doctype`, `malformed-xml`, `bad-content-types`, `no-office-rel`, `external-main-rel`,
+  `traversal-target`, `encoded-traversal`, `drive-letter-target`, `bad-document-rels`, `bad-rels-root` and
+  `too-many-overrides` are refused with the sentence each one earns. 297 unit checks and 85 container
+  checks in total.
+- Decisions **D8**, **D9**, **D10** and **D11**, all open and all named in the code that anticipates them.
+  D8 is a direct conflict between two governing documents over ill-formed UTF-8; D9 is what "cross-check"
+  means when a relationship and a content type disagree; D10 is whether a ZIP entry name carrying a
+  backslash or a traversal shape should be refused or normalised; D11 is whether the mechanical GCS
+  validator every session has written and thrown away should be committed.
 
 ### Changed
+
+- `main.cpp`'s per-input check is a **package** probe rather than a container probe. It resolves the main
+  document part through `_rels/.rels`, loads it through the validating loader, tokenizes it end to end and
+  reports the entry count, the resolved part with its size and element count, and which of styles,
+  numbering, settings, footnotes, endnotes and comments the main part relates to. `src/` now holds no
+  literal part name but the two ISO/IEC 29500-2 guarantees. The two closes are on one path, because the
+  package borrows the reader and a per-branch close would turn the next branch anyone adds into a
+  use-after-free.
+- Every package failure names the part it happened in: `not a valid DOCX; a part is malformed XML, in
+  word/document.xml`. A message that says only that *something* is wrong is not a clear message when a
+  package holds a dozen parts.
+- `Diag`'s local `WideCharToMultiByte` is gone; wide arguments cross to UTF-8 through `Utf` like
+  everything else, which is what the M4 roadmap entry asked for. Its prolog's `To Do` item 2 retires with
+  it.
+- `no-document.docx` inverts from exit 5 to exit 3. At M3 a package missing `word/document.xml` was sound,
+  because only the two guaranteed entry points were required; at M4 `_rels/.rels` names that part and the
+  archive does not contain it, so the package is refused. That inversion is the clearest single sign that
+  the main part is now resolved rather than assumed.
+- The expectation table carries a **`sound`** flag beside the exit code, and `run_container.py`'s
+  independent `zipfile` cross-check selects on it. Until M4 "is this a well-formed ZIP" and "does this
+  exit 5" were the same question; a package can now be a perfectly good archive and still not be a DOCX,
+  and without the flag every new package-level negative would have dropped silently out of the
+  cross-check. The dead body comparison beside it — which compared a value against itself for every row
+  that was not in `SAME_BODY` — is gone.
 
 - `DOCXtoMD.cpp` no longer includes `<iostream>`; it includes `typedefs.h` — resolved through
   the project's `$(ProjectDir)include` search path — and returns `si32` per r1. A note records that

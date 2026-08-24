@@ -24,10 +24,11 @@ below.
 
 ## Current state (do not assume more exists)
 
-- `src/` — **exists** and holds the CLI skeleton (M2) and the container layer (M3): twelve files, all
+- `src/` — **exists** and holds the CLI skeleton (M2), the container layer (M3) and the XML and package
+  layer (M4): eighteen files, all
   CRLF, tab-free, ASCII-only, none over 150 columns, each carrying a validated r17 prolog at `v0.1.0`
   with `ISA: Scalar`. Unlike
-  `include/`, `src/` is **not** exempt from the repository style, and all twelve are committed in
+  `include/`, `src/` is **not** exempt from the repository style, and all eighteen are committed in
   the shape `.clang-format` produces — running the formatter over them is a verified no-op, so a
   format-on-save cannot manufacture a diff. Keep it that way: format after editing, then re-check the
   r17 prolog, since the formatter has no opinion about it. Two shapes are worth copying because they
@@ -108,25 +109,85 @@ below.
     record override an earlier one, which is the safer reading of a file no legitimate producer emits.
     It is a decision a session made, not one the owner ruled, so it is revisable — but change the
     header's documentation and `tests/build/duplicate-names.docx` together if it ever is.
-  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, the container probe per input, and the
-    exit-code mapping. There is no positional output operand (D7b).
-  - **What the binary does at M3**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+  - `Utf.h`/`Utf.cpp` — UTF-8 validation and the UTF-16 boundary. `UtfValidate` walks a 256-row
+    lead-byte table built by a `constexpr` function — Unicode 15.0 table 3-7, one row per lead byte
+    carrying the sequence length, the range its *first* continuation may take, and what a byte outside
+    that range means — so an overlong form, an encoded surrogate and a code point above U+10FFFF are all
+    caught by the narrowed ranges rather than by a second pass over a decoded value, and each is reported
+    as its own class with the offset of the offending sequence. `UtfDecode`/`UtfEncode` do one code point;
+    `UtfFromWide` and `UtfTranscodeUtf16` cross from UTF-16, which is the only place in the project that
+    assumes `wchar_t` is 16 bits (one file-scope `static_assert` pins it). The two directions differ on
+    purpose: the console path replaces a lone surrogate with U+FFFD, because a path that cannot be
+    represented should still be reported, while a **part** is refused, because that is document content.
+    `Diag`'s `WideCharToMultiByte` is gone — every wide-to-UTF-8 conversion in the project is this module
+    now. It is deliberately scalar: an AVX2 ASCII skip is the obvious next step and it is a p4 performance
+    *claim*, so it waits for `bench/` (bd1/bd2).
+  - `XmlPull.h`/`XmlPull.cpp` — the first-party pull tokenizer (D2). Namespace-aware by **URI**, never by
+    prefix (correctness rule 2), with both the ECMA-376 Transitional and the ISO 29500 Strict families
+    mapped onto one `XML_NS` value, so a Strict document walks the same code as a Transitional one.
+    `<!DOCTYPE` is refused where it stands, before its internal subset is looked at, which is what makes
+    the billion-laughs and XXE families cost nothing to defend against; there is no entity table at all,
+    so any reference but XML's five and a valid character reference is an error. A decoded reference is
+    **never re-scanned** — `&#38;#38;` yields the five bytes `&#38;` — which is a security property and
+    the classic hand-rolled-parser bug. Element, attribute and namespace-binding tables are held inline
+    and capped (256 deep, 128 attributes, 128 live bindings), so nesting is an array and a ceiling rather
+    than a recursion that runs out of stack. Steady state allocates nothing: a text run or attribute value
+    with no reference, CR or CDATA in it is handed back as a view straight into the part, and the one
+    scratch arena is allocated lazily at the part's own size and never grows — decoding a reference, a
+    CDATA section or a line end always produces fewer bytes than it consumes, so the part's size is a
+    ceiling no token can reach past, which is also why a decoded view can be a pointer rather than an
+    offset to be patched. Two relaxations of XML 1.0 are deliberate and documented in the header: a name
+    may hold any byte above 0x7F without consulting the Unicode `NameChar` tables (every OOXML name is
+    ASCII, and the bytes were validated as UTF-8 before the reader opened), and the ban on a literal
+    `]]>` in character data is not enforced, because enforcing it costs a scan and rejects nothing a
+    producer emits. It refuses a NUL and every other byte XML's `Char` production excludes — which is
+    **load-bearing above this module**, because a NUL is well-formed UTF-8 and `OpcPackage` copies
+    attribute values into NUL-terminated storage.
+  - `OpcPackage.h`/`OpcPackage.cpp` — the package model, and where correctness rule 1 is kept. The only
+    two names read by name are the two ISO/IEC 29500-2 guarantees; the main document part comes from the
+    `officeDocument` relationship in `_rels/.rels`. `[Content_Types].xml` is the cross-check, not the
+    lookup: when the relationship names a part that is typed as something else the **relationship still
+    decides** (a producer that omits the Override is common; one that misroutes it is not), and the
+    content-type table takes over in exactly one case — the relationship *resolved* to a part the archive
+    does not contain. A target that was refused outright, or one declared External, never reaches that
+    path, so a traversal target can never turn into a silent conversion of whichever part happened to be
+    typed as the body. That reading of "cross-check" is **D9**, and `tests/build/content-type-mismatch.docx`
+    pins it. `OpcResolveTarget` is pure, allocation-free and therefore the piece the unit tests hammer:
+    dot segments are removed inside the package namespace only, a climb above the root is **refused**
+    rather than clamped the way RFC 3986 discards it, percent escapes are decoded *after* normalising and
+    the result is re-checked (which is what closes the `%2e%2e` bypass), and a URI scheme — a letter, then
+    scheme bytes, then a colon — is refused outright, one rule covering `file://`, an `http://` target
+    mislabelled Internal, and a bare `C:` drive letter, which is a grammatically valid one-letter scheme.
+    Part names compare ASCII-case-insensitively as OPC requires, by folding on comparison rather than
+    keeping a lowercase key heap — a declared divergence from `docs/CONVERSION_REFERENCE.md` 6.2 [3] that
+    deletes an allocation and its failure path. Relationship ids are scoped per part, so every lookup
+    takes the part the reference was found in. Parts are inflated **once and cached**, which is a
+    correctness matter rather than a speed one: `ZipReadEntry` charges its decompression cap on every read
+    and never credits it back, so re-reading `styles.xml` per paragraph would walk an innocent document
+    into the bomb caps. `OpcLoadXmlPart` is the only door to a tokenizer — it validates UTF-8, transcodes
+    a UTF-16 part in place, and is what M4's definition of done means by "rather than reaching the walker".
+  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, the package probe per input, and the
+    exit-code mapping. There is no positional output operand (D7b), and **no literal part name**: the
+    only names it holds are the labels it prints beside the relationships it resolved.
+  - **What the binary does at M4**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
-    input that is not a usable DOCX exits **3** with a sentence saying which rule it broke, and a
-    *sound* container exits **5** with `conversion is not implemented in this build` after a note
-    reporting the entry count and the inflated size of each part it verified. Exit 5, not 0,
-    because exit code 0's published contract is "all inputs converted" and M4–M11 build the converter.
+    input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and which
+    part broke it**, and a *sound* package exits **5** with `conversion is not implemented in this build`
+    after a note reporting the entry count, the resolved main part with its size and element count, and
+    which of styles, numbering, settings, footnotes, endnotes and comments the main part relates to.
+    Exit 5, not 0,
+    because exit code 0's published contract is "all inputs converted" and M5–M11 build the converter.
     That is temporary: M5 is the milestone that first makes 0 truthful. A run in which several inputs
     fail returns the **highest** of their verdicts, not 6 — D7c reserves 6 for a run that converted
     something, and nothing is converted in this build.
-  - **What the M3 probe does not do**: it requires only the two part names ISO/IEC 29500-2 guarantees,
-    `[Content_Types].xml` and `_rels/.rels`, and reads `word/document.xml` only when it happens to be
-    there, purely to exercise the inflater on a real stream. That is not a breach of correctness rule 1
-    ("resolve, never hardcode"): the guaranteed entry points are the *only* names the format lets a
-    reader start from, and nothing is resolved through them until M4's `OpcPackage` parses
-    `_rels/.rels`. M4 replaces the probe.
-- `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF) and exposes **only** `Debug|x64` and
-  `Release|x64`, matching the project file exactly.
+  - **What the M4 probe does and does not do**: it resolves the main document part through `_rels/.rels`,
+    tokenizes it from end to end, and counts its elements. It does **not** interpret one of them — the
+    style, walk and emit stages are M5 onwards. The tokenize is not decoration: it is what turns
+    "a part that is not well-formed XML" into a named refusal, and it is the only consumer at M4 that
+    proves `XmlPull` runs over a real inflated part rather than over a string literal.
+- `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF, tab-indented) and exposes **only** `Debug|x64`
+  and `Release|x64`, matching both project files exactly. It lists **two** projects since M4: `DOCXtoMD`
+  and `DOCXtoMD.Tests`, each with all four configuration mappings.
 - `DOCXtoMD.vcxproj` — v143, Unicode, Console, `/W3`, SDLCheck, ConformanceMode, Release
   WholeProgramOptimization. Declares **two** `ProjectConfiguration`s, `Debug|x64` and `Release|x64`
   — **D3 is executed**: every `Win32` `ProjectConfiguration`, `PropertyGroup`, `ImportGroup` and
@@ -140,14 +201,25 @@ below.
   and both build clean at `/W3`. No OutDir override. Both configs also define
   `WIN32_LEAN_AND_MEAN;NOMINMAX` — added at M2, when `<windows.h>` first entered the project; neither
   hides a header this project needs, because `winnls.h` (`WideCharToMultiByte`) and `wincon.h`
-  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Six
-  `<ClCompile>`s, all `src\…`, and twelve `<ClInclude>`s: the six `include\…` headers and six
+  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Nine
+  `<ClCompile>`s, all `src\…`, and fifteen `<ClInclude>`s: the six `include\…` headers and nine
   `src\…` ones.
-- `DOCXtoMD.vcxproj.filters` — lists the six `src\*.cpp` files under Source Files and all twelve
+- `DOCXtoMD.vcxproj.filters` — lists the nine `src\*.cpp` files under Source Files and all fifteen
   headers under Header Files, in the same order as the `.vcxproj`. Every `<ClCompile Include="…">` and
   `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character; keep it that way, or
   the IDE tree stops reflecting the build. The tree is deliberately flat — there is no `src` filter
   folder, matching how the `include\` headers are already listed.
+- `tests/DOCXtoMD.Tests.vcxproj` and `.filters` — **exist** as of M4: the second console project the
+  roadmap asks for, modelled on `DOCXtoMD.vcxproj` line for line (v143, x64 only, Unicode, `/W3`,
+  SDLCheck, ConformanceMode, `stdcpp20`/`stdc17`, `/arch:AVX2`, `WIN32_LEAN_AND_MEAN;NOMINMAX`) with its
+  own `ProjectGuid`. Two things differ, both deliberately. Its
+  `<AdditionalIncludeDirectories>` carries `$(ProjectDir)..\src` as well as `$(ProjectDir)..\include`,
+  because a test file in `tests\unit\` cannot reach a `src\` header by the quoted-include rule the way
+  a `src\*.cpp` can. And it **does** pin `<OutDir>`/`<IntDir>` to `$(ProjectDir)$(Platform)\$(Configuration)\`,
+  because MSBuild's default is `$(SolutionDir)`-relative: without the pin the test binary lands in
+  `x64\Release\` when the solution is built and in `tests\x64\Release\` when the project is, and a
+  definition-of-done command cannot name a path that moves. The main project still sets no OutDir. It
+  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the five files in `tests\unit\`.
 - Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
   Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
   - `typedefs.h` v1.0.1 — r1/r2/t1/t2 aliases, the full pointer lattice, `al1`–`al64`, `$LoopMT*`,
@@ -201,12 +273,13 @@ below.
     `[*.md]` silently misses `CONTRIBUTING.MD` and leaves that owner-managed LF file on `crlf`.
   - `.gitattributes` — see "Line endings" below.
   - `CHANGELOG.md` — c2/c3 Keep-a-Changelog, `[Unreleased]` only; nothing is released yet.
-  - `.gitignore` — the three things an MSVC build or Visual Studio drops here: `/x64/` (no OutDir
-    override, so binaries *and* intermediates share that tree, and D3 leaves no `Win32\` to ignore),
-    `/.vs/` and `*.vcxproj.user`, plus `/tests/build/`, which is where `tests/make_fixtures.py` writes
-    the `.docx` files it zips. All three directory patterns are anchored with a leading `/`, so a
-    future `tests/x64/` fixture path would not be swallowed by accident. Only the last is produced by
-    a Linux session.
+  - `.gitignore` — what an MSVC build or Visual Studio drops here: `/x64/` (the main project sets no
+    OutDir, so binaries *and* intermediates share that tree, and D3 leaves no `Win32\` to ignore),
+    `/tests/x64/` (the test project pins its own, one directory down), `/.vs/` and `*.vcxproj.user`,
+    plus `/tests/build/`, which is where `tests/make_fixtures.py` writes
+    the `.docx` files it zips. Every directory pattern is anchored with a leading `/`, which is why
+    `/x64/` did not already cover `tests/x64/` and the second entry was needed. Only the last is
+    produced by a Linux session.
   None of the six is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
   not reach them and neither project file mentions them.
 - `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `docs/CONVERSION_REFERENCE.md`, `LICENSE`
@@ -224,21 +297,40 @@ below.
 - `docs/` **exists** and holds `CONVERSION_REFERENCE.md`; `include/` **exists** and holds the six
   shared headers; `src/` **exists** as of M2; `tests/` **exists** as of M3. None of the four is
   planned-only any more.
-- `tests/` — the container test scaffolding, and nothing else yet. `make_fixtures.py` builds every
-  fixture; `run_container.py` runs the exe over them and checks the exit code and the message. Both are
-  CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on a
-  POSIX host — run them as `python tests/<name>.py`. `fixtures/minimal/src/` is the one part tree so
-  far: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`, `word/_rels/document.xml.rels` and
-  `word/styles.xml`, hand-authored and reviewable. The hostile fixtures are synthesised by the script
+- `tests/` — the container and package test scaffolding, and the unit suite. `make_fixtures.py` builds
+  every fixture; `run_container.py` runs the exe over them and checks the exit code and the message. Both
+  are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
+  a POSIX host — run them as `python tests/<name>.py`. There are **two** part trees under `fixtures/`.
+  `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
+  `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
+  `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
+  implementation fail: there is **no `word/` folder anywhere**, the body is `parts/body.xml` reached
+  through `rId7` rather than `rId1` (so an implementation that takes the first relationship picks the
+  wrong one), the styles part is `shared/theme-styles.xml` reached through a `../` target, and the body's
+  namespace prefix is `x:` rather than `w:` (so an implementation matching on the prefix instead of the
+  URI fails). The hostile and package-level negatives are synthesised by the script
   instead, because a malformed archive is not expressible as a tree of files, which is why
   `make_fixtures.py` carries its own ~90-line ZIP writer rather than using Python's `zipfile`: the
   negatives need per-field control that `zipfile` does not offer. Being first-party on both sides is
   not circular — the compressed payloads come from Python's `zlib`, which is what actually pins the
-  DEFLATE behaviour, and the positive fixtures are cross-checked with `zipfile` by hand. Output goes to
+  DEFLATE behaviour, and the sound fixtures are read back with `zipfile` on every run. Output goes to
   `tests/build/`, which is git-ignored.
   The expectation table lives in `make_fixtures.py` and `run_container.py` reads it, so a fixture and
-  the exit code it should produce are declared in one place.
-- **Not yet created** (GCS obligations, see Roadmap): `tests/` unit-test harness (M4), `run_golden.py`
+  the exit code it should produce are declared in one place. Since M4 each row also carries a **`sound`**
+  flag: whether the bytes are a well-formed ZIP an independent reader must read back. That used to be the
+  same question as "does it exit 5" and no longer is, because a package can be a perfectly good archive
+  and still not be a DOCX — without the flag every new package-level negative would silently drop out of
+  the `zipfile` cross-check.
+- `tests/unit/` — **exists** as of M4: `Check.h`/`Check.cpp` (one `CHECK` macro, a group heading and a
+  pass/fail summary, over `<stdio.h>` and nothing else), `TestMain.cpp`, and one suite per module —
+  `TestUtf.cpp`, `TestXmlPull.cpp`, `TestOpcPackage.cpp`. Every case is driven from a string literal;
+  nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
+  works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
+  character data, `$` is the end and `!n` is refusal *n* — so one string per case reads better than ten
+  assertions. Both sentence tables are pinned against their enums by asserting the tail of specific
+  rows, because a sentence table and the enum indexing it drift apart silently; that check caught a
+  real one-row misalignment during M4.
+- **Not yet created** (GCS obligations, see Roadmap): `run_golden.py`
   (M5), `bench/`, CI. Do not reference them as if they exist.
 
 ## Build & run
@@ -253,19 +345,25 @@ msbuild DOCXtoMD.vcxproj /m /p:Configuration=Debug   /p:Platform=x64
 msbuild DOCXtoMD.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64
 ```
 
-Default output paths (no OutDir override): `x64\Release\DOCXtoMD.exe`, `x64\Debug\DOCXtoMD.exe`.
-Since M2 the binary has a real command line and since M3 it reads the container: `--help` and
+The solution builds **two** exes since M4. The main project overrides no output path, so it lands at
+`x64\Release\DOCXtoMD.exe` and `x64\Debug\DOCXtoMD.exe`; the test project pins its own, so it lands at
+`tests\x64\Release\DOCXtoMD.Tests.exe` whether the solution or the project was built.
+Since M2 the binary has a real command line, since M3 it reads the container and since M4 it resolves
+the package: `--help` and
 `--version` exit 0, a usage error exits 1, an unopenable input exits 2, an input that is not a usable
-DOCX exits 3 and is told which rule it broke, and a sound container exits 5 because the converter does
-not exist yet. The container fixtures and their expected verdicts are checked by
+DOCX exits 3 and is told which rule it broke and which part broke it, and a sound package exits 5
+because the converter does not exist yet. The fixtures and their expected verdicts are checked by
 
 ```bat
 python tests\make_fixtures.py                                   :: writes tests\build\*.docx
 python tests\run_container.py                                   :: runs x64\Release\DOCXtoMD.exe over them
 python tests\run_container.py --exe x64\Debug\DOCXtoMD.exe      :: or any other build
+tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite; prints a tally, returns 0 or 1
 ```
 
-`run_container.py` builds the fixtures itself, so the second command alone is enough.
+`run_container.py` builds the fixtures itself, so the second command alone is enough. The unit binary
+is its own runner — it self-asserts and returns an exit code, so there is deliberately no
+`run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
 **x64 is the only supported platform** — GCS a2 declares 32-bit unsupported, and D3 is **executed
 and verified on Windows**: the Win32 configurations are gone from `DOCXtoMD.vcxproj`, and
 `/p:Platform=Win32` fails instead of building. A bare `msbuild DOCXtoMD.vcxproj` with no
@@ -283,13 +381,18 @@ touching the shared headers — they are MSVC-specific (`__declspec(align)`, `__
 `__bfloat16`, `<windows.h>`, `_aligned_malloc`). MSVC v143 is the only supported compiler. **Never
 claim the build passes when you could not run msbuild; state exactly what was and was not verified.**
 
-What a Linux session *can* do, and M2 did, is build the project's own `.cpp` files against **shim**
+What a Linux session *can* do, and M2, M3 and M4 all did, is build the project's own `.cpp` files
+against **shim**
 headers in a scratch directory: a `windows.h` declaring only the Win32 entry points the code calls, a
 `memory management.h` wrapping `posix_memalign`, and a `typedefs.h` derived from the real one by
 rewriting `__intN` and `__declspec(align(N))`. That runs the code, so parser logic, control flow, exit
 codes and AddressSanitizer/UndefinedBehaviorSanitizer all get exercised. It proves **nothing** about
-the MSVC build: not `/W3`, not `/sdl`, not the real shared headers, and `wchar_t` is 4 bytes there
-rather than 2. Report it as what it is, and never let it stand in for the msbuild DoD.
+the MSVC build: not `/W3`, not `/sdl`, and not the real shared headers. One gap M2 and M3 reported is
+now closed: build the shim with **`-fshort-wchar`** and `wchar_t` is two bytes exactly as MSVC has it,
+so `L"…"` literals, wide argv and `Utf`'s `static_assert(sizeof(wchar) == 2u)` all behave as they will
+on Windows. glibc's own wide functions assume four bytes, so a shim built that way must not call them —
+which costs nothing here, because no project file calls one either. Report the shim as what it is, and
+never let it stand in for the msbuild DoD.
 
 ### MSBuild file-list rule (silent-failure trap)
 
@@ -545,6 +648,11 @@ forbidden; before D6 it was.
   owner-authored files: **report them, do not fix them here.**
 - `memory management.h` documents a dependency on `data tracking.h`, which is absent from this repo
   (see "Shared headers").
+- `docs/CONVERSION_REFERENCE.md` 5.12 and M4's definition of done give opposite instructions for
+  ill-formed UTF-8 in a part — substitute U+FFFD, or refuse and report. M4 implements the roadmap's
+  reading (refuse), because that is the one with a runnable check behind it today, and **D8** puts the
+  conflict to the owner. Do not treat either document as settled until it is ruled; do not "fix" the
+  other one to match.
 - The project does **not** pass `/utf-8`, and the sources carry no BOM, so every narrow string literal
   must stay ASCII: a non-ASCII byte would be decoded in whatever code page the compiler runs under and
   re-encoded into the execution charset, and the tool's own output contract is UTF-8. Nothing enforces
@@ -623,10 +731,11 @@ implementation session must respect:
 | Soft hyphens | Removed; NBSP and smart punctuation kept verbatim |
 | Output encoding | UTF-8, no BOM, LF line endings (tc2's CRLF governs source files, not program output) |
 
-## Planned architecture (`docs/`, `include/`, `tests/` and seven `src/` modules exist — build the rest by Roadmap)
+## Planned architecture (`docs/`, `include/`, `tests/` and ten `src/` modules exist — build the rest by Roadmap)
 
-**Written so far (M2 + M3)**: `src/main.cpp`, `src/BuildGuards.h`, `src/CliOptions.h`/`.cpp`,
-`src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp` and `src/ZipReader.h`/`.cpp`, plus
+**Written so far (M2 + M3 + M4)**: `src/main.cpp`, `src/BuildGuards.h`, `src/CliOptions.h`/`.cpp`,
+`src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`, `src/ZipReader.h`/`.cpp`,
+`src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp` and `src/OpcPackage.h`/`.cpp`, plus
 everything already in `docs/`, `include/` and `tests/`. Every other entry below is
 still to be written — do not reference one as if it exists.
 
@@ -639,14 +748,17 @@ src/
    BuildGuards.h         #ifndef __AVX2__ + #error (D4); included first by every project TU
    CliOptions.h/.cpp     argv → options struct; usage/version text
    Utf.h/.cpp            UTF-8 validate/transcode (UTF-16 only at the Win32 boundary)
+                         [written at M4]
    Inflate.h/.cpp        first-party RFC 1951 DEFLATE (D1): stored/fixed/dynamic Huffman, 32 KiB window
                          [written at M3]
    Crc32.h/.cpp          ZIP CRC-32 (poly 0xEDB88320 — NOT SSE4.2 CRC-32C); entry verification
                          [written at M3]
    ZipReader.h/.cpp      EOCD/central directory/local headers, methods 0+8, ZIP64; bomb+traversal caps
                          [written at M3]
-   XmlPull.h/.cpp        streaming pull tokenizer over the inflated buffer; zero-allocation, string_view tokens
+   XmlPull.h/.cpp        streaming pull tokenizer over the inflated buffer; zero-allocation, view tokens
+                         [written at M4]
    OpcPackage.h/.cpp     [Content_Types].xml + rels graphs; part lookup; r:id resolution
+                         [written at M4]
    StyleModel.h/.cpp     styles.xml → resolved-props cache (basedOn chains, toggle XOR, name normalization)
    NumberingModel.h/.cpp numbering.xml → per-numId levels with overrides; runtime counters
    Ir.h                  intermediate representation (blocks/spans) — the walker never emits Markdown
@@ -658,8 +770,9 @@ src/
    Diag.h/.cpp           error codes/messages → stderr; exit-code mapping. MT-safe from M13: every
                          worker reports through this one sink, so it locks then (D6). Reentrant at M2
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
-                         run_container.py [both written at M3]; run_golden.py [M5]; unit tests as a
-                         second console .vcxproj with a tiny CHECK header [M4]
+                         run_container.py [both written at M3, extended at M4]; run_golden.py [M5];
+                         unit/ holds the CHECK header and one suite per module, built by
+                         tests/DOCXtoMD.Tests.vcxproj [written at M4]
 bench/                   GCS p4 microbenches (create with the first performance claim)
 docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
 include/                 the six owner-authored shared headers (already here); on the include path
@@ -742,9 +855,11 @@ still accept only one input; what it must not do is assume there will only ever 
   RFC 1951 block type — `strategy=Z_FIXED` for fixed Huffman, the default strategy on a large body for
   dynamic, and `level=0` for stored blocks inside a deflate stream, which is a different code path from
   a stored ZIP entry.
-- Two runners, with different jobs. `tests/run_container.py` (M3) runs the exe over every fixture and
-  asserts the exit code and a substring of the message; `tests/run_golden.py` (M5, not yet written)
-  runs the exe and byte-compares against `expected.md`. Neither takes the other's job.
+- Three runners, with different jobs. `tests/run_container.py` (M3, extended at M4) runs the exe over
+  every fixture and asserts the exit code and a substring of the message, and reads every *sound*
+  archive back with Python's `zipfile`; `tests/x64/Release/DOCXtoMD.Tests.exe` (M4) runs the unit suite,
+  which drives every case from a string literal and touches no file; `tests/run_golden.py` (M5, not yet
+  written) runs the exe and byte-compares against `expected.md`. None takes another's job.
 - A milestone's DoD is **commands that pass**, not adjectives. Before claiming any change done:
   1. x64 Release builds with **zero warnings** at `/W3` (on Windows; on Linux say you could not build).
   2. New/changed files: prolog validates (r17 regexes), 3-space indent, no tabs, lines ≤150/180,
@@ -880,7 +995,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   thing that proves them. And `tests/run_container.py` is a third file beyond the two the milestone
   names; it exists because "corrupt/encrypted/`.doc` inputs exit 3 with clear messages" is a DoD
   bullet, and a DoD bullet with no command behind it is an adjective.
-- **M4 `[next]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `Utf`, `XmlPull`,
+- **M4 `[done-unverified]` XML + package model** *(D2 settled: first-party `XmlPull`)* — `Utf`,
+  `XmlPull`,
   `OpcPackage`, plus the unit-test harness (second console `.vcxproj` + tiny CHECK header under
   `tests/`). **`Utf` is scheduled here** — owner ruling, 2026-08-19, closing the gap that no milestone
   named it. It belongs with `XmlPull` because the tokenizer runs over the inflated part bytes and must
@@ -888,6 +1004,44 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   `WideCharToMultiByte` moves behind `Utf` once it exists. DoD: unit tests drive token streams from
   string literals; a part carrying invalid UTF-8 is rejected with a clear message rather than reaching
   the walker; the main part is resolved via rels, not hardcoded.
+  **Status**: the code landed from Linux on 2026-08-24. All three DoD bullets are discharged and each
+  has a command behind it, but **no msbuild ran**, so the marker is `[done-unverified]` and the next
+  Windows session verifies rather than reimplements.
+  - **The three DoD bullets, and what proves each.** (1) `tests/unit/` drives every case from a string
+    literal and opens no file: 297 checks over the ill-formed UTF-8 classes, the XML token stream, the
+    namespace rules and the relationship-target resolver. (2) `OpcLoadXmlPart` is the only door to a
+    tokenizer — all three `XmlOpen` call sites in `src/` sit behind it — and `bad-utf8.docx` and
+    `truncated-utf8.docx` assert the exit code and the sentence, which names the failing part.
+    (3) `relocated-main.docx` has no `word/` folder at all, reaches its body through `rId7` rather than
+    `rId1`, and spells it with the prefix `x:`; `src/` holds no literal part name but the two ISO/IEC
+    29500-2 guarantees.
+  - **Verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII only,
+    CRLF and ≤150 columns on all eighteen `src/` files, all six `tests/unit/` files and both
+    `tests/*.py`; `clang-format --style=file` a verified no-op on every C++ file in the commit; both
+    `.vcxproj`/`.filters` pairs well-formed XML and mutually byte-identical, every listed file on disk;
+    the `.sln`'s two project entries and four configuration mappings.
+  - **Verified on Linux, behaviourally, against the shim build** (now with `-fshort-wchar`, so
+    `wchar_t` is two bytes as on Windows): `tests/run_container.py` passes all **85** checks — 17 sound
+    packages exit 5 after their main part is resolved and tokenized, 30 refused ones exit 3 with the
+    documented sentence, an absent input exits 2, four command lines behave as M2 published them, and
+    Python's `zipfile` reads back all 33 archives that are well-formed ZIPs. The unit binary passes all
+    **297** checks. On top of that, three scratch harnesses the commit does not carry: 1.2M mutated XML
+    parts over three bases (a minimal body, a rich one carrying namespaces, entities, CDATA, a PI and an
+    `mc:AlternateContent`, and a `.rels` part) plus all 2,039 proper prefixes of those bases; 6M random
+    relationship targets built from an alphabet of `/`, `.`, `\`, `%`, `:`, `?`, `#` and letters through
+    `OpcResolveTarget`; and 6,000 mutated `.docx` archives through the exe, which produced only exit
+    codes 3 and 5. No AddressSanitizer or UndefinedBehaviorSanitizer diagnostic anywhere.
+  - **Reviewed** by a survey-and-critique workflow before the code was written and by a six-dimension
+    adversarial review after it, each finding then put to a skeptic told to refute it. What the critique
+    changed: the `Diag` rewire had been overlooked, the failure sentences did not name the failing part,
+    the `zipfile` cross-check silently stopped covering archives that had moved from exit 5 to exit 3,
+    the `relocated` fixture was too weak to catch an ordinality or prefix assumption, and no fixture
+    drove a package structural cap. All five are fixed above.
+  - **What the Linux run could not reach**: `/W3`, `/sdl`, `/arch:AVX2`, the real `include/` headers, and
+    whether Visual Studio loads the second project. **Unrun DoD commands, for the next Windows session**:
+    `msbuild DOCXtoMD.sln /m /p:Configuration=Release /p:Platform=x64`, the same at `Debug`, both
+    expected to build with **zero warnings at `/W3`**; then `python tests\run_container.py` and
+    `tests\x64\Release\DOCXtoMD.Tests.exe`.
 - **M5 `[todo]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal `DocWalker`/
   `Ir`/`MdEmitter`, plus `tests/run_golden.py` (exe runner + byte-compare + exit-code assertions).
   DoD: first golden fixture converts byte-exact.
@@ -916,7 +1070,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
 
 ## Decisions (ruled rows are settled — do not re-litigate; open rows await the owner)
 
-D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19. Keep the IDs stable:
+D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19. D8–D11 were raised by M4 on
+2026-08-24 and are **open**: each names what the code does in the meantime, so nothing is blocked on a
+ruling, and each is a question a session should not answer for itself — D8 and D9 because two governing
+documents disagree, D10 because it is a security leniency, D11 because it would bind every future file.
+Keep the IDs stable:
 `docs/CONVERSION_REFERENCE.md` §6.2 cites "D2 in CLAUDE.md" by name. New questions get the next free
 ID (D8, D9, …) with the same question/recommendation/status shape, and stay `Open — owner call`
 until the owner rules.
@@ -930,10 +1088,15 @@ until the owner rules.
 | D5 | Does a2's tech cut-off (no 32-bit, no SSE-only, no single-threaded) bind this tool? | **Baseline is SIMD, single-threaded**: AVX2 floor with no sub-baseline fallback; single-threading is an owner-granted exception to a2 *(as ruled 2026-08-18; D6 later narrowed the threading half — the text here is left as the owner wrote it)* | standing |
 | D6 | `include/spinlocks.h` was added "for future multithread code" — does it reopen D5 for DOCXtoMD? | **Yes, for multi-file processing only: one thread per file, `spinlocks.h` included.** *(Derived, not stated: a single document's conversion therefore stays sequential, and `$LoopMT*`//Qpar stay banned as compiler-directed threading — see the threading baseline.)* | M13 |
 | D7 | What batch surface does D6 need? (a) literal thread-per-file or a bounded pool? (b) how are multiple inputs passed? (c) how do per-file failures aggregate? (d) what do `--stdout` and `-o` mean for N files? | **(a) A bounded pool** sized to a user-specified thread count, defaulting to the system's virtual (logical) core count. **(b)** Inputs are repeated command-line operands: `DOCXtoMD [options] <input.docx> [input2.docx […]]`; output filenames are derived automatically. **(c)** Failed conversions are printed to the console before the process terminates, and partial success gets its own exit code. **(d)** `--stdout` is single-file only; `-o` gives the output path — the filename for one input, the directory for many | M13 |
+| D8 | Ill-formed UTF-8 inside a part: refuse the input, or substitute U+FFFD and carry on? CLAUDE.md's M4 definition of done says "rejected with a clear message"; `docs/CONVERSION_REFERENCE.md` 5.12 says "replace invalid sequences with U+FFFD rather than aborting". Sub-question: should the answer differ between a structural part (`[Content_Types].xml`, any `.rels`, the main part) and an optional one (`styles.xml`, `settings.xml`, an unreferenced footnote part)? | *Session recommendation, not a ruling:* **refuse**, as M4 implements. It is testable today as an exit code plus a substring, while U+FFFD substitution is only checkable against a golden `.md` that does not exist until M5; and refuse → replace is a strict relaxation, while replace → refuse would break output users already have. If ruled the other way it lands as a policy parameter beside the one the console path already uses. | **Open — owner call** |
+| D9 | When the `officeDocument` relationship resolves to a part whose content type is **not** one of the four WordprocessingML main-document types, does the tool convert it (trusting the relationship and reporting the disagreement) or refuse it as not a valid DOCX? "Cross-check" in correctness rule 1 is ambiguous between *verify and fail* and *fall back*, and the two readings give opposite exit codes for the same file. | *Session recommendation:* **trust the relationship and convert**, as M4 implements: the relationship is the specification's discovery mechanism and `[Content_Types].xml` is metadata, and refusing loses documents from producers that omit the Override. `tests/build/content-type-mismatch.docx` pins it so the choice can never change silently. | **Open — owner call** |
+| D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | *Session recommendation:* **leave it as it is until M11** and decide with the producer-variance corpus in hand. Nothing is exposed today: part names are only ever compared in memory and no path is used on disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Open — owner call** |
+| D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | *Session recommendation:* **yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it at M4 would oblige every future file to pass a session-authored checker with no CI behind it. | **Open — owner call** |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the
-CRC-32-vs-CRC-32C trap in rule 11 (D1); the x64-only Build & run section and the two-configuration
+CRC-32-vs-CRC-32C trap in rule 11 (D1); the first-party `XmlPull` and its baked-in namespace table
+(D2); the x64-only Build & run section and the two-configuration
 `.vcxproj` (D3); the "ISA and threading baseline" subsection, which is where D4, D5 and D6 actually
 live. **What the owner ruled** is D6 (threading is for multi-file processing, one thread per file,
 `spinlocks.h` in scope) and D7 (a bounded pool sized by a `--threads` count defaulting to the virtual
