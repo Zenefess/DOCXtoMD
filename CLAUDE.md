@@ -277,9 +277,11 @@ below.
     OutDir, so binaries *and* intermediates share that tree, and D3 leaves no `Win32\` to ignore),
     `/tests/x64/` (the test project pins its own, one directory down), `/.vs/` and `*.vcxproj.user`,
     plus `/tests/build/`, which is where `tests/make_fixtures.py` writes
-    the `.docx` files it zips. Every directory pattern is anchored with a leading `/`, which is why
-    `/x64/` did not already cover `tests/x64/` and the second entry was needed. Only the last is
-    produced by a Linux session.
+    the `.docx` files it zips, and an unanchored `__pycache__/`, which CPython drops wherever a script
+    imports another. Every *build-output* pattern is anchored with a leading `/`, which is why
+    `/x64/` did not already cover `tests/x64/` and the second entry was needed; `__pycache__/` is
+    deliberately not anchored, because it can appear in any directory. Those last two are the only ones
+    a Linux session produces.
   None of the six is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
   not reach them and neither project file mentions them.
 - `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `docs/CONVERSION_REFERENCE.md`, `LICENSE`
@@ -1008,7 +1010,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   has a command behind it, but **no msbuild ran**, so the marker is `[done-unverified]` and the next
   Windows session verifies rather than reimplements.
   - **The three DoD bullets, and what proves each.** (1) `tests/unit/` drives every case from a string
-    literal and opens no file: 324 checks over the ill-formed UTF-8 classes, the XML token stream, the
+    literal and opens no file: 356 checks over the ill-formed UTF-8 classes, the XML token stream, the
     namespace rules and the relationship-target resolver. (2) `OpcLoadXmlPart` is the only door to a
     tokenizer — all three `XmlOpen` call sites in `src/` sit behind it — and `bad-utf8.docx` and
     `truncated-utf8.docx` assert the exit code and the sentence, which names the failing part.
@@ -1021,11 +1023,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     `.vcxproj`/`.filters` pairs well-formed XML and mutually byte-identical, every listed file on disk;
     the `.sln`'s two project entries and four configuration mappings.
   - **Verified on Linux, behaviourally, against the shim build** (now with `-fshort-wchar`, so
-    `wchar_t` is two bytes as on Windows): `tests/run_container.py` passes all **85** checks — 17 sound
+    `wchar_t` is two bytes as on Windows): `tests/run_container.py` passes all **89** checks — 21 sound
     packages exit 5 after their main part is resolved and tokenized, 30 refused ones exit 3 with the
     documented sentence, an absent input exits 2, four command lines behave as M2 published them, and
-    Python's `zipfile` reads back all 33 archives that are well-formed ZIPs. The unit binary passes all
-    **324** checks. On top of that, three scratch harnesses the commit does not carry: 1.2M mutated XML
+    Python's `zipfile` reads back all 37 archives that are well-formed ZIPs. The unit binary passes all
+    **356** checks. On top of that, three scratch harnesses the commit does not carry: 1.2M mutated XML
     parts over three bases (a minimal body, a rich one carrying namespaces, entities, CDATA, a PI and an
     `mc:AlternateContent`, and a `.rels` part) plus all 2,039 proper prefixes of those bases; 6M random
     relationship targets built from an alphabet of `/`, `.`, `\`, `%`, `:`, `?`, `#` and letters through
@@ -1048,7 +1050,23 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     changed: the `Diag` rewire had been overlooked, the failure sentences did not name the failing part,
     the `zipfile` cross-check silently stopped covering archives that had moved from exit 5 to exit 3,
     the `relocated` fixture was too weak to catch an ordinality or prefix assumption, and no fixture
-    drove a package structural cap. All five are fixed above.
+    drove a package structural cap.
+    The adversarial review then found eleven more, of which four matter and none was reachable from the
+    tests as they stood: `mzero` dispatches on **size** and takes a path of *aligned* 256-bit stores when
+    the size is a multiple of 32, which `sizeof(XML_READER)` is — so zeroing a stack-allocated reader was
+    undefined behaviour and a probable fault under MSVC, invisible here because the shim replaces `mzero`
+    with `memset`; the tokenizer rescanned to the end of a text run for every reference in it, so a 2.6 KB
+    `.docx` took ten seconds and a 270 KB one would have taken a month; a namespace binding pointed into
+    the arena the next token rewinds, so a decoded URI went stale and well-formed parts were refused; and
+    two unit-test files called `printf` without including `<stdio.h>`, which real `<windows.h>` does not
+    declare, so the test binary could not have built under MSVC at all. That last one was found only by
+    making the shim **faithful rather than convenient** — a shim that includes more than the real header
+    hides precisely this class of defect, and the lesson generalises: the shim's job is to be *stricter*
+    than Windows where it cannot be identical.
+  - **Known coverage gap, stated rather than papered over**: `OpcFindRelById` is on the probe's path, so
+    relationship lookup by id is exercised, but the claim it is there to support -- that ids are scoped
+    per part, so `rId3` in `document.xml` and `rId3` in `footnotes.xml` are unrelated -- has no test,
+    because M4 loads only one part's relationships. It gets one at M7, when a second part's are loaded.
   - **What the Linux run could not reach**: `/W3`, `/sdl`, `/arch:AVX2`, the real `include/` headers, and
     whether Visual Studio loads the second project. **Unrun DoD commands, for the next Windows session**:
     `msbuild DOCXtoMD.sln /m /p:Configuration=Release /p:Platform=x64`, the same at `Debug`, both

@@ -421,9 +421,10 @@ static cXML_TOKEN XmlParseStartTag(XML_READERptrc reader) {
    if(reader->openCount >= XML_MAX_DEPTH) return XmlFail(reader, XML_ERROR_DEPTH, tagAt);
    if(!XmlScanName(bytes, &at, limit, &qualified)) return XmlFail(reader, XML_ERROR_SYNTAX, at);
 
-   ui32 pushed  = 0;
-   bool spaced  = true; // Whitespace is required between a name and an attribute, and between attributes
-   bool closing = false;
+   cui64 floor   = reader->scratchUsed;
+   ui32  pushed  = 0;
+   bool  spaced  = true; // Whitespace is required between a name and an attribute, and between attributes
+   bool  closing = false;
 
    reader->attributeCount = 0;
    for(;;) {
@@ -527,7 +528,13 @@ static cXML_TOKEN XmlParseStartTag(XML_READERptrc reader) {
          }
       }
    }
-   reader->elements[reader->openCount] = {qualified, pushed, preserve};
+   // Whatever this tag decoded stays: a namespace URI that needed decoding lives in the arena, and the
+   // binding that points at it outlives this token. Rewinding to zero on the next token would leave the
+   // binding aimed at bytes the next token overwrites -- which silently mis-resolves prefixes and makes
+   // two distinct namespaces compare equal. Keeping the whole tag's decode is a few bytes more than
+   // strictly needed and costs nothing: the floors down one path are disjoint spans of the part, so the
+   // arena's byteCount-sized proof still holds.
+   reader->elements[reader->openCount] = {qualified, (pushed ? reader->scratchUsed : floor), pushed, preserve};
    ++reader->openCount;
    reader->depth         = reader->openCount;
    reader->preserveSpace = preserve;
@@ -583,16 +590,20 @@ static cXML_TOKEN XmlParseEndTag(XML_READERptrc reader) {
 
 //-- Character data
 
-// Whether a CDATA section opens at this offset.
-static cbool XmlIsCdata(cui8ptr bytes, cui64 at, cui64 limit) {
-   constexpr cchptr OPENER = "<![CDATA[";
+// Whether a literal stands at this offset. A truncated match reports false, so a caller has to decide
+// for itself whether "could not tell" means malformed or means the part simply ended.
+static cbool XmlMatches(cui8ptr bytes, cui64 at, cui64 limit, cchptr text) {
+   ui64 index = 0;
 
-   if(at + 9u > limit) return false;
-   for(ui64 index = 0; index < 9u; ++index) {
-      if(bytes[at + index] != ui8(OPENER[index])) return false;
+   while(text[index]) {
+      if(at + index >= limit || bytes[at + index] != ui8(text[index])) return false;
+      ++index;
    }
    return true;
 }
+
+// Whether a CDATA section opens at this offset.
+static cbool XmlIsCdata(cui8ptr bytes, cui64 at, cui64 limit) { return XmlMatches(bytes, at, limit, "<![CDATA["); }
 
 // Reads one run of character data, folding CDATA sections and references into it. A comment or a
 // processing instruction ends the run instead, because merging across one would force a copy of text that
@@ -617,10 +628,21 @@ static cXML_TOKEN XmlParseText(XML_READERptrc reader) {
    } else {
       if(!XmlScratchReady(reader)) return XmlFail(reader, XML_ERROR_MEMORY, start);
 
-      ui64 walk = start;
+      cui64 built = reader->scratchUsed;
+      ui64  walk  = start;
+      ui64  stop  = start;
 
       for(;;) {
          if(walk >= limit) break;
+
+         // Where this run of character data ends, found once and reused. Recomputing it for every
+         // reference would cost a run of n references n times the run's length: a few kilobytes of
+         // "&amp;" would take minutes, and a quarter of a megabyte would never finish. The cursor only
+         // ever moves forward, and each recompute steps past a '<', so the total stays linear.
+         if(walk >= stop) {
+            stop = walk;
+            while(stop < limit && bytes[stop] != '<') ++stop;
+         }
          if(bytes[walk] == '<') {
             if(!XmlIsCdata(bytes, walk, limit)) break;
             walk += 9u;
@@ -645,10 +667,6 @@ static cXML_TOKEN XmlParseText(XML_READERptrc reader) {
             continue;
          }
          if(bytes[walk] == '&') {
-            ui64 stop = walk;
-
-            while(stop < limit && bytes[stop] != '<') ++stop;
-
             cXML_RESULT decoded = XmlDecodeReference(reader, &walk, stop);
 
             if(decoded != XML_OK) return XmlFail(reader, decoded, reader->errorOffset);
@@ -663,7 +681,7 @@ static cXML_TOKEN XmlParseText(XML_READERptrc reader) {
          }
          ++walk;
       }
-      reader->text = {reader->scratch, reader->scratchUsed};
+      reader->text = {reader->scratch + built, reader->scratchUsed - built};
       reader->at   = walk;
    }
 
@@ -707,9 +725,10 @@ void XmlClose(XML_READERptrc reader) {
 cXML_TOKEN XmlNext(XML_READERptrc reader) {
    if(reader->token == XML_TOKEN_ERROR || reader->token == XML_TOKEN_END_OF_INPUT) return reader->token;
 
-   // The arena is reused from the start of every token, which is what makes the decoded views cheap and
-   // what makes them expire the moment the next token is read.
-   reader->scratchUsed = 0;
+   // The arena is reused from every token, which is what makes the decoded views cheap and what makes
+   // them expire the moment the next token is read -- down to the innermost open element's floor rather
+   // than to zero, because below that floor sit the namespace URIs its bindings point at.
+   reader->scratchUsed = (reader->openCount ? reader->elements[reader->openCount - 1u].scratchFloor : 0);
    if(reader->pendingEnd) {
       reader->pendingEnd = false;
       return XmlCloseElement(reader, reader->at);
@@ -770,7 +789,11 @@ cXML_TOKEN XmlNext(XML_READERptrc reader) {
          }
          // A document type declaration is refused where it stands, before its internal subset is looked
          // at, which is what makes the billion-laughs and XXE families cost nothing to defend against.
-         return XmlFail(reader, XML_ERROR_DOCTYPE, at);
+         if(XmlMatches(bytes, at, limit, "<!DOCTYPE")) return XmlFail(reader, XML_ERROR_DOCTYPE, at);
+         // Anything else opening with "<!" is either malformed or cut off, and saying which is the
+         // difference between a useful message and one that blames a declaration that is not there.
+         if(at + 9u > limit) return XmlFail(reader, XML_ERROR_UNCLOSED, at);
+         return XmlFail(reader, XML_ERROR_SYNTAX, at);
       }
       return XmlParseStartTag(reader);
    }

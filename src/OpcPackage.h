@@ -36,6 +36,11 @@ constexpr cui32 OPC_MAX_RELS = 65536u;
 constexpr cui64 OPC_MAX_TARGET_BYTES = 2048u;
 constexpr cui64 OPC_MAX_PART_BYTES   = 1024u;
 
+/// How many officeDocument relationships the package may declare before it is refused. ISO/IEC 29500-2
+/// allows exactly one; the ceiling exists so a package declaring tens of thousands of them cannot make
+/// discovery cost one scan of the part table each.
+constexpr cui32 OPC_MAX_MAIN_CANDIDATES = 8u;
+
 /// How many path segments a resolved part name may have.
 constexpr cui32 OPC_MAX_SEGMENTS = 64u;
 
@@ -137,6 +142,7 @@ struct OPC_PART {
    ui32   relsAt;        ///< Where this part's relationships begin in the package's array
    ui32   relCount;      ///< How many it has
    bool   relsLoaded;    ///< Whether the lookup has been done, which a part with none also sets
+   bool   typeKnown;     ///< Whether the content type has been resolved; a part may legitimately have none
 };
 
 /// Constant and pointer forms of the package's records, spelled per GCS r2/t2.
@@ -149,7 +155,7 @@ typedef const OPC_TYPE_ROW *cOPC_TYPE_ROWptr;
 
 /// One package built over one opened archive. A worker owns one of these and never shares it (D6), so
 /// nothing here takes a lock.
-struct OPC_PACKAGE {
+struct al32 OPC_PACKAGE {
    ZIP_READERptr   reader;            ///< Borrowed, not owned: OpcClose leaves it open
    OPC_PARTptr     parts;             ///< One per entry, in central directory order
    chptr           heap;              ///< Every string this model owns, addressed by offset
@@ -175,6 +181,12 @@ struct OPC_PACKAGE {
    bool            packageRelsLoaded; ///< Whether _rels/.rels has been read
    char            message[512];      ///< Where a sentence naming the failing part is composed
 };
+
+// Zeroed with mzero, which dispatches on SIZE: a size that is a multiple of 32 takes a path of aligned
+// 256-bit stores. Today's size does not land on one, so the scalar path runs and the alignment happens
+// not to matter -- which is exactly the kind of accident a single added field turns into a fault. al32
+// removes the accident, and the assertion keeps it removed.
+static_assert(alignof(OPC_PACKAGE) >= 32u, "OpcPackage: OPC_PACKAGE is zeroed with mzero, whose 256-bit path needs 32-byte alignment.");
 
 /// Constant and pointer forms of OPC_PACKAGE, spelled per GCS r2/t2.
 typedef OPC_PACKAGE       *OPC_PACKAGEptr;
@@ -227,10 +239,14 @@ cchptr OpcPartName(cOPC_PACKAGEptr package, csi32 partIndex);
 /// @param package    An opened package.
 /// @param partIndex  A part index.
 /// @return The content type, or an empty string when nothing types the part. Never null.
+/// @note Resolved on the first ask and remembered, rather than for every part when the package opens.
+///       An eager pass costs parts times Override rows -- ten thousand by four thousand at the caps,
+///       which is seconds of work on a package that is about to be accepted. Only a handful of parts is
+///       ever asked about, so doing it lazily removes the product rather than merely shrinking it.
 /// @note An Override on the part's own name wins, then a Default for its extension. From M7 this is
 ///       what names an extracted image's file extension: a media part's true type comes from here
 ///       and never from the extension its ZIP entry name happens to carry, which producers get wrong.
-cchptr OpcContentTypeOf(cOPC_PACKAGEptr package, csi32 partIndex);
+cchptr OpcContentTypeOf(OPC_PACKAGEptrc package, csi32 partIndex);
 
 /// The main document part.
 /// @param package  An opened package.
@@ -248,7 +264,6 @@ csi32 OpcMainPart(cOPC_PACKAGEptr package);
 /// @note These bytes have not been checked for anything. Nothing may be tokenised out of them until
 ///       OpcLoadXmlPart has run: that is where M4's definition of done -- an ill-formed part refused
 ///       rather than walked -- is actually kept, and this entry point is for media and nothing else.
-///       decompression cap on every read and never credits it back, so re-reading a part repeatedly
 cOPC_RESULT OpcLoadPart(OPC_PACKAGEptrc package, csi32 partIndex);
 
 /// Inflates one part, checks that it is text, and transcodes it when it turns out to be UTF-16.
@@ -267,7 +282,12 @@ cOPC_RESULT OpcLoadXmlPart(OPC_PACKAGEptrc package, csi32 partIndex);
 /// @param partIndex  A part index.
 /// @return The bytes, or null until OpcLoadPart has been called for that part.
 cui8ptr OpcPartBytes(cOPC_PACKAGEptr package, csi32 partIndex);
-cui64   OpcPartByteCount(cOPC_PACKAGEptr package, csi32 partIndex);
+
+/// How many bytes a loaded part holds.
+/// @param package    An opened package.
+/// @param partIndex  A part index.
+/// @return The number of bytes, or 0 until OpcLoadPart has been called for that part.
+cui64 OpcPartByteCount(cOPC_PACKAGEptr package, csi32 partIndex);
 
 /// Reads the relationships of one part, or of the package itself.
 /// @param package    An opened package.

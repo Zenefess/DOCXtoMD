@@ -7,7 +7,7 @@
  * Description: Unit tests for XmlPull: token streams driven from string literals, and every refusal.
  * To Do: 1) Add the producer-shaped fixtures (Google Docs, LibreOffice, Pandoc) when M11 collects them.
  *        2) Drive a fuzz corpus through XmlNext once a corpus exists to drive it from.
- * Dependencies: BuildGuards.h, Check.h, XmlPull.h, typedefs.h, memory management.h, windows.h
+ * Dependencies: BuildGuards.h, Check.h, XmlPull.h, typedefs.h, memory management.h, windows.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -15,6 +15,7 @@
  */
 #include "BuildGuards.h"
 
+#include <stdio.h>
 #include <windows.h>
 #include "typedefs.h"
 #include "memory management.h"
@@ -246,6 +247,9 @@ void TestXmlPull(void) {
    CheckGroup("XmlPull: refusals");
    CHECK(XmlCase("<!DOCTYPE a SYSTEM \"x\"><a/>", "!1"));
    CHECK(XmlCase("<a><!DOCTYPE b></a>", "(a!1"));
+   CHECK(XmlCase("<a/><!", "(a)a!3")); // Cut off, not a declaration: unclosed, not DOCTYPE
+   CHECK(XmlCase("<a/><!-", "(a)a!3"));
+   CHECK(XmlCase("<a><!nonsense></a>", "(a!2")); // Malformed, and said to be malformed
    CHECK(XmlCase("<a></b>", "(a!4"));
    CHECK(XmlCase("</a>", "!4"));
    CHECK(XmlCase("<a>", "(a!3"));
@@ -419,6 +423,52 @@ void TestXmlPull(void) {
    XmlClose(&reader);
 
    CheckGroup("XmlPull: shapes a real .docx carries");
+   // Constructs a real document carries that nothing else here exercises.
+   CHECK(XmlCase("<a>1 > 2</a>", "(a[1 > 2])a$")); // A literal > is legal in text
+   CHECK(XmlFirst(&reader, "<a b=\"x>y\" c=\"\"/>") == XML_TOKEN_START_ELEMENT);
+   CHECK(XmlTextEqual(XmlAttribute(&reader, XML_NS_NONE, "b"), "x>y"));
+   CHECK(XmlAttribute(&reader, XML_NS_NONE, "c").bytes && !XmlAttribute(&reader, XML_NS_NONE, "c").length);
+   XmlClose(&reader);
+   // Raw multi-byte UTF-8 in character data: NBSP, smart quotes and a soft hyphen, all of which the
+   // mapping table has an opinion about and none of which the tokenizer may touch.
+   CHECK(XmlCase("<a>\xC2\xA0\xE2\x80\x9Cq\xE2\x80\x9D\xC2\xAD</a>", "(a[\xC2\xA0\xE2\x80\x9Cq\xE2\x80\x9D\xC2\xAD])a$"));
+   CHECK(XmlFirst(&reader, "<a>\xC2\xA0</a>") == XML_TOKEN_START_ELEMENT);
+   CHECK(XmlNext(&reader) == XML_TOKEN_TEXT && !reader.allWhitespace); // NBSP is not XML whitespace
+   XmlClose(&reader);
+   // A name whose bytes are not ASCII, which the class table deliberately accepts.
+   CHECK(XmlCase("<\xC3\xA9l/>", "(\xC3\xA9l)\xC3\xA9l$"));
+   CHECK(XmlCase("<a>x<?pi data?>y</a>", "(a[x][y])a$")); // A PI ends a run, like a comment
+   // A prefix re-bound to a different URI on a nested element, which is the likeliest namespace
+   // mistake there is: the inner binding must win, and the outer must come back when it closes.
+   CHECK(XmlFirst(&reader, "<a xmlns:p=\"urn:one\"><p:b xmlns:p=\"urn:two\"><p:c/></p:b><p:d/></a>") == XML_TOKEN_START_ELEMENT);
+   CHECK(XmlNext(&reader) == XML_TOKEN_START_ELEMENT && XmlTextEqual(reader.uri, "urn:two"));
+   CHECK(XmlNext(&reader) == XML_TOKEN_START_ELEMENT && XmlTextEqual(reader.uri, "urn:two"));
+   CHECK(XmlNext(&reader) == XML_TOKEN_END_ELEMENT);
+   CHECK(XmlNext(&reader) == XML_TOKEN_END_ELEMENT);
+   CHECK(XmlNext(&reader) == XML_TOKEN_START_ELEMENT && XmlTextEqual(reader.uri, "urn:one"));
+   // A namespace URI that had to be decoded outlives the tag that declared it, and the tokens after
+   // it must not overwrite the bytes the binding points at.
+   CHECK(XmlFirst(&reader, "<a xmlns:p=\"urn:xA&#66;\"><b>&#67;&#68;&#69;&#70;</b><p:c/></a>") == XML_TOKEN_START_ELEMENT);
+   CHECK(XmlNext(&reader) == XML_TOKEN_START_ELEMENT);
+   CHECK(XmlNext(&reader) == XML_TOKEN_TEXT);
+   CHECK(XmlNext(&reader) == XML_TOKEN_END_ELEMENT);
+   CHECK(XmlNext(&reader) == XML_TOKEN_START_ELEMENT && XmlTextEqual(reader.uri, "urn:xAB"));
+   XmlClose(&reader);
+   // and two decoded URIs that differ must stay different, rather than both aiming at a reset arena
+   CHECK(XmlCase("<a xmlns:p=\"u&#49;\"><d xmlns:q=\"u&#50;\"><e p:x=\"1\" q:x=\"2\"/></d></a>", "(a(d(e)e)d)a$"));
+   // The Strict URI of every family the build knows, not only WordprocessingML's.
+   CHECK(XmlFirst(&reader, "<x:a xmlns:x=\"http://purl.oclc.org/ooxml/drawingml/main\"/>") == XML_TOKEN_START_ELEMENT);
+   CHECK(reader.space == XML_NS_A);
+   XmlClose(&reader);
+   CHECK(XmlFirst(&reader, "<x:a xmlns:x=\"http://purl.oclc.org/ooxml/drawingml/picture\"/>") == XML_TOKEN_START_ELEMENT);
+   CHECK(reader.space == XML_NS_PIC);
+   XmlClose(&reader);
+   CHECK(XmlFirst(&reader, "<x:a xmlns:x=\"http://purl.oclc.org/ooxml/officeDocument/math\"/>") == XML_TOKEN_START_ELEMENT);
+   CHECK(reader.space == XML_NS_M);
+   XmlClose(&reader);
+   CHECK(XmlFirst(&reader, "<x:a xmlns:x=\"http://purl.oclc.org/ooxml/drawingml/wordprocessingDrawing\"/>") == XML_TOKEN_START_ELEMENT);
+   CHECK(reader.space == XML_NS_WP);
+   XmlClose(&reader);
    // A modern Word w:document root declares about thirty namespaces, every one of them an attribute.
    CHECK(XmlFirst(&reader, WORD_ROOT) == XML_TOKEN_START_ELEMENT);
    CHECK(reader.space == XML_NS_W && XmlTextEqual(reader.name, "document"));

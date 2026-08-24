@@ -255,6 +255,37 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   to `XML_NS_OTHER` — were refused as the same attribute twice. Attribute identity is now the URI plus the
   local name, as Namespaces in XML defines it, and the URI is reported beside each attribute. Found by
   differential-testing the tokenizer against Python's expat over generated documents.
+- `XML_READER` and `OPC_PACKAGE` are zeroed with `mzero`, which dispatches on **size**: a size that is a
+  multiple of 32 takes a path of *aligned* 256-bit stores. `sizeof(XML_READER)` is such a size, and every
+  instance is a stack local, which MSVC aligns to 8 or 16 — undefined behaviour, and a fault the moment
+  the compiler lowers the store to `vmovdqa`. Both structs now carry `al32`, with a `static_assert` that
+  keeps the requirement stated. This could not have been found on Linux: the shim replaces `mzero` with
+  `memset`, so the real function has never run anywhere. It is exactly what the "never claim the build
+  passes when you could not run msbuild" rule exists for.
+- `XmlPull` rescanned to the end of a run of character data for *every* reference in it, so a run of *n*
+  references cost *n* times the run's length. A 2.6 KB `.docx` holding 512 KB of `&amp;` took ten seconds;
+  a 270 KB one would have taken about a month, well inside every ZIP cap. The scan is hoisted and
+  recomputed only when the cursor passes it: 640 KB went from 15.9 s to 0.007 s, and the scaling is linear.
+- A namespace binding stored its URI as a view into the per-token scratch arena, which the next token
+  rewinds — so a URI that had to be decoded went stale, prefixes resolved to whatever the following token
+  had written, and two distinct namespaces could compare equal. A well-formed part was refused as carrying
+  a duplicate attribute, and a genuinely duplicated one was accepted. The arena is now rewound only to the
+  floor the innermost open element set, so a binding's bytes survive as long as the binding does.
+- Main-document discovery scanned the part table once per `officeDocument` relationship, and content types
+  were resolved eagerly for every part against every Override row. A package could spend two minutes being
+  refused, or eight seconds being *accepted*, entirely inside the ZIP caps. Candidates are now capped at
+  eight — ISO/IEC 29500-2 allows exactly one — and content types resolve on the first ask and are
+  remembered, which removes the product rather than shrinking it.
+- A control byte in a ZIP entry name reached the console intact, so a carriage return in one could
+  overwrite the line a message was printed on. Entry names are filtered where messages are composed.
+- Content types were compared case-sensitively, where the specification says they are not.
+- `OpcResultText(nullptr, OPC_ERROR_ZIP)` answered "the container is intact", which is the opposite of what
+  it was asked.
+- A truncated `<!` reported a document type declaration that was not there. It now says the part is cut off.
+- `tests/unit/TestXmlPull.cpp` and `TestOpcPackage.cpp` called `printf` without including `<stdio.h>`.
+  Real `<windows.h>` under `WIN32_LEAN_AND_MEAN` does not declare it, so the unit-test binary — a
+  definition-of-done deliverable — could not have built under MSVC. Found by making the Linux shim
+  faithful rather than convenient: a shim that includes more than the real header hides exactly this.
 - `OpcResolveTarget` applied its banned-byte rule only to bytes a percent escape produced, never to
   literal ones, so a colon that did not follow a URI scheme reached a part name: `document.xml:stream`
   was refused as a scheme, but `1:stream` was not. The same held for `*`, `"`, `<`, `>` and `|`. The rule

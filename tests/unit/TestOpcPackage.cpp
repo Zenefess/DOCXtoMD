@@ -7,7 +7,7 @@
  * Description: Unit tests for OpcPackage's pure core: relationship target resolution and rels naming.
  * To Do: 1) Drive OpcOpen from an in-memory archive, once a fixture can be built without touching disk.
  *        2) Add the producer-shaped packages (Google Docs, LibreOffice, Pandoc) when M11 collects them.
- * Dependencies: BuildGuards.h, Check.h, OpcPackage.h, typedefs.h, memory management.h, windows.h
+ * Dependencies: BuildGuards.h, Check.h, OpcPackage.h, typedefs.h, memory management.h, windows.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -15,6 +15,7 @@
  */
 #include "BuildGuards.h"
 
+#include <stdio.h>
 #include <windows.h>
 #include "typedefs.h"
 #include "memory management.h"

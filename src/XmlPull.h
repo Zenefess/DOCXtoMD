@@ -24,8 +24,10 @@
 /// this exists so a part made of a hundred thousand open tags cannot walk the reader's stack off its end.
 constexpr cui32 XML_MAX_DEPTH = 256u;
 
-/// How many attributes one element may carry. A modern Word w:document root declares about thirty
-/// namespaces, all of which are attributes, so the ceiling has to clear that by a wide margin.
+/// How many attributes one element may carry. Namespace declarations are scoping rather than
+/// attributes and are counted against XML_MAX_NAMESPACES instead, so the Word w:document root that
+/// declares thirty of them arrives here carrying one -- mc:Ignorable. The ceiling is generous
+/// anyway, because nothing in OOXML comes near it and a cap that bites is worse than one that does not.
 constexpr cui32 XML_MAX_ATTRIBUTES = 128u;
 
 /// How many namespace bindings may be live at once, counting every enclosing element's.
@@ -132,9 +134,10 @@ typedef const XML_ATTRIBUTE *const cXML_ATTRIBUTEptrc;
 
 /// One element on the open-element stack.
 struct XML_ELEMENT {
-   XML_TEXT name;     ///< The qualified name exactly as the start tag spelled it
-   ui32     bindings; ///< Namespace bindings this element pushed, popped again when it closes
-   bool     preserve; ///< The xml:space state in force inside this element
+   XML_TEXT name;         ///< The qualified name exactly as the start tag spelled it
+   ui64     scratchFloor; ///< Bytes of scratch this element's namespace bindings occupy, and keep
+   ui32     bindings;     ///< Namespace bindings this element pushed, popped again when it closes
+   bool     preserve;     ///< The xml:space state in force inside this element
 };
 
 /// Constant form of XML_ELEMENT, spelled per GCS r2.
@@ -153,7 +156,7 @@ typedef const XML_BINDING cXML_BINDING;
 /// One part being tokenized. About twenty kilobytes, because the element, attribute and namespace tables
 /// are held inline rather than allocated: one worker owns one of these per part and never shares it (D6),
 /// so hold it in the worker's context rather than deep on a recursive stack.
-struct XML_READER {
+struct al32 XML_READER {
    cui8ptr       bytes;                          ///< The part's UTF-8 bytes; owned by the caller
    ui64          byteCount;                      ///< Bytes in bytes
    ui64          at;                             ///< Read cursor
@@ -182,6 +185,11 @@ struct XML_READER {
    bool          closedRoot;                     ///< Whether it has closed, so any further markup is junk
 };
 
+// Zeroed with mzero, which dispatches on SIZE: a size that is a multiple of 32 takes a path of aligned
+// 256-bit stores, so the object must be 32-byte aligned wherever it lives -- including on a stack frame,
+// which is 8- or 16-byte aligned by default. al32 says so, and the assertion below keeps it said.
+static_assert(alignof(XML_READER) >= 32u, "XmlPull: XML_READER is zeroed with mzero, whose 256-bit path needs 32-byte alignment.");
+
 /// Constant and pointer forms of XML_READER, spelled per GCS r2/t2.
 typedef XML_READER       *XML_READERptr;
 typedef const XML_READER *cXML_READERptr;
@@ -201,8 +209,9 @@ typedef XML_READER *const XML_READERptrc;
 ///       before opening it. Nothing here reads past byteCount whatever the bytes are, so ill-formed input
 ///       is a correctness problem rather than a safety one, but the views would carry broken sequences.
 /// @note A leading UTF-8 byte-order mark is consumed here, so callers never see one in a token.
-/// @note The decoding scratch, when it is needed at all, is allocated once at byteCount + 1 bytes and
-///       never grows: decoding a reference, a CDATA section or a line end always produces fewer bytes
+/// @note The decoding scratch, when it is needed at all, is allocated once at byteCount plus a few
+///       bytes of headroom, and
+///       never grows: decoding a reference, a CDATA section or a line end never produces more bytes
 ///       than it consumes, so the part's own size is a ceiling no token can reach past.
 cXML_RESULT XmlOpen(XML_READERptrc reader, cui8ptr bytes, cui64 byteCount);
 
@@ -218,7 +227,12 @@ void XmlClose(XML_READERptrc reader);
 ///       element reports XML_TOKEN_START_ELEMENT and then XML_TOKEN_END_ELEMENT, so a caller written for
 ///       a pair of tags needs no separate case for it.
 /// @note Every view the reader exposes is invalidated by the next call, because the scratch buffer the
-///       decoded ones live in is reused from the start of each token.
+///       decoded ones live in is reused from the start of each token. A namespace URI that had to be
+///       decoded is the exception, and has to be: a binding outlives the tag that declared it, so the
+///       arena is rewound only to the floor the innermost open element set, never to zero.
+/// @note A comment or a processing instruction ends a run of character data; a reference and a CDATA
+///       section are folded into it. So one stretch of text can arrive as two adjacent text tokens,
+///       and a caller that accumulates text must append rather than replace.
 /// @note A text token never arrives empty and never arrives trimmed: whitespace is content until the
 ///       walker decides otherwise, and allWhitespace is a convenience for that decision rather than a
 ///       licence to drop it -- what may be dropped is xml:space's business, not the tokenizer's.
@@ -233,9 +247,12 @@ void XmlClose(XML_READERptrc reader);
 /// @note No attribute is ever defaulted here. There is no document type declaration to define one --
 ///       the tokenizer refuses those -- so an absent attribute is absent, and a caller applies
 ///       whatever default ISO/IEC 29500 gives it.
-/// @note A NUL, and every other byte XML 1.0's Char production excludes, is refused wherever it can
-///       appear in content. That is load-bearing above this module: a NUL is well-formed UTF-8, and
+/// @note A NUL, and every other C0 control XML 1.0's Char production excludes, is refused wherever it
+///       can appear in content. That is load-bearing above this module: a NUL is well-formed UTF-8, and
 ///       OpcPackage copies attribute values into NUL-terminated storage.
+///       The check is on bytes, not on decoded code points, so a raw U+FFFE or U+FFFF -- which Char
+///       also excludes -- passes through where the same code points written as references do not.
+///       Nothing emits them and nothing downstream is harmed by them, so the byte scan stays cheap.
 cXML_TOKEN XmlNext(XML_READERptrc reader);
 
 /// Skips the element the reader has just started, and everything inside it.

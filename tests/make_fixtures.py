@@ -429,6 +429,32 @@ def build_all(verbose=True, writing=True):
     write("content-type-mismatch.docx", build_zip([make_entry(name, raw) for name, raw in mistyped]))
     expect("content-type-mismatch.docx", 5, ["package verified", "main part word/document.xml"],
            "the body is typed application/xml, and the officeDocument relationship still decides")
+    # Two officeDocument relationships, the decoy first and typed application/xml, the real body second
+    # and typed as a main document. Presence alone picks the decoy, so only a working content-type
+    # resolution picks the body -- which is what makes that half of the module testable at all.
+    decoyed = []
+    for name, raw in parts:
+        if name == "_rels/.rels":
+            raw = raw.replace(b'<Relationship Id="rId1"',
+                              b'<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/'
+                              b'officeDocument/2006/relationships/officeDocument" Target="word/decoy.xml"/>'
+                              b'<Relationship Id="rId1"')
+        decoyed.append((name, raw))
+    decoyed.append(("word/decoy.xml", body.replace(b"Minimal fixture", b"Decoy typed application/xml")))
+    decoyed.sort(key=lambda part: part[0])
+    write("decoy-main-rel.docx", build_zip([make_entry(name, raw) for name, raw in decoyed]))
+    expect("decoy-main-rel.docx", 5, ["package verified", "main part word/document.xml"],
+           "an untyped decoy relationship first: only the content-type cross-check reaches the real body")
+
+    # OPC compares part names case-insensitively. The entries stay lowercase while the Override and the
+    # relationship Target are written in mixed case, so a case-sensitive comparison finds neither.
+    mixed_case = swap(parts, [("[Content_Types].xml", b'PartName="/word/document.xml"',
+                               b'PartName="/word/Document.xml"'),
+                              ("_rels/.rels", b'Target="word/document.xml"', b'Target="Word/Document.xml"')])
+    write("mixed-case-names.docx", build_zip([make_entry(name, raw) for name, raw in mixed_case]))
+    expect("mixed-case-names.docx", 5, ["package verified", "main part word/document.xml"],
+           "part names written in a different case than the entries they name")
+
 
 
     # -- packages that are not usable DOCX files. Every one exits 3.

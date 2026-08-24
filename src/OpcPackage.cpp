@@ -481,7 +481,9 @@ static cOPC_RESULT OpcParseContentTypes(OPC_PACKAGEptrc package, cui8ptr bytes, 
          continue;
       }
       if(reader.depth != 2u || reader.space != XML_NS_CT) {
-         XmlSkipElement(&reader); // Unknown markup is skipped whole, per the OOXML compatibility model
+         // Consumed whole rather than walked into and filtered child by child. The depth guard above
+         // would reach the same verdict either way; skipping is the cheaper road to it.
+         XmlSkipElement(&reader);
          continue;
       }
 
@@ -522,33 +524,36 @@ static cOPC_RESULT OpcParseContentTypes(OPC_PACKAGEptrc package, cui8ptr bytes, 
    return verdict;
 }
 
-// Fills in every part's content type: an Override on the part's own name wins, otherwise the Default for
-// its extension, otherwise nothing at all -- which is legal, and simply means the part is not typed.
-static void OpcApplyContentTypes(OPC_PACKAGEptrc package) {
-   for(ui32 index = 0; index < package->partCount; ++index) {
-      OPC_PARTptr part = package->parts + index;
+cchptr OpcContentTypeOf(OPC_PACKAGEptrc package, csi32 partIndex) {
+   if(partIndex < 0 || ui32(partIndex) >= package->partCount) return "";
 
-      for(ui32 row = 0; row < package->overrideCount; ++row) {
-         if(!OpcNameEqual(OpcEntryForm(OpcHeapText(package, package->overrides[row].keyAt)), part->name)) continue;
-         part->contentTypeAt = package->overrides[row].typeAt;
-         break;
-      }
-      if(part->contentTypeAt) continue;
+   OPC_PARTptr part = package->parts + partIndex;
 
-      cui64 nameBytes = OpcLength(part->name);
-      ui64  dot       = nameBytes;
+   if(part->typeKnown) return OpcHeapText(package, part->contentTypeAt);
+   part->typeKnown = true;
 
-      for(ui64 byte = 0; byte < nameBytes; ++byte) {
-         if(part->name[byte] == '.') dot = byte;
-         if(part->name[byte] == '/') dot = nameBytes; // A dot in a folder name types nothing
-      }
-      if(dot == nameBytes) continue;
-      for(ui32 row = 0; row < package->defaultCount; ++row) {
-         if(!OpcNameEqual(OpcHeapText(package, package->defaults[row].keyAt), part->name + dot + 1u)) continue;
-         part->contentTypeAt = package->defaults[row].typeAt;
-         break;
-      }
+   // An Override on the part's own name wins, then a Default for its extension, then nothing at all --
+   // which is legal, and simply means the part is not typed.
+   for(ui32 row = 0; row < package->overrideCount; ++row) {
+      if(!OpcNameEqual(OpcEntryForm(OpcHeapText(package, package->overrides[row].keyAt)), part->name)) continue;
+      part->contentTypeAt = package->overrides[row].typeAt;
+      return OpcHeapText(package, part->contentTypeAt);
    }
+
+   cui64 nameBytes = OpcLength(part->name);
+   ui64  dot       = nameBytes;
+
+   for(ui64 byte = 0; byte < nameBytes; ++byte) {
+      if(part->name[byte] == '.') dot = byte;
+      if(part->name[byte] == '/') dot = nameBytes; // A dot in a folder name types nothing
+   }
+   if(dot == nameBytes) return "";
+   for(ui32 row = 0; row < package->defaultCount; ++row) {
+      if(!OpcNameEqual(OpcHeapText(package, package->defaults[row].keyAt), part->name + dot + 1u)) continue;
+      part->contentTypeAt = package->defaults[row].typeAt;
+      break;
+   }
+   return OpcHeapText(package, part->contentTypeAt);
 }
 
 //-- Relationships
@@ -726,7 +731,7 @@ cOPC_RESULT OpcLoadRels(OPC_PACKAGEptrc package, csi32 partIndex) {
 // Whether a content type is one a main document part may carry.
 static cbool OpcIsMainContentType(cchptr contentType) {
    for(ui32 index = 0; index < OPC_MAIN_CONTENT_TYPE_COUNT; ++index) {
-      if(OpcTextEqual(contentType, OPC_MAIN_CONTENT_TYPES[index])) return true;
+      if(OpcNameEqual(contentType, OPC_MAIN_CONTENT_TYPES[index])) return true;
    }
    return false;
 }
@@ -739,15 +744,18 @@ static cOPC_RESULT OpcDiscoverMainPart(OPC_PACKAGEptrc package) {
 
    if(loaded != OPC_OK) return loaded;
 
-   si32 candidates = 0;
+   ui32 candidates = 0;
    si32 byType     = -1;
    si32 byPresence = -1;
 
+   // Each candidate costs a scan of the part table, so the number of them is capped rather than trusted:
+   // a package declaring sixty thousand officeDocument relationships over ten thousand parts would
+   // otherwise spend minutes proving that none of them resolves.
    for(ui32 index = 0; index < package->packageRelCount; ++index) {
       cOPC_REL record = package->rels[package->packageRelsAt + index];
 
       if(record.kind != OPC_REL_OFFICE_DOCUMENT || record.external) continue;
-      ++candidates;
+      if(++candidates > OPC_MAX_MAIN_CANDIDATES) return OPC_ERROR_LIMIT;
 
       csi32 part = OpcFindPart(package, OpcHeapText(package, record.resolvedAt));
 
@@ -768,8 +776,11 @@ static cOPC_RESULT OpcDiscoverMainPart(OPC_PACKAGEptrc package) {
    }
    // The relationship named nothing that exists. [Content_Types].xml is the only other statement about
    // which part is the body, so it is worth one look before the package is refused.
+   ui32 examined = 0;
+
    for(ui32 row = 0; row < package->overrideCount; ++row) {
       if(!OpcIsMainContentType(OpcHeapText(package, package->overrides[row].typeAt))) continue;
+      if(++examined > OPC_MAX_MAIN_CANDIDATES) break; // Bounded for the same reason as the walk above
 
       csi32 part = OpcFindPart(package, OpcHeapText(package, package->overrides[row].keyAt));
 
@@ -822,7 +833,6 @@ cOPC_RESULT OpcOpen(OPC_PACKAGEptrc package, ZIP_READERptrc reader) {
       package->failedPart = typesPart;
       return typesParsed;
    }
-   OpcApplyContentTypes(package);
    return OpcDiscoverMainPart(package);
 }
 
@@ -852,11 +862,6 @@ csi32 OpcFindPart(cOPC_PACKAGEptr package, cchptr partName) {
 cchptr OpcPartName(cOPC_PACKAGEptr package, csi32 partIndex) {
    if(partIndex < 0 || ui32(partIndex) >= package->partCount) return "";
    return package->parts[partIndex].name;
-}
-
-cchptr OpcContentTypeOf(cOPC_PACKAGEptr package, csi32 partIndex) {
-   if(partIndex < 0 || ui32(partIndex) >= package->partCount) return "";
-   return OpcHeapText(package, package->parts[partIndex].contentTypeAt);
 }
 
 csi32 OpcMainPart(cOPC_PACKAGEptr package) { return package->mainPart; }
@@ -922,7 +927,13 @@ cchptr OpcMessageIn(OPC_PACKAGEptrc package, cchptr sentence, csi32 partIndex) {
       ++used;
    }
    for(cchptr walk = ", in "; *walk && used < sizeof(package->message) - 1u; ++walk) package->message[used++] = *walk;
-   for(ui64 index = 0; name[index] && used < sizeof(package->message) - 1u; ++index) package->message[used++] = name[index];
+   // An entry name is attacker-controlled bytes. A carriage return or a linefeed in one would overwrite
+   // or forge a console line, so anything below a space is replaced rather than printed.
+   for(ui64 index = 0; name[index] && used < sizeof(package->message) - 1u; ++index) {
+      cchar byte = name[index];
+
+      package->message[used++] = (ui8(byte) < 0x20u || ui8(byte) == 0x7Fu ? '?' : byte);
+   }
    package->message[used] = 0;
    return package->message;
 }
@@ -930,7 +941,8 @@ cchptr OpcMessageIn(OPC_PACKAGEptrc package, cchptr sentence, csi32 partIndex) {
 cchptr OpcResultText(OPC_PACKAGEptrc package, cOPC_RESULT result) {
    cchptr sentence = "not a valid DOCX; the package could not be read";
 
-   if(result == OPC_ERROR_ZIP) sentence = ZipResultText(package ? package->reader : nullptr, package ? package->lastZip : ZIP_OK);
+   if(result == OPC_ERROR_ZIP && package) sentence = ZipResultText(package->reader, package->lastZip);
+   else if(result == OPC_ERROR_ZIP) sentence = "not a valid DOCX; the container could not be read";
    else if(result == OPC_ERROR_XML && package) sentence = XmlResultText(package->lastXml);
    else if(result == OPC_ERROR_NOT_UTF8 && package) sentence = UtfResultText(package->lastUtf);
    else if(result >= OPC_OK && result < OPC_RESULT_COUNT) sentence = OPC_RESULT_SENTENCE[result];

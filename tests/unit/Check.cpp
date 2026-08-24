@@ -6,7 +6,7 @@
  * Last Modified: 2026-08-24
  * Description: The unit-test harness's counters and reporting.
  * To Do: 1) Print the group name beside each failure once groups nest.
- * Dependencies: Check.h, typedefs.h, stdio.h
+ * Dependencies: BuildGuards.h, Check.h, typedefs.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull

@@ -122,7 +122,10 @@ static void ProbeReportRelated(OPC_PACKAGEptrc package, cwchptr path) {
 
       if(found < 0) continue;
 
-      cOPC_REL_VIEW record  = OpcRel(package, found);
+      // Found by kind, then looked up again by its own Id in the part that declared it. Relationship ids
+      // are scoped per part (correctness rule 1), and this is the path that says so in code.
+      cOPC_REL_VIEW byKind  = OpcRel(package, found);
+      cOPC_REL_VIEW record  = OpcRel(package, OpcFindRelById(package, mainPart, byKind.id));
       cchptr        gap     = (named ? ", " : "");
       cchptr        label   = PROBE_KINDS[index].label;
       csi32         written = snprintf(message + used, sizeof(message) - used, "%s%s -> %s", gap, label, record.part);
