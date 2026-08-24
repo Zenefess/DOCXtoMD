@@ -255,6 +255,13 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   to `XML_NS_OTHER` — were refused as the same attribute twice. Attribute identity is now the URI plus the
   local name, as Namespaces in XML defines it, and the URI is reported beside each attribute. Found by
   differential-testing the tokenizer against Python's expat over generated documents.
+- `OpcResolveTarget` applied its banned-byte rule only to bytes a percent escape produced, never to
+  literal ones, so a colon that did not follow a URI scheme reached a part name: `document.xml:stream`
+  was refused as a scheme, but `1:stream` was not. The same held for `*`, `"`, `<`, `>` and `|`. The rule
+  now runs over every byte of the finished name. A decoded name is also checked as UTF-8, because a
+  percent escape can spell a byte that is not text, and such a name would simply never match an entry —
+  a silent "not found" where the truth is "not a name". Found by checking every accepted target against
+  an independent RFC 3986 reference.
 - `UtfTranscodeUtf16` asked `UtfBomBytes` for the mark to skip, which also reports the three bytes of a
   UTF-8 one; skipping three put every UTF-16 code unit one byte out of phase with the even-length
   invariant checked immediately above it. It now recognises only the two-byte marks it can act on.

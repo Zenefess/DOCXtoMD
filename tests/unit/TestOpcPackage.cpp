@@ -84,6 +84,18 @@ void TestOpcPackage(void) {
    CHECK(Refuses(MAIN, "C:\\Windows\\x.png"));
    CHECK(Refuses(MAIN, "\\\\server\\share\\x.png"));
    CHECK(Refuses(MAIN, "document.xml:stream")); // An NTFS alternate stream
+   CHECK(Refuses(MAIN, "1:stream"));            // A colon that does not follow a scheme is still a colon
+   CHECK(Refuses(MAIN, ":stream"));
+   CHECK(Refuses(MAIN, "x*y.png")); // The rest of the bytes a part name may not hold,
+   CHECK(Refuses(MAIN, "a<b.png")); // literal here rather than spelled as an escape
+   CHECK(Refuses(MAIN, "a>b.png"));
+   CHECK(Refuses(MAIN, "a|b.png"));
+   CHECK(Refuses(MAIN, "a\"b.png"));
+   CHECK(Refuses(MAIN, "%2Astar.png")); // and the same bytes spelled as escapes
+   CHECK(Refuses(MAIN, "%3Astream"));
+   CHECK(Refuses(MAIN, "%A0.png"));                           // an escape that is not well-formed UTF-8
+   CHECK(Refuses(MAIN, "%C3%28.png"));                        // and one that is a broken sequence
+   CHECK(Resolves(MAIN, "%C3%A9.png", "/word/\xC3\xA9.png")); // but a well-formed one is a name
    CHECK(Refuses(MAIN, "word//document.xml"));
    CHECK(Refuses(MAIN, "word/"));
    CHECK(Refuses(MAIN, "word/document.xml."));

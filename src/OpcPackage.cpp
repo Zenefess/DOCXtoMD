@@ -352,6 +352,20 @@ cOPC_RESULT OpcResolveTarget(cchptr sourcePartName, cchptr target, cbool externa
    // Re-checked after decoding, because the escapes could have spelled anything the first pass rejected.
    if(decoded < 2u || built[0] != '/') return OPC_ERROR_REL_TARGET;
 
+   // Every byte of the finished name, not only the ones an escape produced. A colon is the case that
+   // makes this matter: it is an NTFS alternate-stream separator, and the scheme test above only sees
+   // one that follows a letter, so "1:stream" would otherwise arrive here unexamined.
+   for(ui64 index = 1u; index < decoded; ++index) {
+      if(OpcNameByteBanned(built[index])) return OPC_ERROR_REL_TARGET;
+   }
+
+   // A part name is text. A percent escape can spell a byte that is not, and a name that is not UTF-8
+   // would be compared against entry names byte by byte and simply never match, which is a silent
+   // "not found" where the truth is "not a name".
+   ui64 badOffset = 0;
+
+   if(UtfValidate((cui8ptr)built, decoded, &badOffset) != UTF8_OK) return OPC_ERROR_REL_TARGET;
+
    ui64 segment = 1u;
 
    while(segment <= decoded) {
