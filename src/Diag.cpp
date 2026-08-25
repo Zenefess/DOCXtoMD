@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-08-25
  * Description: Diagnostic sink implementation; wide arguments cross to UTF-8 through the Utf module.
  * To Do: 1) Guard every writer with include/spinlocks.h when M13 gives every worker this one sink (D6).
  *        2) Take over -q from the callers, so a note is suppressed here rather than at each call site.
@@ -51,10 +51,36 @@ static void DiagWriteWideErr(cwchptr text) {
    mdealloc(buffer);
 }
 
+//-- Limits
+
+// Bytes per WriteFile call. A single call takes a DWORD count, and a smaller ceiling keeps a partial
+// write on a pipe to something the loop above can absorb.
+constexpr cui64 DIAG_WRITE_BYTES = 1u << 20;
+
 //== Writers
 
 void DiagWriteOut(cchptr text) {
    if(text) fputs(text, stdout);
+}
+
+void DiagWriteOutBytes(cui8ptr bytes, cui64 byteCount) {
+   if(!bytes || !byteCount) return;
+   fflush(stdout); // Whatever the runtime has queued goes first, so the document cannot overtake it
+
+   cHANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+
+   if(handle == INVALID_HANDLE_VALUE || !handle) return;
+
+   ui64 done = 0;
+
+   while(done < byteCount) {
+      cui64 remaining = byteCount - done;
+      cui64 want      = (remaining > DIAG_WRITE_BYTES ? DIAG_WRITE_BYTES : remaining);
+      DWORD put       = 0;
+
+      if(!WriteFile(handle, bytes + done, DWORD(want), &put, nullptr) || !put) return;
+      done += put;
+   }
 }
 
 void DiagWriteErr(cchptr text) {

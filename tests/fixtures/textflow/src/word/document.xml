@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t># not a heading</w:t></w:r></w:p>
+    <w:p><w:r><w:t>- not a bullet</w:t></w:r></w:p>
+    <w:p><w:r><w:t>+ not a bullet either</w:t></w:r></w:p>
+    <w:p><w:r><w:t>1998. A year, not a list.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>1998.No space, so no list.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>&gt; not a quote</w:t></w:r></w:p>
+    <w:p><w:r><w:t>---</w:t></w:r></w:p>
+    <w:p><w:r><w:t>===</w:t></w:r></w:p>
+    <w:p><w:r><w:t>--</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Above an underline</w:t><w:br/><w:t>===</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Above a short rule</w:t><w:br/><w:t>--</w:t></w:r></w:p>
+    <w:p><w:r><w:t>#hash without a space is only a hash</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Stars * and _ and ` and ~ and [brackets].</w:t></w:r></w:p>
+    <w:p><w:r><w:t>&lt;tag&gt; and &amp;amp; and A &amp; B and 5 &lt; 6</w:t></w:r></w:p>
+    <w:p><w:r><w:t>C:\path\to\file</w:t></w:r></w:p>
+    <w:p><w:r><w:t>A&amp;</w:t></w:r><w:r><w:t>amp;B is one entity however the runs are split</w:t></w:r></w:p>
+    <w:p/>
+    <w:p/>
+    <w:p><w:r><w:t xml:space="preserve">   leading and trailing spaces are trimmed   </w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">    </w:t></w:r></w:p>
+    <w:p><w:r><w:t>Before</w:t></w:r><w:r><w:br/></w:r><w:r><w:t>after a hard break</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Line</w:t><w:br/><w:t>- dashed after a break</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Two</w:t><w:br/><w:br/><w:t>breaks collapse</w:t></w:r></w:p>
+    <w:p><w:r><w:t>A trailing break is dropped</w:t><w:br/></w:r></w:p>
+    <w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p>
+    <w:p><w:r><w:t>e</w:t><w:noBreakHyphen/><w:t>mail</w:t></w:r></w:p>
+    <w:p><w:r><w:t>hy</w:t><w:softHyphen/><w:t>phen</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Before a page break</w:t><w:br w:type="page"/><w:t>, and after it</w:t></w:r></w:p>
+    <w:p><w:r><w:t>end\</w:t><w:br/><w:t>next</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Sharp #</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>C#</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>One</w:t><w:br/><w:t>line only</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Ends with a soft hyphen</w:t><w:softHyphen/></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

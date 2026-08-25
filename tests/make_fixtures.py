@@ -47,18 +47,28 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(ROOT, "fixtures")
 BUILD = os.path.join(ROOT, "build")
 
-# What each built fixture is for, and the exit code DOCXtoMD must return for it. run_container.py reads
-# this table, so the expectations live in exactly one place. The sound flag is a second, independent
-# question: whether the bytes are a well-formed ZIP that Python's zipfile must read back. Since M4 a
-# package can be a perfectly good archive and still not be a DOCX, so the two no longer coincide.
-# this table, so the expectations live in exactly one place.
-#   0 is never expected: no build before M5 converts anything, so a sound container still exits 5.
+# What each built fixture is for, and the exit code DOCXtoMD must return for it. run_container.py
+# reads this table, so the expectations live in exactly one place. The sound flag is a second,
+# independent question: whether the bytes are a well-formed ZIP that Python's zipfile must read back.
+# Since M4 a package can be a perfectly good archive and still not be a DOCX, so the two do not
+# coincide -- and since M5 a sound one exits 0, having actually written its Markdown, rather than
+# exiting 5 to say the converter did not exist yet.
 EXPECTATIONS = []
+
+# Which built fixture must reproduce which fixture case's expected.md, byte for byte. run_golden.py
+# reads this table for the same reason run_container.py reads the one above: a fixture and what it
+# must produce are declared together, in one place, or they drift.
+GOLDENS = []
 
 
 def expect(name, code, matches, why, sound=None):
     EXPECTATIONS.append({"name": name, "code": code, "matches": matches, "why": why,
-                         "sound": (code == 5 if sound is None else sound)})
+                         "sound": (code == 0 if sound is None else sound)})
+
+
+def golden(name, case):
+    GOLDENS.append({"name": name, "case": case,
+                    "expected": os.path.join(FIXTURES, case, "expected.md")})
 
 
 # ---------------------------------------------------------------------------- deflate helpers
@@ -256,6 +266,7 @@ def build_all(verbose=True, writing=True):
     global WRITING
     WRITING = writing
     del EXPECTATIONS[:]
+    del GOLDENS[:]
     if writing:
         os.makedirs(BUILD, exist_ok=True)
     parts = read_part_tree("minimal")
@@ -275,19 +286,19 @@ def build_all(verbose=True, writing=True):
     stored = [make_entry(name, raw, method="store") for name, raw in parts]
     note("minimal-stored.docx", stored)
     write("minimal-stored.docx", build_zip(stored))
-    expect("minimal-stored.docx", 5, ["package verified", "word/document.xml"],
+    expect("minimal-stored.docx", 0, ["wrote", "minimal-stored.md"],
            "every entry stored, so ZipReader copies rather than inflates")
 
     deflated = [make_entry(name, raw) for name, raw in parts]
     note("minimal-deflated.docx", deflated)
     write("minimal-deflated.docx", build_zip(deflated))
-    expect("minimal-deflated.docx", 5, ["package verified", "word/document.xml"],
+    expect("minimal-deflated.docx", 0, ["wrote", "minimal-deflated.md"],
            "every entry deflated, CRC-32 verified after inflation")
 
     fixed = [make_entry(name, raw, strategy=zlib.Z_FIXED) for name, raw in parts]
     note("fixed-huffman.docx", fixed)
     write("fixed-huffman.docx", build_zip(fixed))
-    expect("fixed-huffman.docx", 5, ["package verified"], "RFC 1951 fixed-Huffman blocks (BTYPE 1)")
+    expect("fixed-huffman.docx", 0, ["wrote", "fixed-huffman.md"], "RFC 1951 fixed-Huffman blocks (BTYPE 1)")
 
     # A body big and varied enough that zlib chooses dynamic Huffman, with long matches to exercise the
     # window. Generated rather than committed, so the repository does not carry 100 KiB of filler.
@@ -304,13 +315,13 @@ def build_all(verbose=True, writing=True):
                   for name, raw in parts]
     note("deflate-stored-blocks.docx", raw_blocks)
     write("deflate-stored-blocks.docx", build_zip(raw_blocks))
-    expect("deflate-stored-blocks.docx", 5, ["package verified"],
+    expect("deflate-stored-blocks.docx", 0, ["wrote", "deflate-stored-blocks.md"],
            "several RFC 1951 stored blocks inside one deflate stream (BTYPE 0)")
 
     dynamic = [make_entry(name, grown if name == "word/document.xml" else raw) for name, raw in parts]
     note("dynamic-huffman.docx", dynamic)
     write("dynamic-huffman.docx", build_zip(dynamic))
-    expect("dynamic-huffman.docx", 5, ["package verified", "word/document.xml %d bytes" % len(grown)],
+    expect("dynamic-huffman.docx", 0, ["wrote", "dynamic-huffman.md"],
            "one RFC 1951 dynamic-Huffman block (BTYPE 2) over a 100 KiB part")
 
     # Several blocks in one stream, and a mixture of types: a full flush ends the current block and emits
@@ -320,7 +331,7 @@ def build_all(verbose=True, writing=True):
     mixed.append(make_entry("word/document.xml", grown, payload=deflate_blocks(pieces)))
     note("multi-block.docx", mixed)
     write("multi-block.docx", build_zip(mixed))
-    expect("multi-block.docx", 5, ["package verified", "word/document.xml %d bytes" % len(grown)],
+    expect("multi-block.docx", 0, ["wrote", "multi-block.md"],
            "one deflate stream carrying many blocks of mixed type, ended by a final block")
 
     # Overlapping match copies -- a match that reads bytes it is still producing -- are a named M3 scope
@@ -333,16 +344,16 @@ def build_all(verbose=True, writing=True):
     overlap = [make_entry(name, repeated if name == "word/document.xml" else raw) for name, raw in parts]
     note("overlapping-matches.docx", overlap)
     write("overlapping-matches.docx", build_zip(overlap))
-    expect("overlapping-matches.docx", 5, ["package verified", "word/document.xml %d bytes" % len(repeated)],
+    expect("overlapping-matches.docx", 0, ["wrote", "overlapping-matches.md"],
            "runs at distance 1, 2 and 3: matches that read the bytes they are still producing")
 
     write("zip64.docx", build_zip([make_entry(name, raw) for name, raw in parts], zip64=True))
-    expect("zip64.docx", 5, ["package verified"],
+    expect("zip64.docx", 0, ["wrote", "zip64.md"],
            "ZIP64 end record, locator and extra fields on an archive small enough to review")
 
     streamed = [make_entry(name, raw, descriptor=True) for name, raw in parts]
     write("data-descriptor.docx", build_zip(streamed))
-    expect("data-descriptor.docx", 5, ["package verified"],
+    expect("data-descriptor.docx", 0, ["wrote", "data-descriptor.md"],
            "local headers zeroed and sizes in a trailing data descriptor")
 
     without_body = [make_entry(name, raw) for name, raw in parts if name != "word/document.xml"]
@@ -356,12 +367,12 @@ def build_all(verbose=True, writing=True):
     doubled = [make_entry(name, raw) for name, raw in parts]
     doubled.append(make_entry("word/document.xml", decoy))
     write("duplicate-names.docx", build_zip(doubled))
-    expect("duplicate-names.docx", 5, ["package verified", "word/document.xml %d bytes" % len(body)],
+    expect("duplicate-names.docx", 0, ["wrote", "duplicate-names.md"],
            "two entries named word/document.xml: the first in directory order wins")
 
     write("with-comment.docx", build_zip([make_entry(name, raw) for name, raw in parts],
                                          comment=b"an archive comment, so the end record is not the last 22 bytes"))
-    expect("with-comment.docx", 5, ["package verified"],
+    expect("with-comment.docx", 0, ["wrote", "with-comment.md"],
            "an archive comment, so the end record is not the last 22 bytes of the file")
 
     # -- packages the M4 model has to resolve, or refuse. Every one is a sound container: what is being
@@ -381,8 +392,7 @@ def build_all(verbose=True, writing=True):
     # word/document.xml by name finds nothing and only relationship resolution can succeed.
     relocated = read_part_tree("relocated")
     write("relocated-main.docx", build_zip([make_entry(name, raw) for name, raw in relocated]))
-    expect("relocated-main.docx", 5,
-           ["package verified", "main part parts/body.xml", "styles -> /shared/theme-styles.xml"],
+    expect("relocated-main.docx", 0, ["wrote", "relocated-main.md"],
            "no word/ folder at all: rId7 rather than rId1 names the body, and its prefix is x, not w")
 
     # ISO 29500 Strict spells every namespace and relationship type differently. Both families have to
@@ -395,13 +405,13 @@ def build_all(verbose=True, writing=True):
                           b"http://purl.oclc.org/ooxml/officeDocument/relationships/")
         strict.append((name, raw))
     write("strict-namespaces.docx", build_zip([make_entry(name, raw) for name, raw in strict]))
-    expect("strict-namespaces.docx", 5, ["package verified", "word/document.xml", "styles -> /word/styles.xml"],
+    expect("strict-namespaces.docx", 0, ["wrote", "strict-namespaces.md"],
            "ISO 29500 Strict URIs throughout, which must resolve exactly as Transitional ones do")
 
     # A byte-order mark in front of a part, which Word writes on some of them.
     marked = swap(parts, [("word/document.xml", b"<?xml", b"\xEF\xBB\xBF<?xml")])
     write("bom-part.docx", build_zip([make_entry(name, raw) for name, raw in marked]))
-    expect("bom-part.docx", 5, ["package verified"], "a UTF-8 byte-order mark ahead of the XML declaration")
+    expect("bom-part.docx", 0, ["wrote", "bom-part.md"], "a UTF-8 byte-order mark ahead of the XML declaration")
 
     # A UTF-16 part, which ISO/IEC 29500 permits and Utf transcodes before anything tokenises it.
     wide = []
@@ -411,13 +421,13 @@ def build_all(verbose=True, writing=True):
             raw = b"\xFF\xFE" + raw
         wide.append((name, raw))
     write("utf16-part.docx", build_zip([make_entry(name, raw) for name, raw in wide]))
-    expect("utf16-part.docx", 5, ["package verified"], "word/document.xml written as UTF-16LE with a mark")
+    expect("utf16-part.docx", 0, ["wrote", "utf16-part.md"], "word/document.xml written as UTF-16LE with a mark")
 
     # The relationship names a part that is not there, but [Content_Types].xml still says which part is
     # the body. The relationship decides first; this is the one path where the content type takes over.
     recovered = swap(parts, [("_rels/.rels", b'Target="word/document.xml"', b'Target="word/missing.xml"')])
     write("main-by-content-type.docx", build_zip([make_entry(name, raw) for name, raw in recovered]))
-    expect("main-by-content-type.docx", 5, ["package verified", "word/document.xml"],
+    expect("main-by-content-type.docx", 0, ["wrote", "main-by-content-type.md"],
            "a dangling officeDocument relationship, recovered through the content-type override")
     # The relationship names a part that is there but is typed as something else. The relationship is the
     # specification's discovery mechanism and [Content_Types].xml is metadata, so the relationship wins.
@@ -429,7 +439,7 @@ def build_all(verbose=True, writing=True):
                              b'officedocument.wordprocessingml.document.main+xml"',
                              b'PartName="/word/document.xml" ContentType="application/xml"')])
     write("content-type-mismatch.docx", build_zip([make_entry(name, raw) for name, raw in mistyped]))
-    expect("content-type-mismatch.docx", 5, ["package verified", "main part word/document.xml"],
+    expect("content-type-mismatch.docx", 0, ["wrote", "content-type-mismatch.md"],
            "the body is typed application/xml, and the officeDocument relationship still decides")
     # Two officeDocument relationships, the decoy first and typed application/xml, the real body second
     # and typed as a main document. Presence alone picks the decoy, so only a working content-type
@@ -445,7 +455,7 @@ def build_all(verbose=True, writing=True):
     decoyed.append(("word/decoy.xml", body.replace(b"Minimal fixture", b"Decoy typed application/xml")))
     decoyed.sort(key=lambda part: part[0])
     write("decoy-main-rel.docx", build_zip([make_entry(name, raw) for name, raw in decoyed]))
-    expect("decoy-main-rel.docx", 5, ["package verified", "main part word/document.xml"],
+    expect("decoy-main-rel.docx", 0, ["wrote", "decoy-main-rel.md"],
            "an untyped decoy relationship first: only the content-type cross-check reaches the real body")
 
     # OPC compares part names case-insensitively. The entries stay lowercase while the Override and the
@@ -454,7 +464,7 @@ def build_all(verbose=True, writing=True):
                                b'PartName="/word/Document.xml"'),
                               ("_rels/.rels", b'Target="word/document.xml"', b'Target="Word/Document.xml"')])
     write("mixed-case-names.docx", build_zip([make_entry(name, raw) for name, raw in mixed_case]))
-    expect("mixed-case-names.docx", 5, ["package verified", "main part word/document.xml"],
+    expect("mixed-case-names.docx", 0, ["wrote", "mixed-case-names.md"],
            "part names written in a different case than the entries they name")
 
 
@@ -654,6 +664,30 @@ def build_all(verbose=True, writing=True):
     write("too-many-entries.docx", build_zip(crowd))
     expect("too-many-entries.docx", 3, ["decompression limit"], "more central directory records than the cap allows")
 
+    # -- golden fixtures. Each of these is an ordinary sound container; what makes it a golden is the
+    # expected.md beside its part tree, which run_golden.py byte-compares the converted output against.
+    # The two minimal cases are registered rather than rebuilt, because a fixture that is already proving
+    # something about the container layer proves the conversion of the same bytes for free.
+
+    # Fourteen containers carry the minimal document unaltered under fourteen different container and
+    # package shapes -- stored and deflated entries, fixed-Huffman blocks, ZIP64, a data descriptor, an
+    # archive comment, ISO 29500 Strict URIs, a byte-order mark, a UTF-16 part, a content type that
+    # disagrees with the relationship, a decoy relationship, mixed-case part names and a duplicated
+    # entry name. Every one of them has to produce the same bytes, which is a stronger statement than
+    # any exit code, and it is where run_container.py's substring assertions moved to at M5.
+    for same in ["minimal-stored.docx", "minimal-deflated.docx", "fixed-huffman.docx", "zip64.docx",
+                 "data-descriptor.docx", "with-comment.docx", "strict-namespaces.docx", "bom-part.docx",
+                 "utf16-part.docx", "main-by-content-type.docx", "content-type-mismatch.docx",
+                 "decoy-main-rel.docx", "mixed-case-names.docx", "duplicate-names.docx"]:
+        golden(same, "minimal")
+    golden("relocated-main.docx", "relocated")
+    for case in ["headings", "toggles", "textflow", "nostyles", "wrappers"]:
+        tree = read_part_tree(case)
+        write(case + ".docx", build_zip([make_entry(name, raw) for name, raw in tree]))
+        expect(case + ".docx", 0, ["wrote", case + ".md"], "the %s golden fixture" % case)
+        golden(case + ".docx", case)
+
+
     if verbose:
         print("built %d fixtures in %s" % (len(EXPECTATIONS), BUILD))
         print()
@@ -670,6 +704,8 @@ def main(argv):
         build_all(verbose=False, writing=False)
         for row in EXPECTATIONS:
             print("%-28s exit %d  %s" % (row["name"], row["code"], row["why"]))
+        for row in GOLDENS:
+            print("%-28s golden  compares against %s" % (row["name"], row["case"] + "/expected.md"))
         return 0
     build_all()
     return 0

@@ -87,26 +87,43 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\src\CliOptions.cpp" />
+    <ClCompile Include="..\src\Convert.cpp" />
     <ClCompile Include="..\src\Crc32.cpp" />
     <ClCompile Include="..\src\Diag.cpp" />
+    <ClCompile Include="..\src\DocWalker.cpp" />
     <ClCompile Include="..\src\Inflate.cpp" />
+    <ClCompile Include="..\src\Ir.cpp" />
+    <ClCompile Include="..\src\MdEmitter.cpp" />
+    <ClCompile Include="..\src\MdEscape.cpp" />
     <ClCompile Include="..\src\OpcPackage.cpp" />
+    <ClCompile Include="..\src\StyleModel.cpp" />
     <ClCompile Include="..\src\Utf.cpp" />
     <ClCompile Include="..\src\XmlPull.cpp" />
     <ClCompile Include="..\src\ZipReader.cpp" />
     <ClCompile Include="unit\Check.cpp" />
+    <ClCompile Include="unit\TestConvert.cpp" />
+    <ClCompile Include="unit\TestDocWalker.cpp" />
     <ClCompile Include="unit\TestMain.cpp" />
+    <ClCompile Include="unit\TestMdEmitter.cpp" />
+    <ClCompile Include="unit\TestMdEscape.cpp" />
     <ClCompile Include="unit\TestOpcPackage.cpp" />
+    <ClCompile Include="unit\TestStyleModel.cpp" />
     <ClCompile Include="unit\TestUtf.cpp" />
     <ClCompile Include="unit\TestXmlPull.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\BuildGuards.h" />
     <ClInclude Include="..\src\CliOptions.h" />
+    <ClInclude Include="..\src\Convert.h" />
     <ClInclude Include="..\src\Crc32.h" />
     <ClInclude Include="..\src\Diag.h" />
+    <ClInclude Include="..\src\DocWalker.h" />
     <ClInclude Include="..\src\Inflate.h" />
+    <ClInclude Include="..\src\Ir.h" />
+    <ClInclude Include="..\src\MdEmitter.h" />
+    <ClInclude Include="..\src\MdEscape.h" />
     <ClInclude Include="..\src\OpcPackage.h" />
+    <ClInclude Include="..\src\StyleModel.h" />
     <ClInclude Include="..\src\Utf.h" />
     <ClInclude Include="..\src\XmlPull.h" />
     <ClInclude Include="..\src\ZipReader.h" />

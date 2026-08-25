@@ -24,11 +24,11 @@ below.
 
 ## Current state (do not assume more exists)
 
-- `src/` — **exists** and holds the CLI skeleton (M2), the container layer (M3) and the XML and package
-  layer (M4): eighteen files, all
+- `src/` — **exists** and holds the CLI skeleton (M2), the container layer (M3), the XML and package
+  layer (M4) and the converter (M5): thirty files, all
   CRLF, tab-free, ASCII-only, none over 150 columns, each carrying a validated r17 prolog at `v0.1.0`
   with `ISA: Scalar`. Unlike
-  `include/`, `src/` is **not** exempt from the repository style, and all eighteen are committed in
+  `include/`, `src/` is **not** exempt from the repository style, and all thirty are committed in
   the shape `.clang-format` produces — running the formatter over them is a verified no-op, so a
   format-on-save cannot manufacture a diff. Keep it that way: format after editing, then re-check the
   r17 prolog, since the formatter has no opinion about it. Two shapes are worth copying because they
@@ -170,25 +170,92 @@ below.
     and never credits it back, so re-reading `styles.xml` per paragraph would walk an innocent document
     into the bomb caps. `OpcLoadXmlPart` is the only door to a tokenizer — it validates UTF-8, transcodes
     a UTF-16 part in place, and is what M4's definition of done means by "rather than reaching the walker".
-  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, the package probe per input, and the
-    exit-code mapping. There is no positional output operand (D7b), and **no literal part name**: the
-    only names it holds are the labels it prints beside the relationships it resolved.
-  - **What the binary does at M4**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+  - `StyleModel.h`/`StyleModel.cpp` — `styles.xml` as a resolved-property cache, and where the toggle
+    XOR lives. Each style's whole `w:basedOn` chain is folded **once at load**, leaf-first into a local
+    array and then applied root-first, so the nearest specification survives and the toggle parity —
+    which is order-independent — comes out of the same pass; a cycle stops where it closes and the walk
+    is capped at sixteen links either way. A run's effective properties are then ISO/IEC 29500-1 17.7.3
+    as three bit masks: a toggle the run's own `w:rPr` names is final, a `w:docDefaults` true beats
+    every style, and anything neither of them named takes the XOR of the paragraph-style and
+    character-style chain parities. Everything that is not a toggle — `w:dstrike`, `w:vertAlign` — is
+    nearest-wins over run, character style, paragraph style, docDefaults, in that order. Style **roles**
+    come from the normalized `w:name` first and the normalized `w:styleId` second, which is what lets an
+    English `w:name` over a localized identifier and a LibreOffice `Heading_20_4` both resolve; the raw
+    identifier is what `StyleFind` matches, because decoding escapes on the lookup path would collapse
+    `Source_20_Text` and `Source Text` into one key. A missing styles part is legal and yields an empty
+    model; a **present** one that is malformed is a refusal, on the same reasoning as D8. Heap offset 0
+    is seeded with the empty string, without which a style declaring no `w:basedOn` inherits whichever
+    identifier happened to be stored first — a real defect the golden fixtures missed and the unit
+    suite caught, because every fixture's first style is the one they would wrongly have inherited.
+  - `Ir.h`/`Ir.cpp` — the intermediate representation the walker builds and the emitter reads: blocks
+    and spans as arrays of POD records over one growable byte arena, addressed by offset so a growth
+    invalidates nothing. `IrEndBlock` trims a block's leading and trailing break spans and then unwinds
+    the whole block — records, spans and arena — when nothing but ASCII whitespace is left, which is
+    what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` exist for one caller:
+    `mc:AlternateContent`, where the first `mc:Choice` is walked speculatively and rewound if an
+    `mc:Fallback` turns out to follow it. A non-breaking space counts as content, per mapping row 35.
+  - `DocWalker.h`/`DocWalker.cpp` — the body walk, one dispatcher for both block and run level because
+    every transparent wrapper appears at both and means the same thing at each. Accept-all revisions
+    (correctness rule 8): `w:ins` and `w:moveTo` are transparent, `w:del` and `w:moveFrom` are dropped
+    whole, and `w:sdt`, `w:smartTag`, `w:customXml` and `mc:ProcessContent` are transparent. A run
+    whose effective `w:vanish` is on is dropped with its text, which is what keeps Word's hidden field
+    instructions out of the output. A heading's spans have their bold bit cleared, because mapping row
+    1 rules that heading text is never additionally bolded and `IR_FMT` is the only channel M6 has.
+    `w:t` text is taken literally — `xml:space` is the producer's business — with U+00AD removed.
+    What is skipped whole and why: `w:tbl` (M9), `w:drawing`/`w:pict` (M7), `w:sym` (needs a Symbol and
+    Wingdings table), `w:instrText` and `w:fldChar` (M10's field state machine), and anything this
+    build has never heard of, which is the OOXML compatibility model. `w:hyperlink` and `w:fldSimple`
+    are descended into rather than skipped: their brackets and their field semantics arrive later, but
+    their text is content now.
+  - `MdEscape.h`/`MdEscape.cpp` — correctness rule 6's context-aware writer, pure and allocating
+    nothing: one core that measures when its destination is null and writes when it is not, so the two
+    can never disagree about a length. The reference lists a `lineStart` context; this has none, and
+    the reason is the reference's own pitfall 6 — "digits then a dot then a space" is a property of an
+    assembled line, not of a run — so line starts and a heading's closing hash sequence are post-passes
+    over a finished line instead. `MD_CONTEXT_HTML` is the inline set **plus** unconditional `&amp;`
+    and `&lt;`, not instead of it: GFM passes a raw tag through but still parses the text between the
+    tags. A setext underline needs a line above it, so the `=` rule takes a `continuation` flag while a
+    thematic break does not.
+  - `MdEmitter.h`/`MdEmitter.cpp` — one growable UTF-8 output buffer and one line buffer. A line is
+    assembled **raw** and escaped in one piece rather than span by span, and that is a correctness
+    matter: the ampersand rule looks ahead for an entity pattern, and Word fragments a run wherever a
+    revision boundary falls, so escaping per span makes `A&amp;B` come out differently depending on
+    where the producer happened to split it. Blocks are separated by exactly one blank line and each
+    ends in one newline, so two paragraphs are `a\n\nb\n` and an empty document is zero bytes. Each
+    line loses its leading and trailing ASCII padding — four leading spaces would be an indented code
+    block, two trailing ones are Markdown's other hard break. A hard break with nothing after it is
+    dropped and two with nothing between them collapse, because a Markdown line that is empty ends the
+    paragraph and neither `--hard-break` spelling can carry an empty continuation line. Inside a
+    heading a break becomes exactly one space.
+  - `Convert.h`/`Convert.cpp` — the per-file pipeline: container, package, relationships, styles, walk,
+    emit, write. This is the function one worker runs when M13 adds the bounded pool, which is why it
+    is a module and not a lump of `main.cpp`. `ConvertOutputPath` is pure and allocation-free and is
+    therefore what the unit suite hammers: D7b's rule is `-o` as a filename for one input and a
+    directory for several, otherwise the input's own path with its extension replaced. A trailing
+    separator names a directory whatever the input count, because no Windows file name may end in one.
+    The output file is written with `CreateFileW`/`WriteFile` and **deleted again if the write does not
+    finish** — a half-written `.md` that looks converted is worse than none. A derived path equal to
+    the input is refused rather than overwritten.
+  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, option handling, the input loop and the
+    exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
+  - **What the binary does at M5**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
     input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and which
-    part broke it**, and a *sound* package exits **5** with `conversion is not implemented in this build`
-    after a note reporting the entry count, the resolved main part with its size and element count, and
-    which of styles, numbering, settings, footnotes, endnotes and comments the main part relates to.
-    Exit 5, not 0,
-    because exit code 0's published contract is "all inputs converted" and M5–M11 build the converter.
-    That is temporary: M5 is the milestone that first makes 0 truthful. A run in which several inputs
-    fail returns the **highest** of their verdicts, not 6 — D7c reserves 6 for a run that converted
-    something, and nothing is converted in this build.
-  - **What the M4 probe does and does not do**: it resolves the main document part through `_rels/.rels`,
-    tokenizes it from end to end, and counts its elements. It does **not** interpret one of them — the
-    style, walk and emit stages are M5 onwards. The tokenize is not decoration: it is what turns
-    "a part that is not well-formed XML" into a named refusal, and it is the only consumer at M4 that
-    proves `XmlPull` runs over a real inflated part rather than over a string literal.
+    part broke it**, an output that cannot be written exits 4, and a sound package is **converted** and
+    exits **0**, having written `<stem>.md` beside its input and said so in a note. `--stdout` writes
+    the document to standard output instead, through `DiagWriteOutBytes`, which goes to the handle
+    rather than the CRT stream so that Windows cannot turn the emitter's LF endings into CRLF. A run
+    that converted something and failed something exits **6**, which D7c reserves for exactly that; a
+    run in which everything failed returns the highest of their verdicts.
+  - **What M5 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
+    escaping that keeps all of it from being re-read as markup. It emits **no inline delimiters at
+    all** — no `**`, `*`, `~~`, backtick, `<sup>` or `<sub>` — and that is deliberate rather than
+    unfinished: wrapping a span in delimiters is only safe once adjacent runs with equal formatting have
+    been merged and whitespace hoisted out of the span, and both are M6's `RunCoalescer`. The effective
+    formatting is resolved and carried on every span from this commit, so M6 extends the IR rather than
+    rebuilding it. Lists, tables, links, images, notes and fields arrive at M7 through M10 and are
+    skipped until then.
+
 - `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF, tab-indented) and exposes **only** `Debug|x64`
   and `Release|x64`, matching both project files exactly. It lists **two** projects since M4: `DOCXtoMD`
   and `DOCXtoMD.Tests`, each with all four configuration mappings.
@@ -205,10 +272,10 @@ below.
   and both build clean at `/W3`. No OutDir override. Both configs also define
   `WIN32_LEAN_AND_MEAN;NOMINMAX` — added at M2, when `<windows.h>` first entered the project; neither
   hides a header this project needs, because `winnls.h` (`WideCharToMultiByte`) and `wincon.h`
-  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Nine
-  `<ClCompile>`s, all `src\…`, and fifteen `<ClInclude>`s: the six `include\…` headers and nine
+  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Fifteen
+  `<ClCompile>`s, all `src\…`, and twenty-one `<ClInclude>`s: the six `include\…` headers and fifteen
   `src\…` ones.
-- `DOCXtoMD.vcxproj.filters` — lists the nine `src\*.cpp` files under Source Files and all fifteen
+- `DOCXtoMD.vcxproj.filters` — lists the fifteen `src\*.cpp` files under Source Files and all twenty-one
   headers under Header Files, in the same order as the `.vcxproj`. Every `<ClCompile Include="…">` and
   `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character; keep it that way, or
   the IDE tree stops reflecting the build. The tree is deliberately flat — there is no `src` filter
@@ -223,7 +290,7 @@ below.
   because MSBuild's default is `$(SolutionDir)`-relative: without the pin the test binary lands in
   `x64\Release\` when the solution is built and in `tests\x64\Release\` when the project is, and a
   definition-of-done command cannot name a path that moves. The main project still sets no OutDir. It
-  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the five files in `tests\unit\`.
+  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the ten files in `tests\unit\`.
 - Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
   Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
   - `typedefs.h` v1.0.1 — r1/r2/t1/t2 aliases, the full pointer lattice, `al1`–`al64`, `$LoopMT*`,
@@ -334,18 +401,25 @@ below.
   same question as "does it exit 5" and no longer is, because a package can be a perfectly good archive
   and still not be a DOCX — without the flag every new package-level negative would silently drop out of
   the `zipfile` cross-check.
-- `tests/unit/` — **exists** as of M4: `Check.h`/`Check.cpp` (one `CHECK` macro, a group heading and a
-  pass/fail summary, over `typedefs.h` and `<stdio.h>` and nothing else — the header itself needs only
-  `typedefs.h`, so a suite that includes it pulls in no I/O), `TestMain.cpp`, and one suite per module —
-  `TestUtf.cpp`, `TestXmlPull.cpp`, `TestOpcPackage.cpp`. Every case is driven from a string literal;
+- `tests/unit/` — **exists** as of M4 and doubled at M5: `Check.h`/`Check.cpp` (one `CHECK` macro, a
+  group heading and a pass/fail summary, over `typedefs.h` and `<stdio.h>` and nothing else — the header
+  itself needs only `typedefs.h`, so a suite that includes it pulls in no I/O), `TestMain.cpp`, and one
+  suite per module — `TestUtf.cpp`, `TestXmlPull.cpp`, `TestOpcPackage.cpp`, `TestStyleModel.cpp`,
+  `TestDocWalker.cpp`, `TestMdEscape.cpp`, `TestMdEmitter.cpp`, `TestConvert.cpp`. Every case is driven
+  from a string literal;
   nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
   works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
   character data, `$` is the end and `!n` is refusal *n* — so one string per case reads better than ten
   assertions. Both sentence tables are pinned against their enums by asserting the tail of specific
   rows, because a sentence table and the enum indexing it drift apart silently; that check caught a
-  real one-row misalignment during M4.
-- **Not yet created** (GCS obligations, see Roadmap): `run_golden.py`
-  (M5), `bench/`, CI. Do not reference them as if they exist.
+  real one-row misalignment during M4. M5's suites reach the parser and the walker from string literals
+  through `StyleLoadBytes` and `DocWalkBytes`, which are the halves of `StyleLoad` and `DocWalk` that
+  work over bytes rather than over a package; `TestDocWalker` renders the whole intermediate
+  representation into a compact trace — `H1{…}` a heading, `P{…}` a paragraph, `[text]` a span, `|` a
+  break, and the letters before a bracket its formatting — so a case is one string comparison rather
+  than ten assertions, and it is the only place the formatting bits are observable before M6 emits them.
+- **Not yet created** (GCS obligations, see Roadmap): `bench/` and CI. Do not reference them as if they
+  exist. `tests/run_golden.py` exists as of M5.
 
 ## Build & run
 
@@ -362,20 +436,23 @@ msbuild DOCXtoMD.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64
 The solution builds **two** exes since M4. The main project overrides no output path, so it lands at
 `x64\Release\DOCXtoMD.exe` and `x64\Debug\DOCXtoMD.exe`; the test project pins its own, so it lands at
 `tests\x64\Release\DOCXtoMD.Tests.exe` whether the solution or the project was built.
-Since M2 the binary has a real command line, since M3 it reads the container and since M4 it resolves
-the package: `--help` and
+Since M2 the binary has a real command line, since M3 it reads the container, since M4 it resolves the
+package and since M5 it **converts**: `--help` and
 `--version` exit 0, a usage error exits 1, an unopenable input exits 2, an input that is not a usable
-DOCX exits 3 and is told which rule it broke and which part broke it, and a sound package exits 5
-because the converter does not exist yet. The fixtures and their expected verdicts are checked by
+DOCX exits 3 and is told which rule it broke and which part broke it, an output that cannot be written
+exits 4, a sound package is converted and exits 0, and a run that both converted and failed exits 6.
+The fixtures and their expected verdicts are checked by
 
 ```bat
 python tests\make_fixtures.py                                   :: writes tests\build\*.docx
 python tests\run_container.py                                   :: runs x64\Release\DOCXtoMD.exe over them
+python tests\run_golden.py                                      :: converts every golden and byte-compares it
 python tests\run_container.py --exe x64\Debug\DOCXtoMD.exe      :: or any other build
 tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite; prints a tally, returns 0 or 1
 ```
 
-`run_container.py` builds the fixtures itself, so the second command alone is enough. The unit binary
+`run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
+The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
 **x64 is the only supported platform** — GCS a2 declares 32-bit unsupported, and D3 is **executed
@@ -731,7 +808,8 @@ implementation session must respect:
 
 | DOCX | Markdown output |
 |---|---|
-| Heading styles / `outlineLvl` 0–8 | `#`–`######` (clamp 7–9 to `######`); heading text never additionally bolded |
+| Heading styles / `outlineLvl` 0–8 | `#`–`######` (clamp 7–9 to `######`); heading text never additionally bolded — the walker clears the bold bit on a heading's spans, so M6 cannot re-add it |
+| `Title` / `Subtitle` styles | `#` / `##`, with no demotion of a real `heading 1` — session-derived at M5, which is what `docs/CONVERSION_REFERENCE.md` row 2 asks for by calling it policy |
 | Bold / italic / strike | `**` / `*` (never `_`) / `~~` |
 | Superscript / subscript | `<sup>` / `<sub>` |
 | Underline, highlight, color, size | **Dropped** (no Markdown equivalent; hyperlink styling suppressed) |
@@ -748,14 +826,25 @@ implementation session must respect:
 | TOC (field or SDT), headers/footers, comments | Skipped |
 | Soft hyphens | Removed; NBSP and smart punctuation kept verbatim |
 | Output encoding | UTF-8, no BOM, LF line endings (tc2's CRLF governs source files, not program output) |
+| Leading/trailing ASCII space or tab on an emitted line | Removed. Four leading spaces would be an indented code block; two trailing ones are Markdown's other hard break |
+| Two hard breaks with nothing between them | Collapse to one, and a hard break with nothing after it is dropped. A Markdown line that is empty ends the paragraph, so neither `--hard-break` spelling can carry an empty continuation line |
+| A hard break inside a heading | One space. An ATX heading is a single line by construction |
 
-## Planned architecture (`docs/`, `include/`, `tests/` and ten `src/` modules exist — build the rest by Roadmap)
+## Planned architecture (`docs/`, `include/`, `tests/` and sixteen `src/` modules exist — build the rest by Roadmap)
 
-**Written so far (M2 + M3 + M4)**: `src/main.cpp`, `src/BuildGuards.h`, `src/CliOptions.h`/`.cpp`,
+**Written so far (M2 + M3 + M4 + M5)**: `src/main.cpp`, `src/BuildGuards.h`, `src/CliOptions.h`/`.cpp`,
 `src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`, `src/ZipReader.h`/`.cpp`,
-`src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp` and `src/OpcPackage.h`/`.cpp`, plus
-everything already in `docs/`, `include/` and `tests/`. Every other entry below is
-still to be written — do not reference one as if it exists.
+`src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp`, `src/OpcPackage.h`/`.cpp`, `src/StyleModel.h`/`.cpp`,
+`src/Ir.h`/`.cpp`, `src/DocWalker.h`/`.cpp`, `src/MdEscape.h`/`.cpp`, `src/MdEmitter.h`/`.cpp` and
+`src/Convert.h`/`.cpp`, plus everything already in `docs/`, `include/` and `tests/`. Every other entry
+below is still to be written — do not reference one as if it exists.
+
+Two entries below are **not** in the list `docs/CONVERSION_REFERENCE.md` 6.3 maps the stages onto, and
+both are session-derived rather than ruled. `Ir.cpp` exists because the representation needs growable
+arrays, and growable arrays need real functions rather than a header full of `inline` the p1 rule does
+not license. `Convert` exists because the per-file pipeline is M13's worker body: it has to be callable
+from something other than `wmain` before M13 arrives, and putting the output-path derivation there is
+what lets the unit suite drive it — the test project compiles every `src\*.cpp` but `main.cpp`.
 
 ```
 src/
@@ -778,19 +867,26 @@ src/
    OpcPackage.h/.cpp     [Content_Types].xml + rels graphs; part lookup; r:id resolution
                          [written at M4]
    StyleModel.h/.cpp     styles.xml → resolved-props cache (basedOn chains, toggle XOR, name normalization)
+                         [written at M5]
    NumberingModel.h/.cpp numbering.xml → per-numId levels with overrides; runtime counters
-   Ir.h                  intermediate representation (blocks/spans) — the walker never emits Markdown
+   Ir.h/.cpp             intermediate representation (blocks/spans) — the walker never emits Markdown
+                         [written at M5; the .cpp is a session addition, see above]
    DocWalker.h/.cpp      document/footnote walk → IR (fields, tracked changes, sdt, AlternateContent)
+                         [written at M5]
    RunCoalescer.h/.cpp   effective-format resolution + adjacent-run merging + whitespace hoisting
-   MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)
-   MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing
+   MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)  [written at M5]
+   MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing  [written at M5]
+   Convert.h/.cpp        one file end to end: container → package → styles → walk → emit → write, and
+                         D7b's output-path derivation. M13's Batch calls this per worker
+                         [written at M5; a session addition, see above]
    MediaExtractor.h/.cpp referenced media parts → disk; content-type extensions; dedup; safe names
    Diag.h/.cpp           error codes/messages → stderr; exit-code mapping. MT-safe from M13: every
                          worker reports through this one sink, so it locks then (D6). Reentrant at M2
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
-                         run_container.py [both written at M3, extended at M4]; run_golden.py [M5];
+                         run_container.py [both written at M3, extended at M4 and M5]; run_golden.py
+                         [written at M5];
                          unit/ holds the CHECK header and one suite per module, built by
-                         tests/DOCXtoMD.Tests.vcxproj [written at M4]
+                         tests/DOCXtoMD.Tests.vcxproj [written at M4, five more suites at M5]
 bench/                   GCS p4 microbenches (create with the first performance claim)
 docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
 include/                 the six owner-authored shared headers (already here); on the include path
@@ -807,8 +903,9 @@ allocating through `memory management.h`. The parsed-once models (`StyleModel`, 
 
 Under D6, **`Batch` and `Diag` are the only `MT-safe` modules**. Everything that converts a document
 — `Utf`, `Inflate`, `Crc32`, `ZipReader`, `XmlPull`, `OpcPackage`, `StyleModel`, `NumberingModel`,
-`Ir`, `DocWalker`, `RunCoalescer`, `MdEscape`, `MdEmitter`, `MediaExtractor` — is instantiated once
-per worker, holds no cross-file state and is never shared, so it needs no lock. `CliOptions` holds
+`Ir`, `DocWalker`, `RunCoalescer`, `MdEscape`, `MdEmitter`, `MediaExtractor`, `Convert` — is
+instantiated once per worker, holds no cross-file state and is never shared, so it needs no lock.
+`Convert` is the whole of one worker's body from M13: everything it opens, it opens on its own stack. `CliOptions` holds
 the input **list** (D7b) plus the worker count, is parsed once before any worker starts and is then
 read-only, so workers may share it by const reference. Design each module that way from its first commit: retrofitting a shared cache into a
 per-worker pipeline later is exactly the rework D6 exists to avoid.
@@ -873,11 +970,22 @@ still accept only one input; what it must not do is assume there will only ever 
   RFC 1951 block type — `strategy=Z_FIXED` for fixed Huffman, the default strategy on a large body for
   dynamic, and `level=0` for stored blocks inside a deflate stream, which is a different code path from
   a stored ZIP entry.
-- Three runners, with different jobs. `tests/run_container.py` (M3, extended at M4) runs the exe over
-  every fixture and asserts the exit code and a substring of the message, and reads every *sound*
-  archive back with Python's `zipfile`; `tests/x64/Release/DOCXtoMD.Tests.exe` (M4) runs the unit suite,
-  which drives every case from a string literal and touches no file; `tests/run_golden.py` (M5, not yet
-  written) runs the exe and byte-compares against `expected.md`. None takes another's job.
+- Three runners, with different jobs. `tests/run_container.py` (M3, extended at M4 and M5) runs the exe
+  over every fixture and asserts the exit code and a substring of the message, and reads every *sound*
+  archive back with Python's `zipfile`; `tests/x64/Release/DOCXtoMD.Tests.exe` (M4, extended at M5) runs
+  the unit suite, which drives every case from a string literal and touches no file;
+  `tests/run_golden.py` (M5) converts every golden fixture twice — once to a file beside the input and
+  once through `--stdout`, which are different code paths in `Convert.cpp` — and byte-compares both
+  against the case's `expected.md`. None takes another's job.
+- A golden fixture is a part tree under `tests/fixtures/<case>/src/` **plus** an `expected.md` beside it,
+  and which built `.docx` compares against which case is declared in `make_fixtures.py`'s `GOLDENS`
+  table, next to the exit-code table, so a fixture and what it must produce are named in one place. The
+  mapping is many-to-one on purpose: fourteen container fixtures compare against `minimal/expected.md`,
+  which is how a byte comparison came to assert what M4 asserted with a message substring.
+- **Write an `expected.md` by hand, from the specification, before running the converter at it.** A
+  golden generated from the implementation asserts only that the implementation is deterministic. All
+  seven of M5's were derived by hand and all seven matched on the first run; when one does not, decide
+  which side is wrong rather than regenerating the file.
 - A milestone's DoD is **commands that pass**, not adjectives. Before claiming any change done:
   1. x64 Release builds with **zero warnings** at `/W3` (on Windows; on Linux say you could not build).
   2. New/changed files: prolog validates (r17 regexes), 3-space indent, no tabs, lines ≤150/180,
@@ -1106,11 +1214,79 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     beyond bookkeeping: M2 established that the six shared headers come through `/W3` clean, so a
     warning appearing from here on belongs to the commit that introduces it rather than being a latent
     header problem. M4 puts six new `src/` files and six `tests/unit/` ones under that inheritance.
-- **M5 `[todo]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal `DocWalker`/
-  `Ir`/`MdEmitter`, plus `tests/run_golden.py` (exe runner + byte-compare + exit-code assertions).
-  DoD: first golden fixture converts byte-exact.
-- **M6 `[todo]` Inline formatting** — `RunCoalescer` (merge + hoist), `MdEscape` contexts,
+- **M5 `[done-unverified]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal
+  `DocWalker`/`Ir`/`MdEmitter`, plus `tests/run_golden.py` (exe runner + byte-compare + exit-code
+  assertions). DoD: first golden fixture converts byte-exact.
+  **Status**: the code landed from Linux on 2026-08-25. The next Windows session verifies rather than
+  reimplements it, by running the four commands under "Build & run"; **only that run may flip this
+  marker to `[done]`**.
+  - **Scope taken past the minimum, and why each.** `MdEscape` is M6's line in the roadmap and lands
+    here whole, because correctness rule 6 forbids an emitter concatenating raw text and the module is
+    pure, fully specified by `docs/CONVERSION_REFERENCE.md` 4.1 and testable with no caller — M6 gets
+    its remaining callers, not its code. `Convert` and `Ir.cpp` are additions to the architecture list,
+    for the reasons given there. Exit code 6 is pulled forward from M13, because the published exit-code
+    table is a stable API and, now that a run can partly succeed, returning anything else for a mixed
+    run would make that table false. What is **not** taken early: no inline delimiter is emitted at all,
+    because a delimiter is only safe after M6's coalescing and whitespace hoisting.
+  - **Verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII only,
+    CRLF and ≤150 columns on all thirty `src/` files and all ten `tests/unit/` ones; `clang-format
+    --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs well-formed
+    XML, mutually byte-identical in their `Include=` paths, and every listed file present on disk.
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **774**
+    checks, `tests/run_golden.py` all **47** and `tests/run_container.py` all **99**, every one of them
+    under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no diagnostic. The
+    47 are seven golden cases and fourteen container fixtures converted twice each — once to a file and
+    once through `--stdout`, which are different code paths — plus the `-o`, `--stdout`, `-q`, exit-6
+    and total-failure command lines.
+  - **The definition of done, and what discharges it**: `tests/run_golden.py` byte-compares seven
+    fixture cases against a committed `expected.md`, and **each `expected.md` was written by hand from
+    the specification before the converter was run against it**. All seven matched on the first run,
+    which is the only reading of "byte-exact" worth having — a golden generated from the implementation
+    asserts nothing.
+  - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`
+    and M4 from expat: 7,500 generated documents — nested transparent wrappers, tracked changes,
+    `mc:AlternateContent` with and without a fallback, hidden runs, breaks, tabs, hyphens, and text
+    chosen to collide with every Markdown construct — were converted and then re-parsed with
+    `markdown-it-py`'s CommonMark mode, and the plain text it renders was compared against a Python
+    reimplementation of the documented walk. All 7,500 agree. That is the check that actually tests the
+    escaping: it proves no text was reinterpreted as markup and no markup appeared the source never had.
+    It found one real difference — a heading whose break kept the padding on both sides of it, emitting
+    two spaces where one renders — and one difference that is the *parser's*: `markdown-it-py` strips
+    Unicode whitespace from a block's edges, so it drops a leading U+00A0 that CommonMark keeps and
+    mapping row 35 rules we emit. The first was fixed; the second is normalised out of both sides of the
+    comparison rather than papered over on one.
+  - **Fuzzed**: 14,500 mutated archives and 8,700 generated well-formed documents through the exe, on
+    top of those 7,500.
+    Every mutated archive returns a documented exit code, every generated document satisfies the
+    emitter's own invariants — UTF-8 out, LF endings, no trailing whitespace, no blank line inside a
+    block, exactly one trailing newline — and neither sanitizer says anything.
+  - **Reviewed** by a four-area design-and-critique workflow before the code was finished and by a
+    six-dimension adversarial review after it, each finding put to a skeptic told to refute it. What
+    that changed, beyond the heading-space defect above: escaping moved from per-span to per-assembled-
+    line, because the ampersand rule looks ahead and Word fragments runs, so per-span escaping made
+    `A&amp;B` depend on where the producer split it; `MD_CONTEXT_HTML` became the inline set plus two
+    entities rather than instead of it, because GFM still parses the text between raw tags; the setext
+    rule learned that an underline needs a line above it, which removed a backslash from every `===`
+    line at the head of a block; the walker learned that mapping row 1 rules heading text is never
+    additionally bolded; `mc:ProcessContent` became transparent; the complex-script twins `w:bCs` and
+    `w:iCs` fold into the same formatting bit, because two runs that render identically must coalesce
+    at M6; and a container refusal now keeps the package's own exit code instead of always reporting 3.
+  - **The one real defect the tests found that the goldens could not**: `StyleModel`'s string heap never
+    seeded offset 0 with the empty string, so a style declaring no `w:basedOn` read offset 0 as its
+    parent and inherited whichever identifier happened to be stored first. Every golden fixture's first
+    style is `Normal`, and every other style in them is based on `Normal`, so the bug was invisible to
+    all seven; the unit suite, whose styles are ordered to make that untrue, failed seven checks at once.
+  - **What a Linux session cannot reach, and a Windows session must**: `/W3` and its zero-warnings
+    requirement, `/sdl`, `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the three
+    new `al32` structures behaves — the shim traps a misaligned 256-bit store rather than reproducing
+    MSVC's fault, which is stricter, but it is not the same code. Two of the four defects M4's review
+    fixed were reachable only on that path.
+- **M6 `[todo]` Inline formatting** — `RunCoalescer` (merge + hoist), the remaining `MdEscape` callers,
   bold/italic/strike/code/sup/sub. DoD: fragmented-run and trailing-space-in-bold fixtures pass.
+  M5 leaves three things waiting here by name: every span already carries its effective formatting, so
+  this is an extension rather than a rebuild; `MD_CONTEXT_HTML`, `MD_CONTEXT_CODE_SPAN` and the code
+  block have no caller yet; and escaping is per assembled line, which has to become per coalesced span
+  once there is markup between the spans.
 - **M7 `[todo]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs.
 - **M8 `[todo]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne numPr).
 - **M9 `[todo]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.

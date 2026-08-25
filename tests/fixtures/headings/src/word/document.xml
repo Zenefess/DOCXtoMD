@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>By name</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>By identifier</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading_20_4"/></w:pPr><w:r><w:t>An escaped space in the identifier</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Source_20_Text"/></w:pPr><w:r><w:t>A name that is not a heading stays a paragraph.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="MyHeading"/></w:pPr><w:r><w:t>Through basedOn</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Berschrift5"/></w:pPr><w:r><w:t>Named in English over a localized identifier</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading7"/></w:pPr><w:r><w:t>Clamped to six</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="TitleStyle"/></w:pPr><w:r><w:t>The title</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SubtitleStyle"/></w:pPr><w:r><w:t>The subtitle</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Outlined"/></w:pPr><w:r><w:t>From the style outline level</w:t></w:r></w:p>
+    <w:p><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:r><w:t>From a direct outline level</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="NoSuchStyle"/></w:pPr><w:r><w:t>An unknown style is an ordinary paragraph.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="LoopA"/></w:pPr><w:r><w:t>A cycle in basedOn is not a heading and is not a hang.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SelfBased"/></w:pPr><w:r><w:t>Neither is a style based on itself.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/><w:outlineLvl w:val="9"/></w:pPr><w:r><w:t>Name beats outline level</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

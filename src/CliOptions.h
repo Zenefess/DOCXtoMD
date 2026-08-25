@@ -3,9 +3,9 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-08-19
+ * Last Modified: 2026-08-25
  * Description: Parsed command line, the hard-break policy, and the usage and version writers.
- * To Do: 1) Consume the options the converter does not read yet: -o, --media-dir, --hard-break, --no-images, -q.
+ * To Do: 1) Consume the options the converter does not read yet: --media-dir and --no-images.
  *        2) Hand the input list and --threads count to Batch when M13 adds the bounded worker pool (D7a).
  *        3) Add the remaining policy switches CONVERSION_REFERENCE.md 6.3 lists, once their stages exist.
  * Dependencies: Diag.h, typedefs.h
@@ -25,11 +25,14 @@
 //== Option values
 
 /// How a w:br of type textWrapping is rendered, chosen by --hard-break.
-/// @note Nothing consumes this before M6; M2 only records it.
+/// @note M5's emitter is the first thing to read it; M2 recorded it and nothing acted on it.
 enum HARD_BREAK : ui8 {
    HARD_BREAK_BACKSLASH = 0, ///< Trailing backslash; the default
    HARD_BREAK_SPACES    = 1  ///< Two trailing spaces
 };
+
+/// Constant form of HARD_BREAK, spelled per GCS r2: the qualifier lives in the typedef.
+typedef const HARD_BREAK cHARD_BREAK;
 
 //== Parsed command line
 

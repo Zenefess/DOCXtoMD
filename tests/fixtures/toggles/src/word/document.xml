@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Visible by default.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="HiddenStyle"/></w:pPr><w:r><w:t>One hidden specification hides this.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="DoubleHidden"/></w:pPr><w:r><w:t>Two hidden specifications cancel.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="HiddenStyle"/></w:pPr><w:r><w:rPr><w:vanish w:val="0"/></w:rPr><w:t>Direct formatting wins.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rStyle w:val="CharHidden"/></w:rPr><w:t>A hidden character style hides this too.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="HiddenStyle"/></w:pPr><w:r><w:rPr><w:rStyle w:val="CharHidden"/></w:rPr><w:t>Two chains cancel.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="ExplicitOff"/></w:pPr><w:r><w:t>An explicit false is not a specification of true.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="HiddenStyle"/></w:pPr><w:r><w:t>Gone. </w:t></w:r><w:r><w:rPr><w:vanish w:val="false"/></w:rPr><w:t>Kept.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:vanish w:val="on"/></w:rPr><w:t>On means hidden.</w:t></w:r><w:r><w:t>Only this is left.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:vanish w:val="wobble"/></w:rPr><w:t>An unrecognised value reads as false.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>
