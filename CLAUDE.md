@@ -1263,8 +1263,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     which is the only reading of "byte-exact" worth having — a golden generated from the implementation
     asserts nothing.
   - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`
-    and M4 from expat: 4,000 generated documents — nested transparent wrappers, tracked changes,
-    `mc:AlternateContent` with and without a fallback, hidden runs, breaks, tabs, hyphens, and text
+    and M4 from expat. Everything in this bullet and the two after it was run from **scratch harnesses
+    the commit does not carry**, as M3's and M4's equivalents were: 4,000 generated documents — nested
+    transparent wrappers, tracked changes, `mc:AlternateContent` with and without a fallback, hidden
+    runs, breaks, tabs, hyphens, and text
     chosen to collide with every Markdown construct — were converted and then re-parsed with
     `markdown-it-py`'s CommonMark mode, and the plain text it renders was compared against a Python
     reimplementation of the documented walk. All 4,000 agree. That is the check that actually tests the
@@ -1281,8 +1283,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     resolved by the converter and by a second, independent implementation of ISO/IEC 29500-1 17.7.3
     written from the specification. The two agree on every paragraph of every table, on both things a
     style can observably do at M5: whether a run is hidden, and what heading level a paragraph is.
-  - **Fuzzed**: 15,000 mutated archives and 7,500 generated well-formed documents through the exe, on
-    top of those 4,000 and 3,150.
+  - **Fuzzed**, again from harnesses the commit does not carry: 15,000 mutated archives and 7,500
+    generated well-formed documents through the exe, on top of those 4,000 and 3,150.
     Every mutated archive returns a documented exit code, every generated document satisfies the
     emitter's own invariants — UTF-8 out, LF endings, no trailing whitespace, no blank line inside a
     block, exactly one trailing newline — and neither sanitizer says anything.

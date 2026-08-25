@@ -240,10 +240,11 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - Five golden fixture trees — `headings`, `toggles`, `textflow`, `nostyles` and `wrappers` — and an
   `expected.md` for `minimal` and `relocated` as well. Fourteen container fixtures are registered
   against `minimal/expected.md`: stored and deflated entries, fixed-Huffman blocks, ZIP64, a data
-  descriptor, an archive comment, ISO 29500 Strict URIs, a byte-order mark, a UTF-16 part, a content
-  type that disagrees with its relationship, a decoy relationship, mixed-case part names and a
-  duplicated entry name all have to produce the same bytes, which is a stronger statement than the exit
-  code and the message substring they asserted before.
+  descriptor, an archive comment, ISO 29500 Strict URIs, a byte-order mark, a UTF-16 part, a main part
+  reached through the content-type table, a content type that disagrees with its relationship, a
+  decoy relationship, mixed-case part names and a duplicated entry name all have to produce the same
+  bytes, which is a stronger statement than the exit code and the message substring they asserted
+  before.
 - Five unit suites — `TestStyleModel`, `TestDocWalker`, `TestMdEscape`, `TestMdEmitter` and
   `TestConvert` — driven entirely from string literals. `StyleLoadBytes` and `DocWalkBytes` exist so
   that they can be: they are the halves of `StyleLoad` and `DocWalk` that work over bytes rather than
@@ -320,7 +321,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   stays unreachable, because D7c reserves it for a run that converted something.
 
 - A sound container no longer exits 5 saying the converter does not exist. It converts, writes its
-  Markdown and exits 0, and `tests/make_fixtures.py`'s expectation table says so for nineteen fixtures.
+  Markdown and exits 0, and `tests/make_fixtures.py`'s expectation table says so for twenty-four
+  fixtures -- the nineteen sound packages M4 left expecting 5, and the five golden cases M5 adds.
   The `sound` flag's default moved with it, from `code == 5` to `code == 0`.
 - `src/main.cpp` is wiring again: the M4 package probe is gone, and the per-input loop calls
   `ConvertFile`.
