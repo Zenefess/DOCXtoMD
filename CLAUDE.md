@@ -620,7 +620,7 @@ check, or raise a decision to widen the baseline — do not just assume it.
 
 They live in `include/` and are owner-authored library files shared with other projects, not
 repo-local code. **Do not reformat, refactor, or re-version them**; if one needs a change, raise it
-as a numbered decision (D12+) the way D1–D11 were raised. `include/.clang-format` enforces that
+as a numbered decision (D13+) the way D1–D12 were raised. `include/.clang-format` enforces that
 mechanically — `DisableFormat: true`, so a stray "Format Document" in the IDE is a no-op there. What
 sessions need to know:
 
@@ -1366,7 +1366,7 @@ raised them: the owner accepted all four session recommendations as written. **D
 2026-08-25 and it awaits the owner. Keep the
 IDs stable — `docs/CONVERSION_REFERENCE.md` cites D1, D2, D8 and D10 by name — and keep a ruled row's question and
 the reasoning that was put to the owner rather than trimming it to the answer, because a ruling records what was
-asked as much as what was decided. New questions get the next free ID (D12, D13, …) with the same
+asked as much as what was decided. New questions get the next free ID (D13, D14, …) with the same
 question/recommendation/status shape, and stay `Open — owner call` until the owner rules.
 
 | ID | Question | **Ruling** | Executed? |
@@ -1418,4 +1418,4 @@ roadmap and reference edits, is session-derived** and may be revised without re-
 - License field in every prolog: `License: MIT  Copyright: David William Bull` (two spaces).
 - `CONTRIBUTING.MD` and `GDC_GCS_v1_1_4.md` are owner-managed — do not edit them. The six shared
   headers in `include/` are owner-authored library files — do not reformat or re-version them. Raise
-  conflicts as numbered decisions instead (like D1–D6 above).
+  conflicts as numbered decisions instead (like D1–D12 above).
