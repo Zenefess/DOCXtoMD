@@ -12,6 +12,9 @@ a shebang would not survive on a POSIX host:
     python tests/make_fixtures.py            build every fixture
     python tests/make_fixtures.py --list     name every fixture and the exit code it should produce
 
+Since M4 every fixture that is expected to be read as a package must also hold well-formed XML in the
+namespaces the converter knows: the main document part is tokenised end to end, not merely inflated.
+
 The ZIP writer here is deliberately first-party rather than zipfile: the negatives need control over
 individual header fields, and zipfile offers none. Being first-party on both sides is not a problem --
 the fixtures are validated against Python's own zlib, which is what actually pins the DEFLATE behaviour.
@@ -45,13 +48,17 @@ FIXTURES = os.path.join(ROOT, "fixtures")
 BUILD = os.path.join(ROOT, "build")
 
 # What each built fixture is for, and the exit code DOCXtoMD must return for it. run_container.py reads
+# this table, so the expectations live in exactly one place. The sound flag is a second, independent
+# question: whether the bytes are a well-formed ZIP that Python's zipfile must read back. Since M4 a
+# package can be a perfectly good archive and still not be a DOCX, so the two no longer coincide.
 # this table, so the expectations live in exactly one place.
 #   0 is never expected: no build before M5 converts anything, so a sound container still exits 5.
 EXPECTATIONS = []
 
 
-def expect(name, code, matches, why):
-    EXPECTATIONS.append({"name": name, "code": code, "matches": matches, "why": why})
+def expect(name, code, matches, why, sound=None):
+    EXPECTATIONS.append({"name": name, "code": code, "matches": matches, "why": why,
+                         "sound": (code == 5 if sound is None else sound)})
 
 
 # ---------------------------------------------------------------------------- deflate helpers
@@ -268,19 +275,19 @@ def build_all(verbose=True, writing=True):
     stored = [make_entry(name, raw, method="store") for name, raw in parts]
     note("minimal-stored.docx", stored)
     write("minimal-stored.docx", build_zip(stored))
-    expect("minimal-stored.docx", 5, ["container verified", "word/document.xml"],
+    expect("minimal-stored.docx", 5, ["package verified", "word/document.xml"],
            "every entry stored, so ZipReader copies rather than inflates")
 
     deflated = [make_entry(name, raw) for name, raw in parts]
     note("minimal-deflated.docx", deflated)
     write("minimal-deflated.docx", build_zip(deflated))
-    expect("minimal-deflated.docx", 5, ["container verified", "word/document.xml"],
+    expect("minimal-deflated.docx", 5, ["package verified", "word/document.xml"],
            "every entry deflated, CRC-32 verified after inflation")
 
     fixed = [make_entry(name, raw, strategy=zlib.Z_FIXED) for name, raw in parts]
     note("fixed-huffman.docx", fixed)
     write("fixed-huffman.docx", build_zip(fixed))
-    expect("fixed-huffman.docx", 5, ["container verified"], "RFC 1951 fixed-Huffman blocks (BTYPE 1)")
+    expect("fixed-huffman.docx", 5, ["package verified"], "RFC 1951 fixed-Huffman blocks (BTYPE 1)")
 
     # A body big and varied enough that zlib chooses dynamic Huffman, with long matches to exercise the
     # window. Generated rather than committed, so the repository does not carry 100 KiB of filler.
@@ -297,13 +304,13 @@ def build_all(verbose=True, writing=True):
                   for name, raw in parts]
     note("deflate-stored-blocks.docx", raw_blocks)
     write("deflate-stored-blocks.docx", build_zip(raw_blocks))
-    expect("deflate-stored-blocks.docx", 5, ["container verified"],
+    expect("deflate-stored-blocks.docx", 5, ["package verified"],
            "several RFC 1951 stored blocks inside one deflate stream (BTYPE 0)")
 
     dynamic = [make_entry(name, grown if name == "word/document.xml" else raw) for name, raw in parts]
     note("dynamic-huffman.docx", dynamic)
     write("dynamic-huffman.docx", build_zip(dynamic))
-    expect("dynamic-huffman.docx", 5, ["container verified", "word/document.xml %d bytes" % len(grown)],
+    expect("dynamic-huffman.docx", 5, ["package verified", "word/document.xml %d bytes" % len(grown)],
            "one RFC 1951 dynamic-Huffman block (BTYPE 2) over a 100 KiB part")
 
     # Several blocks in one stream, and a mixture of types: a full flush ends the current block and emits
@@ -313,7 +320,7 @@ def build_all(verbose=True, writing=True):
     mixed.append(make_entry("word/document.xml", grown, payload=deflate_blocks(pieces)))
     note("multi-block.docx", mixed)
     write("multi-block.docx", build_zip(mixed))
-    expect("multi-block.docx", 5, ["container verified", "word/document.xml %d bytes" % len(grown)],
+    expect("multi-block.docx", 5, ["package verified", "word/document.xml %d bytes" % len(grown)],
            "one deflate stream carrying many blocks of mixed type, ended by a final block")
 
     # Overlapping match copies -- a match that reads bytes it is still producing -- are a named M3 scope
@@ -326,22 +333,22 @@ def build_all(verbose=True, writing=True):
     overlap = [make_entry(name, repeated if name == "word/document.xml" else raw) for name, raw in parts]
     note("overlapping-matches.docx", overlap)
     write("overlapping-matches.docx", build_zip(overlap))
-    expect("overlapping-matches.docx", 5, ["container verified", "word/document.xml %d bytes" % len(repeated)],
+    expect("overlapping-matches.docx", 5, ["package verified", "word/document.xml %d bytes" % len(repeated)],
            "runs at distance 1, 2 and 3: matches that read the bytes they are still producing")
 
     write("zip64.docx", build_zip([make_entry(name, raw) for name, raw in parts], zip64=True))
-    expect("zip64.docx", 5, ["container verified"],
+    expect("zip64.docx", 5, ["package verified"],
            "ZIP64 end record, locator and extra fields on an archive small enough to review")
 
     streamed = [make_entry(name, raw, descriptor=True) for name, raw in parts]
     write("data-descriptor.docx", build_zip(streamed))
-    expect("data-descriptor.docx", 5, ["container verified"],
+    expect("data-descriptor.docx", 5, ["package verified"],
            "local headers zeroed and sizes in a trailing data descriptor")
 
     without_body = [make_entry(name, raw) for name, raw in parts if name != "word/document.xml"]
     write("no-document.docx", build_zip(without_body))
-    expect("no-document.docx", 5, ["container verified"],
-           "no word/document.xml: M3 requires only the two entry points OPC guarantees")
+    expect("no-document.docx", 3, ["main document part the package names is not in the archive"],
+           "_rels/.rels names word/document.xml and the archive does not contain it", sound=True)
 
     # Duplicate names: ZipReader documents first-in-central-directory-order as the tie-break, so the note
     # must report the first entry's size and never the decoy's.
@@ -349,13 +356,190 @@ def build_all(verbose=True, writing=True):
     doubled = [make_entry(name, raw) for name, raw in parts]
     doubled.append(make_entry("word/document.xml", decoy))
     write("duplicate-names.docx", build_zip(doubled))
-    expect("duplicate-names.docx", 5, ["container verified", "word/document.xml %d bytes" % len(body)],
+    expect("duplicate-names.docx", 5, ["package verified", "word/document.xml %d bytes" % len(body)],
            "two entries named word/document.xml: the first in directory order wins")
 
     write("with-comment.docx", build_zip([make_entry(name, raw) for name, raw in parts],
                                          comment=b"an archive comment, so the end record is not the last 22 bytes"))
-    expect("with-comment.docx", 5, ["container verified"],
+    expect("with-comment.docx", 5, ["package verified"],
            "an archive comment, so the end record is not the last 22 bytes of the file")
+
+    # -- packages the M4 model has to resolve, or refuse. Every one is a sound container: what is being
+    # tested is the package on top of it, so a failure here is never the ZIP layer's.
+
+    def swap(source, replacements):
+        """One part list with byte substitutions applied to named parts."""
+        out = []
+        for name, raw in source:
+            for target, before, after in replacements:
+                if name == target:
+                    raw = raw.replace(before, after)
+            out.append((name, raw))
+        return out
+
+    # The definition-of-done fixture: no word/ folder anywhere, so a converter that reaches for
+    # word/document.xml by name finds nothing and only relationship resolution can succeed.
+    relocated = read_part_tree("relocated")
+    write("relocated-main.docx", build_zip([make_entry(name, raw) for name, raw in relocated]))
+    expect("relocated-main.docx", 5,
+           ["package verified", "main part parts/body.xml", "styles -> /shared/theme-styles.xml"],
+           "no word/ folder at all: rId7 rather than rId1 names the body, and its prefix is x, not w")
+
+    # ISO 29500 Strict spells every namespace and relationship type differently. Both families have to
+    # walk the same code, which is what matching on the URI rather than the prefix buys.
+    strict = []
+    for name, raw in parts:
+        raw = raw.replace(b"http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+                          b"http://purl.oclc.org/ooxml/wordprocessingml/main")
+        raw = raw.replace(b"http://schemas.openxmlformats.org/officeDocument/2006/relationships/",
+                          b"http://purl.oclc.org/ooxml/officeDocument/relationships/")
+        strict.append((name, raw))
+    write("strict-namespaces.docx", build_zip([make_entry(name, raw) for name, raw in strict]))
+    expect("strict-namespaces.docx", 5, ["package verified", "word/document.xml", "styles -> /word/styles.xml"],
+           "ISO 29500 Strict URIs throughout, which must resolve exactly as Transitional ones do")
+
+    # A byte-order mark in front of a part, which Word writes on some of them.
+    marked = swap(parts, [("word/document.xml", b"<?xml", b"\xEF\xBB\xBF<?xml")])
+    write("bom-part.docx", build_zip([make_entry(name, raw) for name, raw in marked]))
+    expect("bom-part.docx", 5, ["package verified"], "a UTF-8 byte-order mark ahead of the XML declaration")
+
+    # A UTF-16 part, which ISO/IEC 29500 permits and Utf transcodes before anything tokenises it.
+    wide = []
+    for name, raw in parts:
+        if name == "word/document.xml":
+            raw = raw.decode("utf-8").encode("utf-16-le")
+            raw = b"\xFF\xFE" + raw
+        wide.append((name, raw))
+    write("utf16-part.docx", build_zip([make_entry(name, raw) for name, raw in wide]))
+    expect("utf16-part.docx", 5, ["package verified"], "word/document.xml written as UTF-16LE with a mark")
+
+    # The relationship names a part that is not there, but [Content_Types].xml still says which part is
+    # the body. The relationship decides first; this is the one path where the content type takes over.
+    recovered = swap(parts, [("_rels/.rels", b'Target="word/document.xml"', b'Target="word/missing.xml"')])
+    write("main-by-content-type.docx", build_zip([make_entry(name, raw) for name, raw in recovered]))
+    expect("main-by-content-type.docx", 5, ["package verified", "word/document.xml"],
+           "a dangling officeDocument relationship, recovered through the content-type override")
+    # The relationship names a part that is there but is typed as something else. The relationship is the
+    # specification's discovery mechanism and [Content_Types].xml is metadata, so the relationship wins.
+    # That reading of "cross-check" is decision D9, ruled 2026-08-24, and this fixture is what stops it
+    # changing silently: a session that starts refusing the file fails here rather than only contradicting
+    # CLAUDE.md, which is the whole reason a ruled decision gets a fixture and not just a table row.
+    mistyped = swap(parts, [("[Content_Types].xml",
+                             b'PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-'
+                             b'officedocument.wordprocessingml.document.main+xml"',
+                             b'PartName="/word/document.xml" ContentType="application/xml"')])
+    write("content-type-mismatch.docx", build_zip([make_entry(name, raw) for name, raw in mistyped]))
+    expect("content-type-mismatch.docx", 5, ["package verified", "main part word/document.xml"],
+           "the body is typed application/xml, and the officeDocument relationship still decides")
+    # Two officeDocument relationships, the decoy first and typed application/xml, the real body second
+    # and typed as a main document. Presence alone picks the decoy, so only a working content-type
+    # resolution picks the body -- which is what makes that half of the module testable at all.
+    decoyed = []
+    for name, raw in parts:
+        if name == "_rels/.rels":
+            raw = raw.replace(b'<Relationship Id="rId1"',
+                              b'<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/'
+                              b'officeDocument/2006/relationships/officeDocument" Target="word/decoy.xml"/>'
+                              b'<Relationship Id="rId1"')
+        decoyed.append((name, raw))
+    decoyed.append(("word/decoy.xml", body.replace(b"Minimal fixture", b"Decoy typed application/xml")))
+    decoyed.sort(key=lambda part: part[0])
+    write("decoy-main-rel.docx", build_zip([make_entry(name, raw) for name, raw in decoyed]))
+    expect("decoy-main-rel.docx", 5, ["package verified", "main part word/document.xml"],
+           "an untyped decoy relationship first: only the content-type cross-check reaches the real body")
+
+    # OPC compares part names case-insensitively. The entries stay lowercase while the Override and the
+    # relationship Target are written in mixed case, so a case-sensitive comparison finds neither.
+    mixed_case = swap(parts, [("[Content_Types].xml", b'PartName="/word/document.xml"',
+                               b'PartName="/word/Document.xml"'),
+                              ("_rels/.rels", b'Target="word/document.xml"', b'Target="Word/Document.xml"')])
+    write("mixed-case-names.docx", build_zip([make_entry(name, raw) for name, raw in mixed_case]))
+    expect("mixed-case-names.docx", 5, ["package verified", "main part word/document.xml"],
+           "part names written in a different case than the entries they name")
+
+
+
+    # -- packages that are not usable DOCX files. Every one exits 3.
+
+    broken_utf8 = swap(parts, [("word/document.xml", b"Minimal fixture", b"Minimal \xFF fixture")])
+    write("bad-utf8.docx", build_zip([make_entry(name, raw) for name, raw in broken_utf8]))
+    expect("bad-utf8.docx", 3, ["cannot begin a UTF-8 sequence"],
+           "a part carrying a byte no UTF-8 sequence can start with", sound=True)
+
+    truncated_utf8 = swap(parts, [("word/document.xml", b"Minimal fixture", b"Minimal \xE2\x82 fixture")])
+    write("truncated-utf8.docx", build_zip([make_entry(name, raw) for name, raw in truncated_utf8]))
+    expect("truncated-utf8.docx", 3, ["broken UTF-8 sequence"], "a three-byte sequence cut to two", sound=True)
+
+    doctype = swap(parts, [("word/document.xml", b"?>\n", b"?>\n<!DOCTYPE w:document [<!ENTITY x \"y\">]>\n")])
+    write("doctype.docx", build_zip([make_entry(name, raw) for name, raw in doctype]))
+    expect("doctype.docx", 3, ["document type declaration"],
+           "a DTD in the body, which is the entity-expansion attack and is refused where it stands", sound=True)
+
+    unclosed = swap(parts, [("word/document.xml", b"</w:document>", b"")])
+    write("malformed-xml.docx", build_zip([make_entry(name, raw) for name, raw in unclosed]))
+    expect("malformed-xml.docx", 3, ["ends in the middle of an element"], "a body whose root never closes",
+           sound=True)
+
+    not_types = swap(parts, [("[Content_Types].xml", b"Types>", b"NotTypes>"),
+                             ("[Content_Types].xml", b"<Types ", b"<NotTypes ")])
+    write("bad-content-types.docx", build_zip([make_entry(name, raw) for name, raw in not_types]))
+    expect("bad-content-types.docx", 3, ["does not declare content types"],
+           "[Content_Types].xml whose root element is something else entirely", sound=True)
+
+    no_office = swap(parts, [("_rels/.rels", b"relationships/officeDocument", b"relationships/styles")])
+    write("no-office-rel.docx", build_zip([make_entry(name, raw) for name, raw in no_office]))
+    expect("no-office-rel.docx", 3, ["names no main document part"],
+           "_rels/.rels with no officeDocument relationship in it at all", sound=True)
+
+    external_main = swap(parts, [("_rels/.rels", b'Target="word/document.xml"',
+                                  b'Target="http://example.com/x" TargetMode="External"')])
+    write("external-main-rel.docx", build_zip([make_entry(name, raw) for name, raw in external_main]))
+    expect("external-main-rel.docx", 3, ["names no main document part"],
+           "an officeDocument relationship pointing outside the package, which names no part of it", sound=True)
+
+    traversal = swap(parts, [("_rels/.rels", b'Target="word/document.xml"', b'Target="../../../etc/passwd"')])
+    write("traversal-target.docx", build_zip([make_entry(name, raw) for name, raw in traversal]))
+    expect("traversal-target.docx", 3, ["not a part of the package"],
+           "a relationship target climbing out of the package, refused rather than clamped", sound=True)
+
+    encoded_traversal = swap(parts, [("_rels/.rels", b'Target="word/document.xml"',
+                                      b'Target="%2e%2e/%2e%2e/etc/passwd"')])
+    write("encoded-traversal.docx", build_zip([make_entry(name, raw) for name, raw in encoded_traversal]))
+    expect("encoded-traversal.docx", 3, ["not a part of the package"],
+           "the same climb spelled in percent escapes, which decoding after normalising is what catches", sound=True)
+
+    absolute_target = swap(parts, [("_rels/.rels", b'Target="word/document.xml"',
+                                    b'Target="C:\\Windows\\System32\\drivers\\etc\\hosts"')])
+    write("drive-letter-target.docx", build_zip([make_entry(name, raw) for name, raw in absolute_target]))
+    expect("drive-letter-target.docx", 3, ["not a part of the package"],
+           "a drive-lettered target, which is a one-letter URI scheme and refused as one", sound=True)
+    # The main part's own relationships part is malformed. It is read on the path that runs whether or
+    # not anything is being printed, so -q cannot decide whether the defect is noticed.
+    bad_doc_rels = swap(parts, [("word/_rels/document.xml.rels", b"</Relationships>", b"")])
+    write("bad-document-rels.docx", build_zip([make_entry(name, raw) for name, raw in bad_doc_rels]))
+    expect("bad-document-rels.docx", 3, ["ends in the middle of an element", "document.xml.rels"],
+           "word/_rels/document.xml.rels never closes its root element", sound=True)
+
+    # A relationships part that is well-formed XML but is not a Relationships document.
+    not_rels = swap(parts, [("word/_rels/document.xml.rels", b"Relationships>", b"NotRelationships>"),
+                            ("word/_rels/document.xml.rels", b"<Relationships ", b"<NotRelationships ")])
+    write("bad-rels-root.docx", build_zip([make_entry(name, raw) for name, raw in not_rels]))
+    expect("bad-rels-root.docx", 3, ["does not hold relationships", "document.xml.rels"],
+           "a relationships part whose root element is something else entirely", sound=True)
+
+    # A structural cap of the package model rather than of the container: every byte cap in ZipReader is
+    # satisfied, and it is the number of rows that is refused.
+    crowded = list(parts)
+    for index, (name, raw) in enumerate(crowded):
+        if name != "[Content_Types].xml":
+            continue
+        rows = b"".join(b'<Override PartName="/word/pad%05d.xml" ContentType="application/xml"/>' % row
+                        for row in range(5000))
+        crowded[index] = (name, raw.replace(b"</Types>", rows + b"</Types>"))
+    write("too-many-overrides.docx", build_zip([make_entry(name, raw) for name, raw in crowded]))
+    expect("too-many-overrides.docx", 3, ["more structure than the converter will read"],
+           "five thousand Override rows, past the content-types cap and inside every byte cap", sound=True)
+
 
     # -- containers that are not usable DOCX files. Every one exits 3.
 
@@ -427,11 +611,12 @@ def build_all(verbose=True, writing=True):
 
     write("no-content-types.docx",
           build_zip([make_entry(name, raw) for name, raw in parts if name != "[Content_Types].xml"]))
-    expect("no-content-types.docx", 3, ["[Content_Types].xml"], "the first entry point OPC guarantees is absent")
+    expect("no-content-types.docx", 3, ["[Content_Types].xml"], "the first entry point OPC guarantees is absent",
+           sound=True)
 
     write("no-rels.docx",
           build_zip([make_entry(name, raw) for name, raw in parts if name != "_rels/.rels"]))
-    expect("no-rels.docx", 3, ["_rels/.rels"], "the second entry point OPC guarantees is absent")
+    expect("no-rels.docx", 3, ["_rels/.rels"], "the second entry point OPC guarantees is absent", sound=True)
 
     odd_method = []
     for name, raw in parts:

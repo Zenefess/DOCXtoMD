@@ -13,8 +13,8 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{a7840600-a91a-40f1-9b27-02bc72d3ac08}</ProjectGuid>
-    <RootNamespace>DOCXtoMD</RootNamespace>
+    <ProjectGuid>{CC6011F9-A7D5-C1BE-C365-2C876C1AA387}</ProjectGuid>
+    <RootNamespace>DOCXtoMDTests</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -43,10 +43,18 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
@@ -62,7 +70,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
@@ -78,32 +86,31 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\CliOptions.cpp" />
-    <ClCompile Include="src\Crc32.cpp" />
-    <ClCompile Include="src\Diag.cpp" />
-    <ClCompile Include="src\Inflate.cpp" />
-    <ClCompile Include="src\main.cpp" />
-    <ClCompile Include="src\OpcPackage.cpp" />
-    <ClCompile Include="src\Utf.cpp" />
-    <ClCompile Include="src\XmlPull.cpp" />
-    <ClCompile Include="src\ZipReader.cpp" />
+    <ClCompile Include="..\src\CliOptions.cpp" />
+    <ClCompile Include="..\src\Crc32.cpp" />
+    <ClCompile Include="..\src\Diag.cpp" />
+    <ClCompile Include="..\src\Inflate.cpp" />
+    <ClCompile Include="..\src\OpcPackage.cpp" />
+    <ClCompile Include="..\src\Utf.cpp" />
+    <ClCompile Include="..\src\XmlPull.cpp" />
+    <ClCompile Include="..\src\ZipReader.cpp" />
+    <ClCompile Include="unit\Check.cpp" />
+    <ClCompile Include="unit\TestMain.cpp" />
+    <ClCompile Include="unit\TestOpcPackage.cpp" />
+    <ClCompile Include="unit\TestUtf.cpp" />
+    <ClCompile Include="unit\TestXmlPull.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="include\common functions.h" />
-    <ClInclude Include="include\memory management.h" />
-    <ClInclude Include="include\SIMD management.h" />
-    <ClInclude Include="include\spinlocks.h" />
-    <ClInclude Include="include\typedefs.h" />
-    <ClInclude Include="include\vector structures.h" />
-    <ClInclude Include="src\BuildGuards.h" />
-    <ClInclude Include="src\CliOptions.h" />
-    <ClInclude Include="src\Crc32.h" />
-    <ClInclude Include="src\Diag.h" />
-    <ClInclude Include="src\Inflate.h" />
-    <ClInclude Include="src\OpcPackage.h" />
-    <ClInclude Include="src\Utf.h" />
-    <ClInclude Include="src\XmlPull.h" />
-    <ClInclude Include="src\ZipReader.h" />
+    <ClInclude Include="..\src\BuildGuards.h" />
+    <ClInclude Include="..\src\CliOptions.h" />
+    <ClInclude Include="..\src\Crc32.h" />
+    <ClInclude Include="..\src\Diag.h" />
+    <ClInclude Include="..\src\Inflate.h" />
+    <ClInclude Include="..\src\OpcPackage.h" />
+    <ClInclude Include="..\src\Utf.h" />
+    <ClInclude Include="..\src\XmlPull.h" />
+    <ClInclude Include="..\src\ZipReader.h" />
+    <ClInclude Include="unit\Check.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -109,7 +109,7 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   the rule it broke — not a ZIP, an OLE compound file (so an encrypted `.docx` or a legacy `.doc`),
   encrypted entries, an unsupported compression method, a truncated archive, a malformed structure, a
   size that disagrees with the directory, a corrupt deflate stream, a failed CRC-32, or a decompression
-  cap — and each of the nine ways a deflate stream can be corrupt gets its own wording.
+  cap — and each of the eight ways a deflate stream can be corrupt gets its own wording.
 - `DiagNoteText`, a progress writer on **stderr** so that `--stdout` can hand a document to a pipe
   uncontaminated. `-q` suppresses notes; until `Diag` owns that flag it is the caller that decides not
   to call.
@@ -132,11 +132,120 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   writes ZIP records itself and `ZipReader` reads them itself, so the two agreeing proves less than it
   looks — one shared misreading of the format would satisfy both. An independent implementation
   decompressing every entry and checking it against the CRC-32 in its header is what closes that.
-- `/tests/build/` in `.gitignore` — the `.docx` files `make_fixtures.py` writes are generated, the part
-  trees are not. And `*.py text eol=crlf` in `.gitattributes`, so the test scripts follow tc2 with the
+- `/tests/build/` and `__pycache__/` in `.gitignore` — the `.docx` files `make_fixtures.py` writes are
+  generated, the part trees are not, and CPython drops a `__pycache__/` wherever one script imports
+  another, which `run_container.py` does. `__pycache__/` is deliberately the one pattern with no
+  leading `/`: it can appear in any directory, while every build-output pattern is anchored to the
+  repository root. And `*.py text eol=crlf` in `.gitattributes`, so the test scripts follow tc2 with the
   rest of the tree; they carry no shebang, because a CRLF shebang does not survive on a POSIX host.
+- `src/Utf.h`/`.cpp` — UTF-8 validation over a 256-row lead-byte table built by a `constexpr` function,
+  so no run-time initialiser exists for a worker to race. The table is Unicode 15.0 table 3-7: each row
+  carries the sequence length, the range the *first* continuation byte may take, and what a byte inside
+  `80..BF` but outside that range means, which is how an overlong form, an encoded surrogate and a code
+  point above U+10FFFF are each reported as their own class rather than lumped together — and each with
+  the offset of the offending sequence. Also `UtfDecode`/`UtfEncode` for one code point, `UtfFromWide`
+  for the console and path boundary, and `UtfTranscodeUtf16` for a part that turns out to be UTF-16.
+  The two UTF-16 directions differ deliberately: the console path substitutes U+FFFD for a lone
+  surrogate, because a path that cannot be represented should still be reported; a part is refused,
+  because that is document content. It is scalar on purpose — an AVX2 ASCII skip is a p4 performance
+  *claim*, so it waits for a `bench/` diff (bd1/bd2).
+- `src/XmlPull.h`/`.cpp` — the first-party streaming pull tokenizer decision D2 settled on. Namespaces
+  resolve by **URI**, never by prefix, with the ECMA-376 Transitional and ISO 29500 Strict families
+  mapped onto one value, so a Strict document walks the same code as a Transitional one. `<!DOCTYPE` is
+  refused at the byte it starts, before its internal subset is looked at, which is the whole
+  billion-laughs and XXE defence and costs nothing; there is no entity table, so any reference but XML's
+  five and a valid character reference is an error. A decoded reference is never re-scanned — `&#38;#38;`
+  yields the five bytes `&#38;` — which is a security property rather than a nicety. Elements, attributes
+  and namespace bindings live in inline arrays with ceilings (256, 128, 128), so deep nesting is a
+  refusal rather than a blown stack. Steady state allocates nothing: a text run or attribute value
+  holding no reference, carriage return or CDATA is handed back as a view into the part itself, and the
+  one scratch arena is allocated lazily at the part's own size and never grows, because decoding always
+  produces fewer bytes than it consumes. XML 1.0's `Char` production is enforced, which matters above
+  this module: a NUL is well-formed UTF-8, and `OpcPackage` copies attribute values into NUL-terminated
+  storage.
+- `src/OpcPackage.h`/`.cpp` — the package model, and where "resolve, never hardcode" is actually kept.
+  The only names read by name are `[Content_Types].xml` and `_rels/.rels`, the two ISO/IEC 29500-2
+  guarantees; the main document part comes from the `officeDocument` relationship. `OpcResolveTarget` is
+  pure and allocation-free: dot segments are removed inside the package namespace only, a climb above
+  the root is refused rather than clamped the way RFC 3986 discards it, percent escapes are decoded
+  *after* normalising and the result re-checked (closing the `%2e%2e` bypass), and a URI scheme is
+  refused outright — one rule covering `file://`, an `http://` target mislabelled Internal, and a bare
+  `C:` drive letter, which is a grammatically valid one-letter scheme. Parts are inflated once and
+  cached, which is a correctness matter and not only a speed one: `ZipReadEntry` charges its
+  decompression cap on every read and never credits it back. `OpcLoadXmlPart` is the only door to a
+  tokenizer, which is how M4's "rather than reaching the walker" is structural rather than a convention.
+- `tests/unit/` and `tests/DOCXtoMD.Tests.vcxproj` — the unit-test harness the roadmap asks for: a
+  `CHECK` macro over `typedefs.h` and `<stdio.h>` and nothing else, and one suite per module, 356 checks in all, every
+  case driven from a string literal so the binary needs no working directory and no fixture path. The
+  project is modelled on `DOCXtoMD.vcxproj` line for line and compiles every `src\*.cpp` but `main.cpp`.
+  It differs in two ways, both deliberate: `$(ProjectDir)..\src` on the include path, because a file in
+  `tests\unit\` cannot reach a `src\` header by the quoted-include rule; and a pinned `OutDir`/`IntDir`,
+  because MSBuild's default is `$(SolutionDir)`-relative and the binary would otherwise move depending on
+  whether the solution or the project was built. `DOCXtoMD.sln` gains the project and `.gitignore` gains
+  `/tests/x64/`.
+- `tests/fixtures/relocated/src/` — M4's definition-of-done fixture, built so that a by-name
+  implementation cannot pass it: no `word/` folder anywhere, the body at `parts/body.xml` reached through
+  `rId7` rather than `rId1`, the styles part at `shared/theme-styles.xml` reached through a `../` target,
+  and the body spelled with the prefix `x:` rather than `w:`.
+- Twenty-one new fixtures in `make_fixtures.py`, all of them sound archives so that the failure under test
+  is the package's and never the container's: `relocated-main`, `strict-namespaces`, `bom-part`,
+  `utf16-part`, `main-by-content-type` and `content-type-mismatch` convert as far as M4 goes; `bad-utf8`,
+  `truncated-utf8`, `doctype`, `malformed-xml`, `bad-content-types`, `no-office-rel`, `external-main-rel`,
+  `traversal-target`, `encoded-traversal`, `drive-letter-target`, `bad-document-rels`, `bad-rels-root` and
+  `too-many-overrides` are refused with the sentence each one earns; and `decoy-main-rel` and
+  `mixed-case-names` came later with the review fixes, each mutation-tested to prove it bites — the
+  first fails if content-type resolution is disabled, the second if case folding is. 356 unit checks
+  and 89 container checks in total, the latter being 49 fixtures + 4 command lines + 35 `zipfile`
+  cross-checks + 1 absent input.
+- Decisions **D8**, **D9**, **D10** and **D11**, raised by M4 and **ruled by the owner the same day**, who
+  accepted all four recommendations as written. D8 settles a direct conflict between two governing
+  documents over ill-formed UTF-8, in favour of refusing the part. D9 settles what "cross-check" means
+  when a relationship and a content type disagree: the relationship decides. D10 leaves ZIP entry names
+  carrying a backslash or a traversal shape exactly as they are and hands the question to M11, to be
+  answered against the producer-variance corpus rather than guessed. D11 commits the mechanical GCS
+  validator at M12 with CI, `include/` exempt. No decision is open.
 
 ### Changed
+
+- `docs/CONVERSION_REFERENCE.md` 5.12 no longer says to "replace invalid sequences with U+FFFD rather
+  than aborting". It says to refuse a part that is not valid UTF-8, naming the part and which rule the
+  bytes broke, which is what the code has always done and what decision D8 ruled. This is the edit the ruling was for:
+  until it, two governing documents told a session opposite things and CLAUDE.md had to carry a standing
+  note not to "fix" either one toward the other. That note is gone with the conflict.
+- `docs/CONVERSION_REFERENCE.md`'s path-traversal bullet now separates the two halves that decision D10
+  found tangled: a relationship **target** of a traversal shape has been refused since M4, while what a
+  ZIP **entry name** of that shape should do is deferred to M11 by the ruling.
+- The roadmap entries for **M11** and **M12** carry the work D10 and D11 handed them, with a definition of
+  done each, so a deferred decision is a scheduled task rather than a note. M11 may not close without
+  recording an answer on entry names; M12's validator must hold `include/`'s exemption in the validator
+  itself rather than only in the CI invocation, so running it by hand cannot produce a different verdict.
+- The `To Do` items that named an unruled decision now name the milestone that owns the work:
+  `Utf.h` drops its "substitute U+FFFD should D8 be ruled that way" item outright, and `ZipReader.h`,
+  `ZipReader.cpp` and `OpcPackage.cpp` point their entry-name items at M11. `OpcPackage.cpp`'s item cited
+  **D9** for a question that was always **D10**'s; that miscitation is corrected.
+- `main.cpp`'s per-input check is a **package** probe rather than a container probe. It resolves the main
+  document part through `_rels/.rels`, loads it through the validating loader, tokenizes it end to end and
+  reports the entry count, the resolved part with its size and element count, and which of styles,
+  numbering, settings, footnotes, endnotes and comments the main part relates to. `src/` now holds no
+  literal part name but the two ISO/IEC 29500-2 guarantees. The two closes are on one path, because the
+  package borrows the reader and a per-branch close would turn the next branch anyone adds into a
+  use-after-free.
+- Every package failure names the part it happened in: `not a valid DOCX; a part is malformed XML, in
+  word/document.xml`. A message that says only that *something* is wrong is not a clear message when a
+  package holds a dozen parts.
+- `Diag`'s local `WideCharToMultiByte` is gone; wide arguments cross to UTF-8 through `Utf` like
+  everything else, which is what the M4 roadmap entry asked for. Its prolog's `To Do` item 2 retires with
+  it.
+- `no-document.docx` inverts from exit 5 to exit 3. At M3 a package missing `word/document.xml` was sound,
+  because only the two guaranteed entry points were required; at M4 `_rels/.rels` names that part and the
+  archive does not contain it, so the package is refused. That inversion is the clearest single sign that
+  the main part is now resolved rather than assumed.
+- The expectation table carries a **`sound`** flag beside the exit code, and `run_container.py`'s
+  independent `zipfile` cross-check selects on it. Until M4 "is this a well-formed ZIP" and "does this
+  exit 5" were the same question; a package can now be a perfectly good archive and still not be a DOCX,
+  and without the flag every new package-level negative would have dropped silently out of the
+  cross-check. The dead body comparison beside it — which compared a value against itself for every row
+  that was not in `SAME_BODY` — is gone.
 
 - `DOCXtoMD.cpp` no longer includes `<iostream>`; it includes `typedefs.h` — resolved through
   the project's `$(ProjectDir)include` search path — and returns `si32` per r1. A note records that
@@ -162,6 +271,88 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   converted".
 - A run in which several inputs fail now returns the **highest** of their per-file verdicts. Exit code 6
   stays unreachable, because D7c reserves it for a run that converted something.
+
+### Fixed
+
+- `tests/unit/Check.cpp` did not include `BuildGuards.h`, though its own prolog declared the dependency
+  and every other project `.cpp` includes it first. It was the one file that could have compiled without
+  D4's `#ifndef __AVX2__` guard, which is precisely the file list that guard exists to cover.
+- Nineteen documentation statements that an eight-dimension audit found false against the repository, each
+  one put to a skeptic told to refute it before it was acted on. The material ones follow; the two bullets
+  below this one break out the rest. `CLAUDE.md`'s `Diag`
+  bullet still described the `WideCharToMultiByte` call M4 deleted and called `Utf` "planned", two
+  paragraphs above the bullet that says `Utf` owns every wide conversion; `.editorconfig` was described
+  as carrying four `RULE-DEV` exemptions when it carries six, and the two unlisted ones included a
+  4-space `[*.py]` indent that flatly contradicted two absolute statements of r8 elsewhere in the same
+  file; M4's 89-check breakdown named components that summed to 93; M3's and M4's "verified mechanically"
+  bullets both claimed the r17 prolog regexes and the 3-space rule had passed on `tests/*.py`, which
+  carry a tagged r17 deviation and a tagged 4-space one and could not have passed either; the `XmlPull`
+  bullet said two relaxations of XML 1.0 where the header documents three; and `docs/CONVERSION_REFERENCE.md`
+  still called stage 2 an "in-memory DOM" and listed three main-document content types where the code
+  recognises four.
+- The claim, introduced with the D8 consequence edit, that a refused part is reported "naming the part
+  and the byte offset". `UtfValidate` computes the offset and `OpcLoadXmlPart` discards it: the message
+  names the part and which rule the bytes broke, and nothing prints an offset. Both the reference and this
+  changelog said otherwise for one commit.
+- Four stale counts in this file, each correct when written and never updated by the commit that changed
+  it: "274 checks" (never true at any commit; 356), "297 unit checks and 85 container checks" (356 and
+  89), "Eighteen new fixtures" (twenty-one, and the entry's own list named nineteen), and "nine ways a
+  deflate stream can be corrupt" (eight; `INFLATE_RESULT` has eight error values and the ninth row of the
+  sentence table is `INFLATE_OK`). The `.gitignore` entry also recorded one of the two patterns its commit
+  added, silently dropping `__pycache__/`.
+- `src/XmlPull.h`'s first `To Do` still asked for an attribute's namespace URI to be reported, which the
+  review fix that made attribute identity URI-based had already delivered.
+
+- `XmlPull` compared two attributes by their resolved namespace *value* rather than by their URI, so two
+  attributes from two namespaces the build does not know — `w14:id` and `w15:id`, say, which both resolve
+  to `XML_NS_OTHER` — were refused as the same attribute twice. Attribute identity is now the URI plus the
+  local name, as Namespaces in XML defines it, and the URI is reported beside each attribute. Found by
+  differential-testing the tokenizer against Python's expat over generated documents.
+- `XML_READER` and `OPC_PACKAGE` are zeroed with `mzero`, which dispatches on **size**: a size that is a
+  multiple of 32 takes a path of *aligned* 256-bit stores. `sizeof(XML_READER)` is such a size, and every
+  instance is a stack local, which MSVC aligns to 8 or 16 — undefined behaviour, and a fault the moment
+  the compiler lowers the store to `vmovdqa`. Both structs now carry `al32`, with a `static_assert` that
+  keeps the requirement stated. This could not have been found on Linux: the shim replaces `mzero` with
+  `memset`, so the real function has never run anywhere. It is exactly what the "never claim the build
+  passes when you could not run msbuild" rule exists for.
+- `XmlPull` rescanned to the end of a run of character data for *every* reference in it, so a run of *n*
+  references cost *n* times the run's length. A 2.6 KB `.docx` holding 512 KB of `&amp;` took ten seconds;
+  a 270 KB one would have taken about a month, well inside every ZIP cap. The scan is hoisted and
+  recomputed only when the cursor passes it: 640 KB went from 15.9 s to 0.007 s, and the scaling is linear.
+- A namespace binding stored its URI as a view into the per-token scratch arena, which the next token
+  rewinds — so a URI that had to be decoded went stale, prefixes resolved to whatever the following token
+  had written, and two distinct namespaces could compare equal. A well-formed part was refused as carrying
+  a duplicate attribute, and a genuinely duplicated one was accepted. The arena is now rewound only to the
+  floor the innermost open element set, so a binding's bytes survive as long as the binding does.
+- Main-document discovery scanned the part table once per `officeDocument` relationship, and content types
+  were resolved eagerly for every part against every Override row. A package could spend two minutes being
+  refused, or eight seconds being *accepted*, entirely inside the ZIP caps. Candidates are now capped at
+  eight — ISO/IEC 29500-2 allows exactly one — and content types resolve on the first ask and are
+  remembered, which removes the product rather than shrinking it.
+- A control byte in a ZIP entry name reached the console intact, so a carriage return in one could
+  overwrite the line a message was printed on. Entry names are filtered where messages are composed.
+- Content types were compared case-sensitively, where the specification says they are not.
+- `OpcResultText(nullptr, OPC_ERROR_ZIP)` answered "the container is intact", which is the opposite of what
+  it was asked.
+- A truncated `<!` reported a document type declaration that was not there. It now says the part is cut off.
+- `tests/unit/TestXmlPull.cpp` and `TestOpcPackage.cpp` called `printf` without including `<stdio.h>`.
+  Real `<windows.h>` under `WIN32_LEAN_AND_MEAN` does not declare it, so the unit-test binary — a
+  definition-of-done deliverable — could not have built under MSVC. Found by making the Linux shim
+  faithful rather than convenient: a shim that includes more than the real header hides exactly this.
+- `OpcResolveTarget` applied its banned-byte rule only to bytes a percent escape produced, never to
+  literal ones, so a colon that did not follow a URI scheme reached a part name: `document.xml:stream`
+  was refused as a scheme, but `1:stream` was not. The same held for `*`, `"`, `<`, `>` and `|`. The rule
+  now runs over every byte of the finished name. A decoded name is also checked as UTF-8, because a
+  percent escape can spell a byte that is not text, and such a name would simply never match an entry —
+  a silent "not found" where the truth is "not a name". Found by checking every accepted target against
+  an independent RFC 3986 reference.
+- `UtfTranscodeUtf16` asked `UtfBomBytes` for the mark to skip, which also reports the three bytes of a
+  UTF-8 one; skipping three put every UTF-16 code unit one byte out of phase with the even-length
+  invariant checked immediately above it. It now recognises only the two-byte marks it can act on.
+- `UtfTranscodeUtf16` returned `UTF8_OK` with a null buffer for a zero-length part, though the header
+  promises a buffer on success and the caller treats a null one as "not loaded yet".
+- `UtfFromWide` reported zero bytes produced after `UTF8_ERROR_SPACE`, even where it had already filled
+  part of the destination.
 
 ### Removed
 

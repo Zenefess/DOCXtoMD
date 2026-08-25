@@ -2,8 +2,8 @@
 # docstring below holds the same information in the form the language allows.
 """Runs every container fixture through DOCXtoMD and checks the documented exit code and message.
 
-This is M3's definition of done made runnable. It builds the fixtures first, so one command covers the
-whole check:
+This is M3's and M4's definitions of done made runnable. It builds the fixtures first, so one command
+covers the whole check:
 
     python tests/run_container.py                                   x64\\Release\\DOCXtoMD.exe
     python tests/run_container.py --exe x64\\Debug\\DOCXtoMD.exe     any other build
@@ -85,14 +85,14 @@ def cross_check(expectations, failures):
     checked = 0
 
     for row in expectations:
-        if row["code"] != 5:
+        if not row["sound"]:
             continue
         name = row["name"]
         checked += 1
         try:
             with zipfile.ZipFile(os.path.join(make_fixtures.BUILD, name)) as archive:
                 broken = archive.testzip()
-                body = archive.read("word/document.xml") if name in SAME_BODY else want
+                body = archive.read("word/document.xml") if name in SAME_BODY else None
         except Exception as trouble:                                        # noqa: BLE001 - report anything
             failures.append((name, "python zipfile could not read it: %s" % trouble, "cross-check"))
             print("FAIL  %-28s python zipfile could not read it: %s" % (name, trouble))
@@ -100,7 +100,7 @@ def cross_check(expectations, failures):
         if broken is not None:
             failures.append((name, "python zipfile reports a bad entry: %s" % broken, "cross-check"))
             print("FAIL  %-28s python zipfile reports a bad entry: %s" % (name, broken))
-        elif body != want:
+        elif body is not None and body != want:
             failures.append((name, "python zipfile reads different bytes", "cross-check"))
             print("FAIL  %-28s python zipfile reads %d bytes, not the part tree's %d" % (name, len(body), len(want)))
         elif name in SAME_BODY:

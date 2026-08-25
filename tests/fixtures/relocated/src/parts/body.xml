@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<x:document xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <x:body>
+    <x:p>
+      <x:pPr>
+        <x:pStyle x:val="Heading1"/>
+      </x:pPr>
+      <x:r>
+        <x:t>Relocated fixture</x:t>
+      </x:r>
+    </x:p>
+    <x:p>
+      <x:r>
+        <x:t xml:space="preserve">The prefix here is x, not w, so anything matching on the prefix </x:t>
+      </x:r>
+      <x:r>
+        <x:rPr>
+          <x:b/>
+        </x:rPr>
+        <x:t>fails</x:t>
+      </x:r>
+      <x:r>
+        <x:t xml:space="preserve"> instead of resolving the namespace URI.</x:t>
+      </x:r>
+    </x:p>
+    <x:sectPr>
+      <x:pgSz x:w="11906" x:h="16838"/>
+    </x:sectPr>
+  </x:body>
+</x:document>
