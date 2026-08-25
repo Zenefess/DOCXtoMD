@@ -5,9 +5,9 @@
  * Created: 2026-08-25
  * Last Modified: 2026-08-25
  * Description: Style part parsing, basedOn folding, role detection and the toggle-XOR resolution.
- * To Do: 1) Index the style identifiers when a part near STYLE_MAX_STYLES makes the linear StyleFind bite.
- *        2) Fold w:link so a character style can be reached from the paragraph style it pairs with.
- *        3) Keep the rFonts ascii name when M6 needs it to spot a monospace run.
+ * To Do: 1) Fold w:link so a character style can be reached from the paragraph style it pairs with.
+ *        2) Keep the rFonts ascii name when M6 needs it to spot a monospace run.
+ *        3) Grow the walker's one-entry style cache if a document is found alternating between many.
  * Dependencies: BuildGuards.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h, memory management.h,
  *               windows.h
  * ISA: Scalar
@@ -83,6 +83,17 @@ static cbool StyleTextEqual(cchptr a, cchptr b) {
 
    while(a[index] && a[index] == b[index]) ++index;
    return a[index] == b[index];
+}
+
+// FNV-1a over a NUL-terminated identifier. Any well-mixed hash will do here: it is only ever used to
+// pick a bucket, and every candidate is confirmed with a full byte comparison before it is returned.
+static cui32 StyleTextHash(cchptr text) {
+   ui32 hash = 2166136261u;
+
+   for(ui64 index = 0; text[index]; ++index) {
+      hash = ui32((hash ^ ui32(ui8(text[index]))) * 16777619u);
+   }
+   return hash;
 }
 
 // Whether a byte is one of the four XML calls whitespace.
@@ -326,7 +337,12 @@ static cbool StyleReadStyle(STYLE_MODELptrc model, XML_READERptrc reader, boolpt
 
    // Every attribute is read and copied before the walk begins: a view the reader hands out dies on the
    // next XmlNext call, and the walk below makes hundreds of them.
-   if(idValue.bytes && !StyleHeapAdd(model, idValue.bytes, idValue.length, &idAt)) return false;
+   // Capped at what the walker's lookup key can hold. ST_String stops at 255 bytes, so a longer id is
+   // already out of spec; storing it in full would make it one the document can never match, because
+   // DocFindStyle truncates a w:pStyle value to the same ceiling and the two would differ at byte 255.
+   cui64 idLength = (idValue.length < STYLE_MAX_NAME_BYTES ? idValue.length : STYLE_MAX_NAME_BYTES - 1u);
+
+   if(idValue.bytes && !StyleHeapAdd(model, idValue.bytes, idLength, &idAt)) return false;
    StyleNormalizeName(idValue.bytes ? idValue.bytes : "", idValue.bytes ? idValue.length : 0u, identifier, sizeof(identifier));
    for(;;) {
       cXML_TOKEN token = XmlNext(reader);
@@ -351,8 +367,11 @@ static cbool StyleReadStyle(STYLE_MODELptrc model, XML_READERptrc reader, boolpt
          }
       } else if(XmlIsElement(reader, XML_NS_W, "basedOn")) {
          cXML_TEXT value = XmlAttribute(reader, XML_NS_W, "val");
+         // Capped like the identifier above, and for the same reason: StyleLinkChains resolves this
+         // through StyleFind, so a value longer than a stored id could never match one.
+         cui64 kept = (value.length < STYLE_MAX_NAME_BYTES ? value.length : STYLE_MAX_NAME_BYTES - 1u);
 
-         if(value.bytes && !StyleHeapAdd(model, value.bytes, value.length, &basedOnAt)) return false;
+         if(value.bytes && !StyleHeapAdd(model, value.bytes, kept, &basedOnAt)) return false;
       }
       if(!XmlSkipElement(reader)) return false;
    }
@@ -436,6 +455,47 @@ static cbool StyleReadDefaults(STYLE_MODELptrc model, XML_READERptrc reader) {
    model->defaults.webHidden    = runs.run.webHidden;
    model->defaults.vertAlign    = runs.run.vertAlign;
    return true;
+}
+
+//-- Identifier index
+
+// Builds the styleId index, once, after every style has been read and before anything looks one up.
+// Open addressing with linear probing over a power-of-two table at least twice the style count, so the
+// load factor stays under a half and a probe is short. A failure here is not fatal: StyleFind falls
+// back to its linear scan, which is slower but returns the same answer.
+static void StyleBuildIndex(STYLE_MODELptrc model) {
+   ui64 count = 8u;
+
+   while(count < ui64(model->styleCount) * 2u) count *= 2u;
+
+   si32ptr buckets = (si32ptr)amalloc(count * sizeof(si32), 32u);
+
+   if(!buckets) return;
+   for(ui64 slot = 0; slot < count; ++slot) buckets[slot] = -1;
+
+   cui32 mask = ui32(count - 1u);
+
+   for(ui32 index = 0; index < model->styleCount; ++index) {
+      cchptr identifier = StyleHeapText(model, model->styles[index].idAt);
+
+      if(!identifier[0]) continue; // An empty id can never be looked up, so it never takes a slot
+
+      ui32 slot = StyleTextHash(identifier) & mask;
+      bool seen = false;
+
+      while(buckets[slot] >= 0) {
+         // Duplicate identifiers resolve to the first record, which is what the linear scan did and
+         // what the header documents, so a later one is dropped rather than overwriting the earlier.
+         if(StyleTextEqual(StyleHeapText(model, model->styles[buckets[slot]].idAt), identifier)) {
+            seen = true;
+            break;
+         }
+         slot = (slot + 1u) & mask;
+      }
+      if(!seen) buckets[slot] = si32(index);
+   }
+   model->buckets    = buckets;
+   model->bucketMask = mask;
 }
 
 //-- Chain folding
@@ -581,6 +641,9 @@ cSTYLE_RESULT StyleLoadBytes(STYLE_MODELptrc model, cui8ptr bytes, cui64 byteCou
 
    model->resolved = (STYLE_RESOLVEDptr)amalloc(sizeof(STYLE_RESOLVED) * wanted, 32u);
    if(!model->resolved) return STYLE_ERROR_MEMORY;
+   // The index goes in before the chains, because StyleLinkChains is itself a lookup per style and
+   // would otherwise be the load-time half of the same quadratic.
+   StyleBuildIndex(model);
    StyleLinkChains(model);
    for(ui32 index = 0; index < model->styleCount; ++index) StyleFoldChain(model, index);
    model->hasPart = true;
@@ -588,6 +651,7 @@ cSTYLE_RESULT StyleLoadBytes(STYLE_MODELptrc model, cui8ptr bytes, cui64 byteCou
 }
 
 void StyleClose(STYLE_MODELptrc model) {
+   mdealloc(model->buckets);
    mdealloc(model->styles);
    mdealloc(model->resolved);
    mdealloc(model->heap);
@@ -596,6 +660,23 @@ void StyleClose(STYLE_MODELptrc model) {
 
 csi32 StyleFind(cSTYLE_MODELptr model, cchptr styleId) {
    if(!styleId || !styleId[0]) return -1;
+   // Without the index this is a linear scan of full byte comparisons, and the walker calls it once
+   // per styled paragraph: a document with many paragraphs and a styles.xml with many long-prefixed
+   // identifiers then costs paragraphs x styles x identifier length, which a 45 KB .docx can drive
+   // into minutes of silence. The scan survives only for a model whose index could not be allocated.
+   if(model->buckets) {
+      cui32 mask = model->bucketMask;
+      ui32  slot = StyleTextHash(styleId) & mask;
+
+      for(ui32 step = 0; step <= mask; ++step) {
+         csi32 found = model->buckets[slot];
+
+         if(found < 0) return -1; // An empty slot ends the probe: nothing past it can be this id
+         if(StyleTextEqual(StyleHeapText(model, model->styles[found].idAt), styleId)) return found;
+         slot = (slot + 1u) & mask;
+      }
+      return -1;
+   }
    for(ui32 index = 0; index < model->styleCount; ++index) {
       if(StyleTextEqual(StyleHeapText(model, model->styles[index].idAt), styleId)) return si32(index);
    }

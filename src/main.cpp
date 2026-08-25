@@ -23,6 +23,13 @@
 #include "Convert.h"
 #include "Diag.h"
 
+//-- Messages
+
+// The two ways one input's output path is already spoken for. Named constants because the ternary
+// that chooses between them does not fit inside e2's 150 columns with both sentences written inline.
+constexpr cchptr TAKEN_BY_INPUT   = "the output path is another input of this run";
+constexpr cchptr TAKEN_BY_EARLIER = "an earlier input already writes that output file";
+
 //== Entry point
 
 // r11 does not reach this name: the entry point is spelled by the language, not chosen here. Wide argv is
@@ -58,6 +65,20 @@ si32 wmain(si32 argc, wchptrptr argv) {
    // RULE-DEV:a2 single-threaded by owner ruling (D5, narrowed by D6): the bounded worker pool that walks
    // this list belongs to Batch, which M13 adds. Until then the driver visits each input in argument order.
    for(ui32 i = 0; i < options.inputCount; ++i) {
+      // Pre-flight, before anything is written: D7b derives every output name from an input's own
+      // leaf, so two inputs named report.docx in two directories both target one report.md. Left
+      // alone that converts both and keeps the second, which is silent data loss reported as success.
+      cCONVERT_TARGET taken = ConvertTargetTaken(&options, i);
+
+      if(taken != CONVERT_TARGET_FREE) {
+         cchptr why = (taken == CONVERT_TARGET_IS_INPUT ? TAKEN_BY_INPUT : TAKEN_BY_EARLIER);
+
+         DiagErrorText(why, options.inputs[i]);
+         ++failures;
+         if(si32(EXIT_OUTPUT) > worst) worst = si32(EXIT_OUTPUT);
+         continue;
+      }
+
       cEXIT_CODE code = ConvertFile(&options, options.inputs[i]);
 
       if(code == EXIT_ALL_CONVERTED) {

@@ -184,7 +184,13 @@ below.
     come from the normalized `w:name` first and the normalized `w:styleId` second, which is what lets an
     English `w:name` over a localized identifier and a LibreOffice `Heading_20_4` both resolve; the raw
     identifier is what `StyleFind` matches, because decoding escapes on the lookup path would collapse
-    `Source_20_Text` and `Source Text` into one key. A missing styles part is legal and yields an empty
+    `Source_20_Text` and `Source Text` into one key. That match goes through an **open-addressed index
+    built once at load**, and the index is a correctness matter more than a speed one: the walker looks
+    up a style per styled paragraph behind a one-entry cache, so a linear scan makes a spec-legal 45 KB
+    `.docx` — many long-prefixed identifiers, paragraphs alternating between two of them — spin for
+    seconds with no output and no refusal. An identifier is stored capped at `STYLE_MAX_NAME_BYTES`,
+    which is what the walker's lookup key holds, so a value longer than that cannot be stored in a form
+    the document could never match. A missing styles part is legal and yields an empty
     model; a **present** one that is malformed is a refusal, on the same reasoning as D8. Heap offset 0
     is seeded with the empty string, without which a style declaring no `w:basedOn` inherits whichever
     identifier happened to be stored first — a real defect the golden fixtures missed and the unit
@@ -242,7 +248,14 @@ below.
     separator names a directory whatever the input count, because no Windows file name may end in one.
     The output file is written with `CreateFileW`/`WriteFile` and **deleted again if the write does not
     finish** — a half-written `.md` that looks converted is worse than none. A derived path equal to
-    the input is refused rather than overwritten.
+    the input is refused rather than overwritten, and `ConvertTargetTaken` is the pre-flight over the
+    whole input list: D7b derives every name from an input's own leaf, so two inputs called
+    `report.docx` in two directories both target one `report.md`, and left alone the second silently
+    destroys the first. The first input to name a path keeps it; a later one, and any input whose
+    derived output is another input of the same run, are refused into D7c's failure list. One input
+    named twice is not a collision, because it writes the same bytes over its own output. The
+    architecture note gives that pre-flight to `Batch` at M13; `main.cpp`'s loop is what `Batch`
+    replaces, so it lives there until then.
   - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, option handling, the input loop and the
     exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
   - **What the binary does at M5**: `--help`/`--version` exit 0, a usage error exits 1 after printing
@@ -1248,7 +1261,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     CRLF and ≤150 columns on all thirty `src/` files and all eleven `tests/unit/` ones; `clang-format
     --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs well-formed
     XML, mutually byte-identical in their `Include=` paths, and every listed file present on disk.
-  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **811**
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **839**
     checks, `tests/run_golden.py` all **47** and `tests/run_container.py` all **99**, every one of them
     under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no diagnostic. The
     47 are twenty archives converted twice each — once to a file and once through `--stdout`, which are
@@ -1315,6 +1328,24 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     content; a dead `mc:ProcessContent` *element* branch went, because MCE spells it an attribute and
     no conformant document can carry the element; and the `wrappers` fixture's `w:tbl` and dangling
     `r:id` were made valid WordprocessingML, so M7 and M9 inherit a fixture rather than a typo.
+  - **Two of the six review dimensions died of context exhaustion and were re-run split five ways**, each
+    with a bounded reading list, and each finding again put to a skeptic. That round found the two
+    defects that lose data. `--stdout` **reported success after a failed write**: `DiagWriteOutBytes`
+    returned `void`, so a bad handle or a short `WriteFile` left the process exiting 0 having emitted
+    nothing or half a document, while the file path has always deleted a half-written `.md` on exactly
+    that reasoning. And **two inputs with the same leaf name silently overwrote each other**: `-o dst/`
+    over `p/report.docx q/report.docx` converted both, kept the second and exited 0. It also found a
+    **spec-legal 45 KB `.docx` that spins for seconds** with no output and no refusal, because
+    `StyleFind` was a linear scan behind a one-entry cache: 13.53 s against a 0.08 s control of
+    identical parse volume, now 0.09 s through an index and emitting the same bytes -- measured on the
+    shim at `-O2`, from a harness the commit does not carry, so `bench/` is still owed at the first
+    claim that one implementation simply beats another. Besides those:
+    two unit checks that could not fail, a `w:styleId` over 255 bytes stored in a form the document
+    could never match, a raw `unsigned long long` in an alias-only TU, five accessors missing the
+    `@return` d1 requires, and eleven false statements in this file and `CHANGELOG.md` -- among them a
+    fixture count, a writer count, a `mc:ProcessContent` transparency the code does not have, and
+    three verification bullets missing the "harnesses the commit does not carry" disclaimer M3 and M4
+    both carry.
   - **One question the review raised is a ruling and not a fix, so it is D12 rather than a commit**:
     GitHub renders `$...$` as LaTeX math and has since 2022, `docs/CONVERSION_REFERENCE.md` 4.1
     predates that, and "costs $5 and $10" is corrupted on the one renderer this project's own mapping

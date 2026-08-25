@@ -389,6 +389,25 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   many, which is D7d; `src/Convert.cpp` already said D7d, so the module contradicted itself.
 - `DocWalker.h` told the reader to see its own To Do for `m:oMath` and `w:sym`, which are named in
   `DocWalker.cpp`'s To Do instead.
+- A spec-legal 45 KB `.docx` could spin for seconds with no output and no refusal. `StyleFind` was a
+  linear scan of full byte comparisons and the walker caches one style identifier, so a document
+  whose paragraphs alternate between two of many long-prefixed identifiers cost paragraphs x styles
+  x identifier length. Measured on the shim at `-O2`, with a control of identical parse volume whose
+  paragraphs all name one style: 13.53 s against 0.08 s. `StyleFind` now answers from an
+  open-addressed index built once at load, which puts the same file at 0.09 s and emits the same
+  99,999 bytes. The index goes in before `StyleLinkChains`, which is a lookup per style and was the
+  load-time half of the same shape. A model whose index cannot be allocated keeps the scan.
+- A `w:styleId` longer than 255 bytes was stored in full while the walker truncated its lookup key to
+  255, so the two differed at that byte and the paragraph silently took the default style -- a
+  heading lost with no diagnostic. Both the identifier and `w:basedOn` are now stored capped at the
+  ceiling the lookup key uses. ISO/IEC 29500 caps `ST_String` at 255, so nothing in spec changes.
+- Two inputs whose derived output paths collide silently overwrote each other: `-o dst/`
+  `p/report.docx q/report.docx` converted both, kept the second and exited 0. A pre-flight now runs
+  before anything is written -- the first input to name a path keeps it, later ones are refused into
+  D7c's failure list, and an input whose derived output is another input of the same run is refused
+  rather than destroying it. One input named twice is not a collision: it writes the same bytes over
+  its own output. The architecture note recommending this pre-flight gives it to `Batch` at M13; the
+  loop in `main.cpp` is what `Batch` replaces, so it lives there until then.
 - `tests/unit/Check.cpp` did not include `BuildGuards.h`, though its own prolog declared the dependency
   and every other project `.cpp` includes it first. It was the one file that could have compiled without
   D4's `#ifndef __AVX2__` guard, which is precisely the file list that guard exists to cover.

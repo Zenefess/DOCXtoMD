@@ -216,9 +216,11 @@ struct al32 STYLE_MODEL {
    STYLE_RECORDptr   styles;           ///< One per w:style, in declaration order
    STYLE_RESOLVEDptr resolved;         ///< One per style, folded down its chain
    chptr             heap;             ///< Every string this model owns, addressed by offset
+   si32ptr           buckets;          ///< Open-addressed index of styleId onto style number, or null
    ui64              heapUsed;         ///< Bytes of heap in use
    ui64              heapCapacity;     ///< Bytes allocated at heap
    ui64              styleCapacity;    ///< Records allocated at styles and at resolved
+   ui32              bucketMask;       ///< One less than the bucket count, which is a power of two
    STYLE_DEFAULTS    defaults;         ///< What w:docDefaults contributes
    ui32              styleCount;       ///< Styles in styles
    si32              defaultParagraph; ///< Index of the default paragraph style, or -1
@@ -277,6 +279,12 @@ void StyleClose(STYLE_MODELptrc model);
 /// @note Identifiers compare exactly. ISO/IEC 29500 makes w:styleId an xsd:string and Word matches it
 ///       byte for byte; the case-insensitive matching in CONVERSION_REFERENCE 5.10 is about the style
 ///       *name*, which is a different key and is handled by the role table.
+/// @note Answered from an index built once at load, because the walker calls this once per styled
+///       paragraph: a linear scan makes a document with many paragraphs and a styles.xml with many
+///       long-prefixed identifiers cost paragraphs x styles x identifier length, which a 45 KB .docx
+///       can drive into minutes. A duplicated identifier still resolves to the first record.
+/// @note An identifier is stored capped at STYLE_MAX_NAME_BYTES, which is what the walker's lookup
+///       key holds, so the two paths cannot disagree about a value ISO/IEC 29500 already caps at 255.
 csi32 StyleFind(cSTYLE_MODELptr model, cchptr styleId);
 
 /// The style a paragraph with no w:pStyle uses.

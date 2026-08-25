@@ -8,6 +8,8 @@
  * To Do: 1) Extract referenced media beside the document when M7 adds MediaExtractor.
  *        2) Load numbering, footnotes and endnotes here as M8 and M10 give them models to go into.
  *        3) Hand this whole function to a worker when M13 adds the bounded pool (D6/D7a).
+ *        4) Say so when -o named an existing directory and one input made it a file name, which today
+ *           reports only that the file could not be created.
  * Dependencies: CliOptions.h, Diag.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -27,6 +29,19 @@
 /// only ever an input's own path with its extension replaced, or a named directory with a leaf added.
 constexpr cui64 CONVERT_MAX_PATH = 4096u;
 
+//== Types
+
+/// What another input in the same run has already claimed of one input's derived output path.
+enum CONVERT_TARGET : si32 {
+   CONVERT_TARGET_FREE,     ///< Nothing else in the run needs that path
+   CONVERT_TARGET_IS_INPUT, ///< The derived output is another input of this run, and would destroy it
+   CONVERT_TARGET_CLAIMED,  ///< An earlier input derives the same output, so this one would overwrite it
+   CONVERT_TARGET_COUNT
+};
+
+/// Constant form of CONVERT_TARGET, spelled per GCS r2: the qualifier lives in the typedef.
+typedef const CONVERT_TARGET cCONVERT_TARGET;
+
 //== Entry points
 
 /// Converts one input file and writes its Markdown.
@@ -40,6 +55,21 @@ constexpr cui64 CONVERT_MAX_PATH = 4096u;
 ///       M13 it is what one worker runs, which is why it takes no shared state and returns a verdict
 ///       rather than setting one.
 cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath);
+
+/// Whether converting one input would destroy something the rest of the run still needs.
+/// @param options  The parsed command line.
+/// @param index    Which input to test, as an index into options->inputs.
+/// @return CONVERT_TARGET_FREE when the input may be converted; otherwise why it may not be.
+/// @note D7b derives every output name from an input's own leaf, so two inputs with the same leaf
+///       name in different directories both target one .md, and without this check the second
+///       silently overwrites the first -- two documents converted, one destroyed, exit 0. Argument
+///       order decides: the first input to name a path keeps it and the later ones are refused, so
+///       a run converts what it can and names what it could not. The architecture note that
+///       recommends this pre-flight gives it to Batch at M13; the loop in main.cpp is what Batch
+///       replaces, so it is done there until then.
+/// @note Pure: it touches no file and allocates nothing. It is O(index) in derivations, which is
+///       O(n^2) over a whole run -- a command line cannot hold enough operands for that to matter.
+cCONVERT_TARGET ConvertTargetTaken(cCLI_OPTIONSptr options, cui32 index);
 
 /// Derives the output path for one input.
 /// @param inputPath         The input path as given.

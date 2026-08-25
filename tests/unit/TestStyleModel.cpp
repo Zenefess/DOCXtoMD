@@ -370,4 +370,68 @@ void TestStyleModel(void) {
    CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Odd"), -1).headingLevel == 2u);
    CHECK(StyleResolveParagraph(&model, StyleFind(&model, "NoId"), -1).headingLevel == 4u);
    StyleClose(&model);
+
+   CheckGroup("StyleModel: identifiers found through the index, not by scanning");
+   {
+      // Identifiers sharing a long prefix are what made the old linear scan quadratic: every
+      // comparison walked the whole prefix before it could differ. They must still resolve exactly.
+      char   many[4096];
+      ui64   used = 0;
+      cchptr HEAD = "<w:style w:type=\"paragraph\" w:styleId=\"PREFIXPREFIXPREFIX";
+      cchptr MID  = "\"><w:name w:val=\"heading ";
+
+      for(ui32 which = 1u; which <= 6u; ++which) {
+         cchptr pieces[5] = {HEAD, "00000", MID, "0", "\"/></w:style>"};
+         char   digit[2]  = {char('0' + which), 0};
+
+         pieces[1] = digit;
+         pieces[3] = digit;
+         for(ui32 piece = 0; piece < 5u; ++piece) {
+            cui64 length = TestLength(pieces[piece]);
+
+            for(ui64 at = 0; at < length && used + 1u < sizeof(many); ++at) many[used++] = pieces[piece][at];
+         }
+      }
+      many[used] = 0;
+      CHECK(LoadStyles(&model, many) == STYLE_OK);
+      CHECK(StyleCount(&model) == 6u);
+      CHECK(StyleFind(&model, "PREFIXPREFIXPREFIX1") == 0);
+      CHECK(StyleFind(&model, "PREFIXPREFIXPREFIX6") == 5);
+      CHECK(StyleFind(&model, "PREFIXPREFIXPREFIX7") == -1);
+      CHECK(StyleFind(&model, "PREFIXPREFIXPREFIX") == -1);
+      CHECK(StyleFind(&model, "") == -1);
+      CHECK(StyleFind(&model, nullptr) == -1);
+      CHECK(StyleResolveParagraph(&model, StyleFind(&model, "PREFIXPREFIXPREFIX4"), -1).headingLevel == 4u);
+      StyleClose(&model);
+   }
+   // A duplicated identifier still resolves to the first record, which is what the scan did.
+   CHECK(LoadStyles(&model, "<w:style w:styleId=\"Twice\"><w:name w:val=\"heading 1\"/></w:style>"
+                            "<w:style w:styleId=\"Twice\"><w:name w:val=\"heading 5\"/></w:style>") == STYLE_OK);
+   CHECK(StyleFind(&model, "Twice") == 0);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Twice"), -1).headingLevel == 1u);
+   StyleClose(&model);
+
+   CheckGroup("StyleModel: an identifier longer than the walker's lookup key");
+   {
+      // ST_String stops at 255 bytes, so this is out of spec either way. What must not happen is the
+      // model storing an id in full that DocFindStyle, which truncates at the same ceiling, can never
+      // match -- the style would silently resolve to nothing and its heading would be lost.
+      char   part[1024];
+      ui64   used = 0;
+      char   key[STYLE_MAX_NAME_BYTES];
+      cchptr OPEN  = "<w:style w:type=\"paragraph\" w:styleId=\"";
+      cchptr CLOSE = "\"><w:name w:val=\"heading 1\"/></w:style>";
+
+      for(ui64 at = 0; OPEN[at]; ++at) part[used++] = OPEN[at];
+      for(ui64 at = 0; at < 300u; ++at) part[used++] = 'L';
+      for(ui64 at = 0; CLOSE[at]; ++at) part[used++] = CLOSE[at];
+      part[used] = 0;
+      for(ui64 at = 0; at + 1u < sizeof(key); ++at) key[at] = 'L';
+      key[STYLE_MAX_NAME_BYTES - 1u] = 0;
+      CHECK(LoadStyles(&model, part) == STYLE_OK);
+      // The lookup key DocFindStyle would build is 255 Ls, and it has to find the style.
+      CHECK(StyleFind(&model, key) == 0);
+      CHECK(StyleResolveParagraph(&model, StyleFind(&model, key), -1).headingLevel == 1u);
+      StyleClose(&model);
+   }
 }

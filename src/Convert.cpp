@@ -248,6 +248,33 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
 
 //== Entry points
 
+cCONVERT_TARGET ConvertTargetTaken(cCLI_OPTIONSptr options, cui32 index) {
+   wchar mine[CONVERT_MAX_PATH];
+   wchar theirs[CONVERT_MAX_PATH];
+
+   // --stdout writes no file, and a run that cannot derive a path fails on its own in ConvertFile.
+   if(!options || options->toStdout || index >= options->inputCount) return CONVERT_TARGET_FREE;
+
+   cbool several = options->inputCount > 1u;
+
+   if(!ConvertOutputPath(options->inputs[index], options->outputPath, several, mine, CONVERT_MAX_PATH)) {
+      return CONVERT_TARGET_FREE;
+   }
+   for(ui32 other = 0; other < options->inputCount; ++other) {
+      // An input that is its own output is ConvertFile's case and carries ConvertFile's message.
+      if(other != index && ConvertSamePath(mine, options->inputs[other])) return CONVERT_TARGET_IS_INPUT;
+      if(other >= index) continue;
+      // One input named twice is not a collision: the second conversion writes the same bytes over
+      // its own, which loses nothing. Only two different inputs claiming one output destroy a document.
+      if(ConvertSamePath(options->inputs[index], options->inputs[other])) continue;
+      if(!ConvertOutputPath(options->inputs[other], options->outputPath, several, theirs, CONVERT_MAX_PATH)) {
+         continue;
+      }
+      if(ConvertSamePath(mine, theirs)) return CONVERT_TARGET_CLAIMED;
+   }
+   return CONVERT_TARGET_FREE;
+}
+
 cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
    wchar outputPath[CONVERT_MAX_PATH];
 
@@ -256,7 +283,9 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
       cbool derived = ConvertOutputPath(inputPath, options->outputPath, options->inputCount > 1u, outputPath, CONVERT_MAX_PATH);
 
       if(!derived) {
-         DiagErrorText("cannot work out an output path for", inputPath);
+         // The buffer is always CONVERT_MAX_PATH here and an operand is never empty, so length is the
+         // only way this fails. Saying so beats a sentence that reads like the converter gave up.
+         DiagErrorText("the output path would be longer than this converter builds", inputPath);
          return EXIT_OUTPUT;
       }
       if(ConvertSamePath(outputPath, inputPath)) {
