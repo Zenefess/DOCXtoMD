@@ -64,8 +64,9 @@ typedef const WALK_STATUS cWALK_STATUS;
 /// @note What M5 does not walk yet, and skips whole rather than descending into: w:tbl, w:drawing,
 ///       w:pict, the field elements, the note and comment references, w:sym and m:oMath. Each arrives
 ///       with the milestone that can emit it, except m:oMath and w:sym, which have none yet and are the
-///       two places text is lost rather than merely unformatted -- see the To Do. An element this build
-///       has never heard of is skipped the same way, which is the OOXML compatibility model.
+///       two places text is lost rather than merely unformatted -- both are DocWalker.cpp's To Do item
+///       4. An element this build has never heard of is skipped the same way, which is the OOXML
+///       compatibility model.
 /// @note What is descended into although its own meaning waits for a later milestone, because dropping
 ///       it would lose text: w:hyperlink, w:fldSimple, the bidirectional containers w:dir and w:bdo, and
 ///       a w:ruby's w:rubyBase -- its w:rt annotation is printed above the base text, which Markdown has

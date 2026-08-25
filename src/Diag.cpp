@@ -63,13 +63,13 @@ void DiagWriteOut(cchptr text) {
    if(text) fputs(text, stdout);
 }
 
-void DiagWriteOutBytes(cui8ptr bytes, cui64 byteCount) {
-   if(!bytes || !byteCount) return;
-   fflush(stdout); // Whatever the runtime has queued goes first, so the document cannot overtake it
+cbool DiagWriteOutBytes(cui8ptr bytes, cui64 byteCount) {
+   if(!bytes || !byteCount) return true; // An empty document is a legitimate zero-byte output
+   fflush(stdout);                       // Whatever the runtime has queued goes first, so the document cannot overtake it
 
    cHANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
 
-   if(handle == INVALID_HANDLE_VALUE || !handle) return;
+   if(handle == INVALID_HANDLE_VALUE || !handle) return false;
 
    ui64 done = 0;
 
@@ -78,9 +78,10 @@ void DiagWriteOutBytes(cui8ptr bytes, cui64 byteCount) {
       cui64 want      = (remaining > DIAG_WRITE_BYTES ? DIAG_WRITE_BYTES : remaining);
       DWORD put       = 0;
 
-      if(!WriteFile(handle, bytes + done, DWORD(want), &put, nullptr) || !put) return;
+      if(!WriteFile(handle, bytes + done, DWORD(want), &put, nullptr) || !put) return false;
       done += put;
    }
+   return true;
 }
 
 void DiagWriteErr(cchptr text) {

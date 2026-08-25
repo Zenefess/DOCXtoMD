@@ -44,11 +44,11 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath);
 /// Derives the output path for one input.
 /// @param inputPath         The input path as given.
 /// @param outputPath        The -o value, or null when there was none.
-/// @param outputIsDirectory Whether -o named a directory, which D7b decides by the number of inputs.
+/// @param outputIsDirectory Whether -o named a directory, which D7d decides by the number of inputs.
 /// @param dest              Receives the derived path, NUL-terminated.
 /// @param destChars         Characters available at dest, terminator included.
 /// @return true when a path was derived, false when it would not fit or there was nothing to derive from.
-/// @note The rule is D7b's: with one input, -o is the .md filename and is used exactly as written; with
+/// @note The rule is D7d's: with one input, -o is the .md filename and is used exactly as written; with
 ///       several, -o is a directory and each input contributes its own stem; with no -o at all the
 ///       output sits beside its input with the extension replaced.
 /// @note Both separators are recognised, because Windows accepts both and a command line carries either.

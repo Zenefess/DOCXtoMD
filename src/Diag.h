@@ -49,11 +49,14 @@ void DiagWriteOut(cchptr text);
 /// Writes UTF-8 bytes to stdout verbatim, with no newline translation whatever.
 /// @param bytes      The bytes; a null pointer writes nothing.
 /// @param byteCount  How many.
+/// @return true when every byte reached the handle. A caller handing over a converted document must
+///         treat false as an output failure: stdout is the only copy, and a caller redirecting it into
+///         a file has no other way to learn the document was lost.
 /// @note This is the door --stdout hands a converted document through, and it deliberately bypasses the
 ///       C runtime's stream: stdout is a text stream on Windows, so fwrite would turn every LF in the
 ///       document into a CRLF and break the emitter's stated output contract. Buffered output already
 ///       queued on stdout is flushed first, so ordering is kept.
-void DiagWriteOutBytes(cui8ptr bytes, cui64 byteCount);
+cbool DiagWriteOutBytes(cui8ptr bytes, cui64 byteCount);
 
 /// Writes UTF-8 text to stderr verbatim, with no prefix and no added newline.
 /// @param text  NUL-terminated UTF-8; a null pointer writes nothing.

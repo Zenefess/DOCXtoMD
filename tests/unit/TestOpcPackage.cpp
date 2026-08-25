@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-08-25
  * Description: Unit tests for OpcPackage's pure core: relationship target resolution and rels naming.
  * To Do: 1) Drive OpcOpen from an in-memory archive, once a fixture can be built without touching disk.
  *        2) Add the producer-shaped packages (Google Docs, LibreOffice, Pandoc) when M11 collects them.
@@ -23,6 +23,12 @@
 #include "Check.h"
 
 //-- Helpers
+
+// Three rows of OPC_RESULT_SENTENCE, spelled here so the table and the enum indexing it cannot drift
+// apart in silence. The last is the out-of-range default, which two enum values below must both reach.
+static constexpr cchptr NO_TYPES_SAID   = "not a valid DOCX; the package has no [Content_Types].xml";
+static constexpr cchptr LIMIT_SAID      = "not a valid DOCX; the package declares more structure than the converter will read";
+static constexpr cchptr UNREADABLE_SAID = "not a valid DOCX; the package could not be read";
 
 // Compares two NUL-terminated strings.
 static cbool OpcSame(cchptr a, cchptr b) {
@@ -169,8 +175,12 @@ void TestOpcPackage(void) {
    CHECK(OpcRelsPartName("/word/document.xml", rels, 8u) != OPC_OK);
 
    CheckGroup("OpcPackage: sentences and exit codes");
-   CHECK(OpcResultText(nullptr, OPC_ERROR_NO_CONTENT_TYPES) && OpcResultText(nullptr, OPC_ERROR_LIMIT));
-   CHECK(OpcResultText(nullptr, OPC_RESULT(-1)) && OpcResultText(nullptr, OPC_RESULT_COUNT));
+   // Pinned by content, not by non-nullness: OpcResultText cannot return null, so a truth test asserts
+   // nothing and would survive the whole table being shifted by a row. That is the drift M4 caught.
+   CHECK(OpcSame(OpcResultText(nullptr, OPC_ERROR_NO_CONTENT_TYPES), NO_TYPES_SAID));
+   CHECK(OpcSame(OpcResultText(nullptr, OPC_ERROR_LIMIT), LIMIT_SAID));
+   CHECK(OpcSame(OpcResultText(nullptr, OPC_RESULT(-1)), UNREADABLE_SAID));
+   CHECK(OpcSame(OpcResultText(nullptr, OPC_RESULT_COUNT), UNREADABLE_SAID));
    CHECK(OpcExitCode(nullptr, OPC_OK) == EXIT_ALL_CONVERTED);
    CHECK(OpcExitCode(nullptr, OPC_ERROR_MEMORY) == EXIT_INTERNAL);
    CHECK(OpcExitCode(nullptr, OPC_ERROR_RANGE) == EXIT_INTERNAL);

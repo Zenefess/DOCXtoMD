@@ -45,8 +45,10 @@ below.
     include path because MSVC searches the including file's own directory for a quoted include, so
     `src\` is deliberately **not** in `<AdditionalIncludeDirectories>`.
   - `Diag.h`/`Diag.cpp` — the diagnostic sink. Exports `EXIT_CODE` (all seven exit codes as one named
-    enum, so the stable API lives in code rather than only in this file) and five writers:
-    `DiagWriteOut`, `DiagWriteErr`, `DiagError`, `DiagErrorText` and `DiagNoteText`. Notes go to
+    enum, so the stable API lives in code rather than only in this file) and six writers:
+    `DiagWriteOut`, `DiagWriteOutBytes`, `DiagWriteErr`, `DiagError`, `DiagErrorText` and
+    `DiagNoteText`. `DiagWriteOutBytes` is the only one that returns anything, because it is the only
+    one whose failure loses a document rather than a message. Notes go to
     **stderr**, not stdout, so `--stdout` can hand a document to a pipe uncontaminated; `-q` suppresses
     them, and until this module owns that flag it is the caller that decides not to call.
     Wide text crosses to UTF-8 through `Utf`'s `UtfFromWide`, called twice — once to measure, once to
@@ -206,7 +208,7 @@ below.
     `xml:space` is the producer's business — with U+00AD removed. What is skipped whole and why:
     `w:tbl` (M9), `w:drawing`/`w:pict` (M7), `w:instrText` and `w:fldChar` (M10's field state machine),
     `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
-    than merely unformatted — both are named in `DocWalker.h`'s To Do), and anything this build has
+    than merely unformatted — both are named in `DocWalker.cpp`'s To Do), and anything this build has
     never heard of, which is the OOXML compatibility model. Descended into although their own meaning
     waits: `w:hyperlink`, `w:fldSimple`, the bidirectional containers `w:dir` and `w:bdo`, and a
     `w:ruby`'s `w:rubyBase`. `mc:Ignorable` and `mc:ProcessContent` are **attributes**, not elements,
@@ -235,7 +237,7 @@ below.
   - `Convert.h`/`Convert.cpp` — the per-file pipeline: container, package, relationships, styles, walk,
     emit, write. This is the function one worker runs when M13 adds the bounded pool, which is why it
     is a module and not a lump of `main.cpp`. `ConvertOutputPath` is pure and allocation-free and is
-    therefore what the unit suite hammers: D7b's rule is `-o` as a filename for one input and a
+    therefore what the unit suite hammers: D7d's rule is `-o` as a filename for one input and a
     directory for several, otherwise the input's own path with its extension replaced. A trailing
     separator names a directory whatever the input count, because no Windows file name may end in one.
     The output file is written with `CreateFileW`/`WriteFile` and **deleted again if the write does not
@@ -382,10 +384,13 @@ below.
 - `docs/` **exists** and holds `CONVERSION_REFERENCE.md`; `include/` **exists** and holds the six
   shared headers; `src/` **exists** as of M2; `tests/` **exists** as of M3. None of the four is
   planned-only any more.
-- `tests/` — the container and package test scaffolding, and the unit suite. `make_fixtures.py` builds
-  every fixture; `run_container.py` runs the exe over them and checks the exit code and the message. Both
+- `tests/` — the container and package test scaffolding, the golden runner and the unit suite.
+  `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
+  code and the message; `run_golden.py` converts every golden and byte-compares it. All three
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
-  a POSIX host — run them as `python tests/<name>.py`. There are **two** part trees under `fixtures/`.
+  a POSIX host — run them as `python tests/<name>.py`. There are **seven** part trees under `fixtures/`:
+  `minimal`, `relocated`, and the five M5 golden cases `headings`, `toggles`, `textflow`, `nostyles` and
+  `wrappers`, each with an `expected.md` beside its `src/`.
   `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
   `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
   `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
@@ -415,16 +420,19 @@ below.
   nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
   works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
   character data, `$` is the end and `!n` is refusal *n* — so one string per case reads better than ten
-  assertions. Both sentence tables are pinned against their enums by asserting the tail of specific
-  rows, because a sentence table and the enum indexing it drift apart silently; that check caught a
-  real one-row misalignment during M4. M5's suites reach the parser and the walker from string literals
+  assertions. `src/` carries six result-sentence tables, and four of them — `Utf`, `XmlPull`,
+  `OpcPackage` and `StyleModel` — are pinned against their enums by comparing specific rows against
+  the exact sentence, because a sentence table and the enum indexing it drift apart silently; that
+  check caught a real one-row misalignment during M4, and an M5 review caught the `OpcPackage` pair
+  asserting only that the sentence was non-null, which `OpcResultText` can never return. `DocWalker`
+  pins one row and `ZipReader`'s table is unpinned; both are still To Do. M5's suites reach the parser and the walker from string literals
   through `StyleLoadBytes` and `DocWalkBytes`, which are the halves of `StyleLoad` and `DocWalk` that
   work over bytes rather than over a package; `TestDocWalker` renders the whole intermediate
   representation into a compact trace — `H1{…}` a heading, `P{…}` a paragraph, `[text]` a span, `|` a
   break, and the letters before a bracket its formatting — so a case is one string comparison rather
   than ten assertions, and it is the only place the formatting bits are observable before M6 emits them.
 - **Not yet created** (GCS obligations, see Roadmap): `bench/` and CI. Do not reference them as if they
-  exist. `tests/run_golden.py` exists as of M5.
+  exist. Everything else this section names does exist, `tests/run_golden.py` included.
 
 ## Build & run
 
@@ -878,8 +886,8 @@ src/
    NumberingModel.h/.cpp numbering.xml → per-numId levels with overrides; runtime counters
    Ir.h/.cpp             intermediate representation (blocks/spans) — the walker never emits Markdown
                          [written at M5; the .cpp is a session addition, see above]
-   DocWalker.h/.cpp      document/footnote walk → IR (fields, tracked changes, sdt, AlternateContent)
-                         [written at M5]
+   DocWalker.h/.cpp      document walk → IR (tracked changes, sdt, AlternateContent) [written at M5];
+                         the footnote walk and the field state machine arrive at M10
    RunCoalescer.h/.cpp   effective-format resolution + adjacent-run merging + whitespace hoisting
    MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)  [written at M5]
    MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing  [written at M5]
@@ -887,8 +895,9 @@ src/
                          D7b's output-path derivation. M13's Batch calls this per worker
                          [written at M5; a session addition, see above]
    MediaExtractor.h/.cpp referenced media parts → disk; content-type extensions; dedup; safe names
-   Diag.h/.cpp           error codes/messages → stderr; exit-code mapping. MT-safe from M13: every
-                         worker reports through this one sink, so it locks then (D6). Reentrant at M2
+   Diag.h/.cpp           error codes/messages → stderr, and the --stdout document → stdout;
+                         exit-code mapping. MT-safe from M13: every worker reports through this one
+                         sink, so it locks then (D6). Reentrant at M2
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
                          run_container.py [both written at M3, extended at M4 and M5]; run_golden.py
                          [written at M5];
@@ -1239,7 +1248,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     CRLF and ≤150 columns on all thirty `src/` files and all eleven `tests/unit/` ones; `clang-format
     --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs well-formed
     XML, mutually byte-identical in their `Include=` paths, and every listed file present on disk.
-  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **809**
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **811**
     checks, `tests/run_golden.py` all **47** and `tests/run_container.py` all **99**, every one of them
     under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no diagnostic. The
     47 are twenty archives converted twice each — once to a file and once through `--stdout`, which are

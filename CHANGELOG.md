@@ -373,6 +373,20 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   `IrBlockCount`, `IrFailed`, `StyleCount`, `MdByteCount` and M4's `OpcRelCount`. Every non-void
   declaration in `src/*.h` now carries a `@return`, and the convention that lets a one-argument
   accessor omit the `@param` is written down in `CLAUDE.md` rather than merely practised.
+- `--stdout` reported success after a write that failed or stopped part way. `DiagWriteOutBytes`
+  returned `void` and bailed out silently on a bad handle or a short `WriteFile`, so `ConvertFile`
+  could not see it and the process exited 0 having emitted nothing, or half a document. It now
+  returns whether every byte reached the handle and the caller returns exit 4, which is what the
+  file path has always done -- it deletes a half-written `.md` on the same reasoning. Reproduced on
+  Linux as `DOCXtoMD --stdout x.docx >&-`, which exited 0 before the fix and exits 4 after it; on
+  Windows the same shapes are a volume that fills mid-write and a consumer that closes the pipe.
+- Two of the unit suite's checks could not fail: `OpcResultText` has no path that returns null, so
+  asserting it non-null asserted nothing and would have survived the whole sentence table shifting
+  by a row -- the drift the same check caught in `Utf` at M4. Three rows are now pinned by content.
+- `src/Convert.h` cited D7b for the rule that `-o` is a filename for one input and a directory for
+  many, which is D7d; `src/Convert.cpp` already said D7d, so the module contradicted itself.
+- `DocWalker.h` told the reader to see its own To Do for `m:oMath` and `w:sym`, which are named in
+  `DocWalker.cpp`'s To Do instead.
 - `tests/unit/Check.cpp` did not include `BuildGuards.h`, though its own prolog declared the dependency
   and every other project `.cpp` includes it first. It was the one file that could have compiled without
   D4's `#ifndef __AVX2__` guard, which is precisely the file list that guard exists to cover.

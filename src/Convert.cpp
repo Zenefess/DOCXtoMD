@@ -299,7 +299,12 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
       return verdict;
    }
    if(options->toStdout) {
-      DiagWriteOutBytes((cui8ptr)MdBytes(&emitter), MdByteCount(&emitter));
+      // stdout is the only copy of the document, so a short write loses it. The file path deletes a
+      // half-written .md for the same reason; this one can only report, and must not report success.
+      if(!DiagWriteOutBytes((cui8ptr)MdBytes(&emitter), MdByteCount(&emitter))) {
+         DiagError("cannot write the converted document to standard output");
+         verdict = EXIT_OUTPUT;
+      }
    } else {
       verdict = ConvertWriteFile(outputPath, MdBytes(&emitter), MdByteCount(&emitter));
       if(verdict == EXIT_ALL_CONVERTED && !options->quiet) {
