@@ -49,9 +49,10 @@ below.
     `DiagWriteOut`, `DiagWriteErr`, `DiagError`, `DiagErrorText` and `DiagNoteText`. Notes go to
     **stderr**, not stdout, so `--stdout` can hand a document to a pipe uncontaminated; `-q` suppresses
     them, and until this module owns that flag it is the caller that decides not to call.
-    Wide text crosses to UTF-8 through a
-    single local `WideCharToMultiByte` call buffered with `amalloc`/`mdealloc` (p2) — that is the
-    Win32 boundary, and the planned `Utf` module takes over the document side when M4 writes it.
+    Wide text crosses to UTF-8 through `Utf`'s `UtfFromWide`, called twice — once to measure, once to
+    convert — around an `amalloc`/`mdealloc` buffer (p2). That is the Win32 boundary, and `Utf` has
+    owned it since M4 replaced this module's own `WideCharToMultiByte` call; there is no longer a
+    `WideCharToMultiByte` anywhere in `src/`.
     `Thread-safety: Reentrant`: it holds no state and takes no lock, because at M2 nothing is shared.
     **M13 makes it `MT-safe` with `include/spinlocks.h`** (D6); do not read today's `Reentrant` as a
     promise that survives that.
@@ -138,11 +139,12 @@ below.
     scratch arena is allocated lazily at the part's own size and never grows — decoding a reference, a
     CDATA section or a line end always produces fewer bytes than it consumes, so the part's size is a
     ceiling no token can reach past, which is also why a decoded view can be a pointer rather than an
-    offset to be patched. Two relaxations of XML 1.0 are deliberate and documented in the header: a name
+    offset to be patched. Three relaxations of XML 1.0 are deliberate and documented in the header: a name
     may hold any byte above 0x7F without consulting the Unicode `NameChar` tables (every OOXML name is
-    ASCII, and the bytes were validated as UTF-8 before the reader opened), and the ban on a literal
+    ASCII, and the bytes were validated as UTF-8 before the reader opened); the ban on a literal
     `]]>` in character data is not enforced, because enforcing it costs a scan and rejects nothing a
-    producer emits. It refuses a NUL and every other byte XML's `Char` production excludes — which is
+    producer emits; and neither is the ban on `--` inside a comment, for the same reason — a comment is
+    skipped whole, so its contents never reach a caller. It refuses a NUL and every other byte XML's `Char` production excludes — which is
     **load-bearing above this module**, because a NUL is well-formed UTF-8 and `OpcPackage` copies
     attribute values into NUL-terminated storage.
   - `OpcPackage.h`/`OpcPackage.cpp` — the package model, and where correctness rule 1 is kept. The only
@@ -266,11 +268,18 @@ below.
     `typedefs.h`, 986 in `vector structures.h` — which "Shared headers" forbids. With it,
     formatting all six is a verified no-op.
   - `.editorconfig` — tc2's four properties plus `indent_style = space` (r8) and `tab_width = 3`
-    (so a stray tab at least renders at the r8 width), with four
-    `RULE-DEV`-tagged exemptions: Markdown and `LICENSE` keep their authored line endings; `*.sln`
-    keeps Visual Studio's tab indentation; and `*.sln` and `*.filters` are `charset = utf-8-bom`
-    because both ship with a BOM and EditorConfig's plain `utf-8` means *no* BOM, so an honest
-    `[*]` charset would strip it on the next save (`DOCXtoMD.vcxproj` has no BOM and is unaffected).
+    (so a stray tab at least renders at the r8 width), with **six** `RULE-DEV`-tagged exemptions over
+    six glob sections. Three are about line endings: Markdown, `LICENSE` and everything under
+    `tests/fixtures/` keep their authored ones — a fixture part is *input data*, and its bytes are what
+    `make_fixtures.py` compresses and computes a CRC-32 over, so an editor rewriting its line endings
+    would silently change every fixture built from it. Two are about `*.sln`, which keeps Visual
+    Studio's tab indentation and, with `*.filters`, is `charset = utf-8-bom` because both ship with a
+    BOM and EditorConfig's plain `utf-8` means *no* BOM, so an honest `[*]` charset would strip it on
+    the next save (`DOCXtoMD.vcxproj` has no BOM and is unaffected). The sixth is the one that
+    contradicts a rule stated elsewhere in this file and so must not be discovered by surprise:
+    **`[*.py]` sets `indent_size = 4`**, because four is Python's own convention and what the only
+    audience that reads those two scripts expects. tc2's other three properties still bind them, and
+    `.gitattributes` still stores them LF and checks them out CRLF like any other source file.
     The Markdown glob is `[*.{md,MD}]`: EditorConfig globs are **case-sensitive**, so a bare
     `[*.md]` silently misses `CONTRIBUTING.MD` and leaves that owner-managed LF file on `crlf`.
   - `.gitattributes` — see "Line endings" below.
@@ -326,7 +335,8 @@ below.
   and still not be a DOCX — without the flag every new package-level negative would silently drop out of
   the `zipfile` cross-check.
 - `tests/unit/` — **exists** as of M4: `Check.h`/`Check.cpp` (one `CHECK` macro, a group heading and a
-  pass/fail summary, over `<stdio.h>` and nothing else), `TestMain.cpp`, and one suite per module —
+  pass/fail summary, over `typedefs.h` and `<stdio.h>` and nothing else — the header itself needs only
+  `typedefs.h`, so a suite that includes it pulls in no I/O), `TestMain.cpp`, and one suite per module —
   `TestUtf.cpp`, `TestXmlPull.cpp`, `TestOpcPackage.cpp`. Every case is driven from a string literal;
   nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
   works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
@@ -420,7 +430,7 @@ because standard C++ habits violate nearly all of these. Intentional deviations 
 
 | Rule | Requirement |
 |---|---|
-| r8 | Indent **3 spaces**. Never tabs. |
+| r8 | Indent **3 spaces** in C and C++. Never tabs. (`.editorconfig` exempts `*.py` at 4 — see its bullet.) |
 | e2/r7 | Lines ≤150 columns; hard cap 180. |
 | r1 | Width/sign-encoded scalar aliases only: `ui8 ui16 ui32 ui64`, `si8 si16 si32 si64`, `fl32 fl64`. CI bans new `f32`/`f64` spellings (en2). All live in `typedefs.h`. |
 | r2/t2 | const/volatile and indirection live in **typedefs, not identifiers**: `cui32` = `const ui32`, `ui32ptr` = `ui32*`, `cui32ptr` = `const ui32*`, `ui32ptrc` = `ui32* const`, `cui32ptrc` = `const ui32* const`. Leading `c` binds the pointee, trailing `c` binds the pointer, repeat per indirection. `typedefs.h` carries the full lattice including the `void*` family (`ptr`, `cptr`, `vptr`, `ptrc`, `cptrc`, `vptrc`, `ptrptr`, …). |
@@ -557,7 +567,7 @@ sessions need to know:
 
 ### Do NOT (anti-habit list)
 
-- No tabs; no 2- or 4-space indent (r8).
+- No tabs; no 2- or 4-space indent in C or C++ (r8) — the two `tests/*.py` scripts are the one tagged exemption.
 - No `uint32_t`, `int32_t`, `unsigned`, `float`, `double` in new code — use `ui32`/`si32`/`fl32`/`fl64` (r1).
 - No `{` on its own line after a function signature (r15); no missing space before it.
 - No `const T*` written at use sites — use the alias forms (r2), and never mix styles in a TU (t3).
@@ -965,7 +975,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   warning appearing from here on is a regression the commit that introduces it owns.
   What had been verified on Linux before that, kept because it is how the code was actually exercised:
   - **Verified on Linux, mechanically**: the r17 prolog regexes from the GCS, 3-space indent, no tabs,
-    ASCII only, CRLF, and ≤150 columns on all twelve `src/` files and both `tests/*.py`;
+    ASCII only, CRLF, and ≤150 columns on all twelve `src/` files; tabs, ASCII, CRLF and width only on
+    both `tests/*.py`, which carry a tagged r17 deviation and a tagged 4-space `[*.py]` one;
     `.vcxproj`/`.filters` XML well-formedness and mutual sync with what is on disk; and
     `clang-format --style=file` a verified no-op on every file in `src/`.
   - **Verified on Linux, behaviourally, against the shim build**: `tests/run_container.py` passes all
@@ -1026,15 +1037,19 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     `rId1`, and spells it with the prefix `x:`; `src/` holds no literal part name but the two ISO/IEC
     29500-2 guarantees.
   - **Verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII only,
-    CRLF and ≤150 columns on all eighteen `src/` files, all six `tests/unit/` files and both
-    `tests/*.py`; `clang-format --style=file` a verified no-op on every C++ file in the commit; both
+    CRLF and ≤150 columns on all eighteen `src/` files and all six `tests/unit/` ones. The two
+    `tests/*.py` files were checked for tabs, ASCII, CRLF and width only: neither carries an r17
+    prolog — each opens with a `# RULE-DEV:r17` note and a module docstring, because r17's prolog is a
+    C block comment Python cannot hold — and both are 4-space indented under `.editorconfig`'s tagged
+    `[*.py]` exemption. `clang-format --style=file` a verified no-op on every C++ file in the commit; both
     `.vcxproj`/`.filters` pairs well-formed XML and mutually byte-identical, every listed file on disk;
     the `.sln`'s two project entries and four configuration mappings.
   - **Verified on Linux, behaviourally, against the shim build** (now with `-fshort-wchar`, so
-    `wchar_t` is two bytes as on Windows): `tests/run_container.py` passes all **89** checks — 21 sound
-    packages exit 5 after their main part is resolved and tokenized, 30 refused ones exit 3 with the
-    documented sentence, an absent input exits 2, four command lines behave as M2 published them, and
-    Python's `zipfile` reads back all 37 archives that are well-formed ZIPs. The unit binary passes all
+    `wchar_t` is two bytes as on Windows): `tests/run_container.py` passes all **89** checks, which is
+    49 fixtures + 4 command lines + 35 cross-checks + 1 absent input. Of the 49, **19** sound packages
+    exit 5 after their main part is resolved and tokenized and **30** refused ones exit 3 with the
+    documented sentence; the **35** are every fixture carrying the `sound` flag, read back by Python's
+    `zipfile`. The unit binary passes all
     **356** checks. On top of that, three scratch harnesses the commit does not carry: 1.2M mutated XML
     parts over three bases (a minimal body, a rich one carrying namespaces, entities, CDATA, a PI and an
     `mc:AlternateContent`, and a `.rels` part) plus all 2,039 proper prefixes of those bases; 6M random

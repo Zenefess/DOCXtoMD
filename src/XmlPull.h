@@ -3,9 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-08-25
  * Description: First-party streaming XML pull tokenizer over one in-memory part (decision D2).
- * To Do: 1) Report the namespace URI of an attribute, once a caller needs one outside the known set.
+ * To Do: 1) Enforce XML 1.0's ban on a literal ]]> in character data if a producer is ever found
+ *           emitting one; today it costs a scan and rejects nothing.
  *        2) Benchmark an AVX2 scan for the next '<' against the byte loop before adopting one (bd1/bd2).
  *        3) Raise XML_MAX_ATTRIBUTES or XML_MAX_NAMESPACES if a real producer is ever found near them.
  * Dependencies: typedefs.h

@@ -109,7 +109,7 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   the rule it broke — not a ZIP, an OLE compound file (so an encrypted `.docx` or a legacy `.doc`),
   encrypted entries, an unsupported compression method, a truncated archive, a malformed structure, a
   size that disagrees with the directory, a corrupt deflate stream, a failed CRC-32, or a decompression
-  cap — and each of the nine ways a deflate stream can be corrupt gets its own wording.
+  cap — and each of the eight ways a deflate stream can be corrupt gets its own wording.
 - `DiagNoteText`, a progress writer on **stderr** so that `--stdout` can hand a document to a pipe
   uncontaminated. `-q` suppresses notes; until `Diag` owns that flag it is the caller that decides not
   to call.
@@ -132,8 +132,11 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   writes ZIP records itself and `ZipReader` reads them itself, so the two agreeing proves less than it
   looks — one shared misreading of the format would satisfy both. An independent implementation
   decompressing every entry and checking it against the CRC-32 in its header is what closes that.
-- `/tests/build/` in `.gitignore` — the `.docx` files `make_fixtures.py` writes are generated, the part
-  trees are not. And `*.py text eol=crlf` in `.gitattributes`, so the test scripts follow tc2 with the
+- `/tests/build/` and `__pycache__/` in `.gitignore` — the `.docx` files `make_fixtures.py` writes are
+  generated, the part trees are not, and CPython drops a `__pycache__/` wherever one script imports
+  another, which `run_container.py` does. `__pycache__/` is deliberately the one pattern with no
+  leading `/`: it can appear in any directory, while every build-output pattern is anchored to the
+  repository root. And `*.py text eol=crlf` in `.gitattributes`, so the test scripts follow tc2 with the
   rest of the tree; they carry no shebang, because a CRLF shebang does not survive on a POSIX host.
 - `src/Utf.h`/`.cpp` — UTF-8 validation over a 256-row lead-byte table built by a `constexpr` function,
   so no run-time initialiser exists for a worker to race. The table is Unicode 15.0 table 3-7: each row
@@ -172,7 +175,7 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   decompression cap on every read and never credits it back. `OpcLoadXmlPart` is the only door to a
   tokenizer, which is how M4's "rather than reaching the walker" is structural rather than a convention.
 - `tests/unit/` and `tests/DOCXtoMD.Tests.vcxproj` — the unit-test harness the roadmap asks for: a
-  `CHECK` macro over `<stdio.h>` and nothing else, and one suite per module, 274 checks in all, every
+  `CHECK` macro over `typedefs.h` and `<stdio.h>` and nothing else, and one suite per module, 356 checks in all, every
   case driven from a string literal so the binary needs no working directory and no fixture path. The
   project is modelled on `DOCXtoMD.vcxproj` line for line and compiles every `src\*.cpp` but `main.cpp`.
   It differs in two ways, both deliberate: `$(ProjectDir)..\src` on the include path, because a file in
@@ -184,13 +187,16 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   implementation cannot pass it: no `word/` folder anywhere, the body at `parts/body.xml` reached through
   `rId7` rather than `rId1`, the styles part at `shared/theme-styles.xml` reached through a `../` target,
   and the body spelled with the prefix `x:` rather than `w:`.
-- Eighteen new fixtures in `make_fixtures.py`, all of them sound archives so that the failure under test
+- Twenty-one new fixtures in `make_fixtures.py`, all of them sound archives so that the failure under test
   is the package's and never the container's: `relocated-main`, `strict-namespaces`, `bom-part`,
   `utf16-part`, `main-by-content-type` and `content-type-mismatch` convert as far as M4 goes; `bad-utf8`,
   `truncated-utf8`, `doctype`, `malformed-xml`, `bad-content-types`, `no-office-rel`, `external-main-rel`,
   `traversal-target`, `encoded-traversal`, `drive-letter-target`, `bad-document-rels`, `bad-rels-root` and
-  `too-many-overrides` are refused with the sentence each one earns. 297 unit checks and 85 container
-  checks in total.
+  `too-many-overrides` are refused with the sentence each one earns; and `decoy-main-rel` and
+  `mixed-case-names` came later with the review fixes, each mutation-tested to prove it bites — the
+  first fails if content-type resolution is disabled, the second if case folding is. 356 unit checks
+  and 89 container checks in total, the latter being 49 fixtures + 4 command lines + 35 `zipfile`
+  cross-checks + 1 absent input.
 - Decisions **D8**, **D9**, **D10** and **D11**, raised by M4 and **ruled by the owner the same day**, who
   accepted all four recommendations as written. D8 settles a direct conflict between two governing
   documents over ill-formed UTF-8, in favour of refusing the part. D9 settles what "cross-check" means
@@ -202,8 +208,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ### Changed
 
 - `docs/CONVERSION_REFERENCE.md` 5.12 no longer says to "replace invalid sequences with U+FFFD rather
-  than aborting". It says to refuse a part that is not valid UTF-8, naming the part and the byte offset,
-  which is what the code has always done and what decision D8 ruled. This is the edit the ruling was for:
+  than aborting". It says to refuse a part that is not valid UTF-8, naming the part and which rule the
+  bytes broke, which is what the code has always done and what decision D8 ruled. This is the edit the ruling was for:
   until it, two governing documents told a session opposite things and CLAUDE.md had to carry a standing
   note not to "fix" either one toward the other. That note is gone with the conflict.
 - `docs/CONVERSION_REFERENCE.md`'s path-traversal bullet now separates the two halves that decision D10
@@ -267,6 +273,35 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   stays unreachable, because D7c reserves it for a run that converted something.
 
 ### Fixed
+
+- `tests/unit/Check.cpp` did not include `BuildGuards.h`, though its own prolog declared the dependency
+  and every other project `.cpp` includes it first. It was the one file that could have compiled without
+  D4's `#ifndef __AVX2__` guard, which is precisely the file list that guard exists to cover.
+- Nineteen documentation statements that an eight-dimension audit found false against the repository, each
+  one put to a skeptic told to refute it before it was acted on. The material ones follow; the two bullets
+  below this one break out the rest. `CLAUDE.md`'s `Diag`
+  bullet still described the `WideCharToMultiByte` call M4 deleted and called `Utf` "planned", two
+  paragraphs above the bullet that says `Utf` owns every wide conversion; `.editorconfig` was described
+  as carrying four `RULE-DEV` exemptions when it carries six, and the two unlisted ones included a
+  4-space `[*.py]` indent that flatly contradicted two absolute statements of r8 elsewhere in the same
+  file; M4's 89-check breakdown named components that summed to 93; M3's and M4's "verified mechanically"
+  bullets both claimed the r17 prolog regexes and the 3-space rule had passed on `tests/*.py`, which
+  carry a tagged r17 deviation and a tagged 4-space one and could not have passed either; the `XmlPull`
+  bullet said two relaxations of XML 1.0 where the header documents three; and `docs/CONVERSION_REFERENCE.md`
+  still called stage 2 an "in-memory DOM" and listed three main-document content types where the code
+  recognises four.
+- The claim, introduced with the D8 consequence edit, that a refused part is reported "naming the part
+  and the byte offset". `UtfValidate` computes the offset and `OpcLoadXmlPart` discards it: the message
+  names the part and which rule the bytes broke, and nothing prints an offset. Both the reference and this
+  changelog said otherwise for one commit.
+- Four stale counts in this file, each correct when written and never updated by the commit that changed
+  it: "274 checks" (never true at any commit; 356), "297 unit checks and 85 container checks" (356 and
+  89), "Eighteen new fixtures" (twenty-one, and the entry's own list named nineteen), and "nine ways a
+  deflate stream can be corrupt" (eight; `INFLATE_RESULT` has eight error values and the ninth row of the
+  sentence table is `INFLATE_OK`). The `.gitignore` entry also recorded one of the two patterns its commit
+  added, silently dropping `__pycache__/`.
+- `src/XmlPull.h`'s first `To Do` still asked for an attribute's namespace URI to be reported, which the
+  review fix that made attribute identity URI-based had already delivered.
 
 - `XmlPull` compared two attributes by their resolved namespace *value* rather than by their URI, so two
   attributes from two namespaces the build does not know — `w14:id` and `w15:id`, say, which both resolve

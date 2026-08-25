@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-08-25
  * Description: The unit-test harness's counters and reporting.
  * To Do: 1) Print the group name beside each failure once groups nest.
  * Dependencies: BuildGuards.h, Check.h, typedefs.h, stdio.h
@@ -12,6 +12,8 @@
  * Reviewers: David William Bull
  * License: MIT  Copyright: David William Bull
  */
+#include "BuildGuards.h"
+
 #include <stdio.h>
 #include "typedefs.h"
 #include "Check.h"
