@@ -199,19 +199,50 @@ csi64 MdEscapeLineStartAt(cchptr line, cui64 byteCount, cbool continuation) {
       if(byteCount == 1u || MdIsSpace(line[1])) return 0;
    }
 
-   // A line of nothing but hyphens or nothing but equals signs, trailing padding aside. Three or more
-   // hyphens are a thematic break wherever they stand; anything else here only underlines the line
-   // above it into a heading, so it matters only when there is a line above it to underline.
+   // A thematic break is three or more hyphens with any amount of space or tab between and after them,
+   // so "--- -" is one and is not a line of text. It needs no line above it and is escaped wherever it
+   // stands. The other two spellings, "___" and "***", never reach here: the inline rules escape an
+   // underscore and an asterisk wherever they stand.
+   if(first == '-') {
+      ui64 dashes = 0;
+      bool only   = true;
+
+      for(ui64 index = 0; index < byteCount && only; ++index) {
+         if(line[index] == '-') ++dashes;
+         else if(!MdIsSpace(line[index])) only = false;
+      }
+      if(only && dashes >= 3u) return 0;
+   }
+
+   // A setext underline is the character repeated with nothing after it but padding, and it promotes
+   // the line above it into a heading -- so it can only be one where there is a line above it. Interior
+   // whitespace disqualifies it, which is what separates it from the thematic break above.
    if(first == '-' || first == '=') {
       ui64 run  = 0;
       ui64 tail = byteCount;
 
       while(run < byteCount && line[run] == first) ++run;
       while(tail > run && MdIsSpace(line[tail - 1u])) --tail;
-      if(tail == run) {
-         if(first == '-' && run >= 3u) return 0;
-         if(continuation) return 0;
+      if(tail == run && continuation) return 0;
+   }
+
+   // A GFM table's delimiter row attaches to the line above it, and a hard break supplies one inside a
+   // single paragraph -- so "a|b" then "-|-" is two lines of text that render as a table. Escaping the
+   // head of anything shaped like a delimiter row is what stops the pair forming one; the header row
+   // itself needs no escape, because a table needs both halves.
+   if(first == '|' || first == '-' || first == ':') {
+      bool only  = true;
+      ui64 bars  = 0;
+      ui64 rules = 0;
+
+      for(ui64 index = 0; index < byteCount && only; ++index) {
+         cchar byte = line[index];
+
+         if(byte == '|') ++bars;
+         else if(byte == '-') ++rules;
+         else if(byte != ':' && !MdIsSpace(byte)) only = false;
       }
+      if(only && bars && rules) return 0;
    }
 
    // An ordered-list marker is one to nine digits, then a dot or a closing parenthesis, then a space, a

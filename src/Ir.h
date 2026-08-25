@@ -183,6 +183,7 @@ cIR_MARK IrMark(cIR_DOCUMENTptr document);
 void IrRewind(IR_DOCUMENTptrc document, cIR_MARK mark);
 
 /// How many blocks the document holds.
+/// @return The count, or 0 for a document that was never opened.
 cui32 IrBlockCount(cIR_DOCUMENTptr document);
 
 /// One block by index.
@@ -199,4 +200,5 @@ cIR_SPANptr IrSpanAt(cIR_DOCUMENTptr document, cui32 index);
 cchptr IrText(cIR_DOCUMENTptr document, cui32 at);
 
 /// Whether any append ran out of memory.
+/// @return true once an append has failed, and from then on. A failed document holds no usable IR.
 cbool IrFailed(cIR_DOCUMENTptr document);

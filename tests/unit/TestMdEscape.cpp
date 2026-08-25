@@ -153,6 +153,15 @@ void TestMdEscape(void) {
    CHECK(LineStartOf("---") == 0);
    CHECK(LineStartOf("- - -") == 0);
    CHECK(LineStartOf("=x=") < 0);
+   // A thematic break allows any amount of space or tab between and after its hyphens, so all of these
+   // are one and none of them is a line of text.
+   CHECK(LineStartOf("--- -") == 0);
+   CHECK(LineStartOf("--- ---") == 0);
+   CHECK(LineStartOf("-  -  -") == 0);
+   CHECK(LineStartOf("---\t-") == 0);
+   CHECK(LineStartOf("-- -") == 0); // Three hyphens in two runs is still three hyphens
+   CHECK(LineStartOf("--- x") < 0);
+   CHECK(LineStartOf("x ---") < 0);
    CHECK(LineStartOf("1. item") == 1);
    CHECK(LineStartOf("1998. a year") == 4);
    CHECK(LineStartOf("1998) a year") == 4);
@@ -179,7 +188,20 @@ void TestMdEscape(void) {
    CHECK(ContinuedStartOf("=== ") == 0);
    // A setext underline may carry trailing whitespace and nothing else, so an interior space kills it.
    CHECK(ContinuedStartOf("= =") < 0);
+   CHECK(ContinuedStartOf("- -") == 0); // A bullet, not a setext underline, but escaped either way
+   CHECK(LineStartOf("-- --") == 0);    // Four hyphens in two runs: a thematic break, not a paragraph
    CHECK(ContinuedStartOf("ordinary") < 0);
+
+   CheckGroup("MdEscape: a delimiter row cannot attach to the line above it");
+   // A GFM table is a header row and a delimiter row, and a hard break supplies both inside one
+   // paragraph. Escaping the head of anything shaped like a delimiter row is what stops the pair.
+   CHECK(LineStartOf("-|-") == 0);
+   CHECK(LineStartOf("|---|---|") == 0);
+   CHECK(LineStartOf("| --- | :---: |") == 0);
+   CHECK(LineStartOf(":-|-:") == 0);
+   CHECK(LineStartOf("|") < 0);     // No hyphen, so no delimiter row and no table
+   CHECK(LineStartOf("| x |") < 0); // A header row is harmless on its own
+   CHECK(LineStartOf("a|b") < 0);   // And so is one that does not begin with a table byte
 
    CheckGroup("MdEscape: the heading closing sequence");
    CHECK(HeadingTailOf("Sharp #") == 6);

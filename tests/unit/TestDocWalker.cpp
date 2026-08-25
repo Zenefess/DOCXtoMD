@@ -174,6 +174,18 @@ void TestDocWalker(void) {
    CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>hy\xC2\xADphen</w:t></w:r></w:p>", "P{[hyphen]}"));
    CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>keep \xC2\xA0 the nbsp</w:t></w:r></w:p>", "P{[keep \xC2\xA0 the nbsp]}"));
 
+   CheckGroup("DocWalker: a line end inside a w:t is interior whitespace");
+   // WordprocessingML spells a break w:br. A newline character inside a w:t is whitespace, and emitting
+   // it would end the Markdown block the text stands in -- a paragraph would become two.
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>a&#10;b</w:t></w:r></w:p>", "P{[a b]}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>a&#13;b</w:t></w:r></w:p>", "P{[a b]}"));
+   // A carriage return and a line feed together are one line end, so they become one space.
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>a&#13;&#10;b</w:t></w:r></w:p>", "P{[a b]}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>a&#10;&#10;b</w:t></w:r></w:p>", "P{[a  b]}"));
+   // A literal newline inside the element goes the same way as one written as a reference.
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>a\nb</w:t></w:r></w:p>", "P{[a b]}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:rPr><w:caps/></w:rPr><w:t>a&#10;b</w:t></w:r></w:p>", "P{[A B]}"));
+
    CheckGroup("DocWalker: empty and whitespace-only blocks are dropped");
    CHECK(TracedAs(nullptr, "<w:p/>", ""));
    CHECK(TracedAs(nullptr, "<w:p><w:r/></w:p>", ""));
@@ -291,8 +303,60 @@ void TestDocWalker(void) {
                   "<w:p><mc:AlternateContent><mc:Fallback><w:r><w:t>only a fallback</w:t></w:r></mc:Fallback>"
                   "</mc:AlternateContent></w:p>",
                   "P{[only a fallback]}"));
-   // mc:ProcessContent names an element to ignore while still processing what is inside it.
-   CHECK(TracedAs(nullptr, "<w:p><mc:ProcessContent><w:r><w:t>x</w:t></w:r></mc:ProcessContent></w:p>", "P{[x]}"));
+
+   CheckGroup("DocWalker: caps uppercases the text, and hidden runs go either way");
+   // Mapping row 37: caps uppercases, smallCaps leaves the text as typed.
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:rPr><w:caps/></w:rPr><w:t>chapter one</w:t></w:r></w:p>", "P{[CHAPTER ONE]}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:rPr><w:smallCaps/></w:rPr><w:t>chapter one</w:t></w:r></w:p>", "P{[chapter one]}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:rPr><w:caps/></w:rPr><w:t>caf\xC3\xA9 na\xC3\xAFve</w:t></w:r></w:p>", "P{[CAF\xC3\x89 NA\xC3\x8FVE]}"));
+   // Two exclusions, both because 0x20 is not their distance: the sharp s grows to two letters when it
+   // is uppercased, and y-diaeresis's uppercase form is nowhere near it.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:caps/></w:rPr><w:t>stra\xC3\x9F"
+                  "e</w:t></w:r></w:p>",
+                  "P{[STRA\xC3\x9F"
+                  "E]}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:rPr><w:caps/></w:rPr><w:t>1 \xC3\xB7 2</w:t></w:r></w:p>", "P{[1 \xC3\xB7 2]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:caps/></w:rPr><w:t>hy</w:t><w:softHyphen/>"
+                  "<w:t>phen</w:t></w:r></w:p>",
+                  "P{[HYPHEN]}"));
+   // caps is a toggle, so two specifications of it across the two style chains cancel the way any
+   // other pair does -- while a run naming it itself is direct formatting, which is final.
+   CHECK(TracedAs("<w:style w:styleId=\"C\"><w:name w:val=\"C\"/><w:rPr><w:caps/></w:rPr></w:style>"
+                  "<w:style w:type=\"character\" w:styleId=\"K\"><w:name w:val=\"K\"/>"
+                  "<w:rPr><w:caps/></w:rPr></w:style>",
+                  "<w:p><w:pPr><w:pStyle w:val=\"C\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"K\"/></w:rPr>"
+                  "<w:t>quiet</w:t></w:r></w:p>",
+                  "P{[quiet]}"));
+   CHECK(TracedAs("<w:style w:styleId=\"C\"><w:name w:val=\"C\"/><w:rPr><w:caps/></w:rPr></w:style>",
+                  "<w:p><w:pPr><w:pStyle w:val=\"C\"/></w:pPr><w:r><w:rPr><w:caps/></w:rPr>"
+                  "<w:t>loud</w:t></w:r></w:p>",
+                  "P{[LOUD]}"));
+   // w:webHidden is not a toggle -- 17.7.3 does not list it -- but a run it hides is dropped all the same.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:webHidden/></w:rPr><w:t>gone</w:t></w:r>"
+                  "<w:r><w:t>kept</w:t></w:r></w:p>",
+                  "P{[kept]}"));
+   CHECK(TracedAs("<w:style w:styleId=\"H\"><w:name w:val=\"H\"/><w:rPr><w:webHidden/></w:rPr></w:style>",
+                  "<w:p><w:pPr><w:pStyle w:val=\"H\"/></w:pPr><w:r><w:rPr><w:webHidden w:val=\"0\"/></w:rPr>"
+                  "<w:t>shown</w:t></w:r></w:p>",
+                  "P{[shown]}"));
+   // Nearest-wins, not XOR: two specifications of true stay true where two toggles would cancel.
+   CHECK(TracedAs("<w:style w:styleId=\"H\"><w:name w:val=\"H\"/><w:rPr><w:webHidden/></w:rPr></w:style>",
+                  "<w:p><w:pPr><w:pStyle w:val=\"H\"/></w:pPr><w:r><w:rPr><w:webHidden/></w:rPr>"
+                  "<w:t>gone</w:t></w:r></w:p>",
+                  ""));
+
+   CheckGroup("DocWalker: run containers whose text is content");
+   CHECK(TracedAs(nullptr, "<w:p><w:dir w:val=\"rtl\"><w:r><w:t>x</w:t></w:r></w:dir></w:p>", "P{[x]}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:bdo w:val=\"ltr\"><w:r><w:t>x</w:t></w:r></w:bdo></w:p>", "P{[x]}"));
+   // A ruby annotation is printed above its base text, which Markdown has nowhere to put; the base is
+   // the sentence, so it is what survives.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:ruby><w:rubyPr/><w:rt><w:r><w:t>anno</w:t></w:r></w:rt>"
+                  "<w:rubyBase><w:r><w:t>base</w:t></w:r></w:rubyBase></w:ruby></w:p>",
+                  "P{[base]}"));
 
    CheckGroup("DocWalker: what is skipped whole");
    CHECK(TracedAs(nullptr, "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>", ""));

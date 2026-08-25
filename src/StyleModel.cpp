@@ -192,6 +192,7 @@ void StyleClearDirect(STYLE_DIRECT_RUNptrc direct) {
    direct->toggleSpecified = 0;
    direct->characterStyle  = -1;
    direct->doubleStrike    = -1;
+   direct->webHidden       = -1;
    direct->vertAlign       = STYLE_VERT_UNSET;
 }
 
@@ -226,6 +227,10 @@ void StyleReadDirectProperty(XML_READERptrc reader, STYLE_DIRECT_RUNptrc direct)
    }
    if(XmlIsElement(reader, XML_NS_W, "dstrike")) {
       direct->doubleStrike = si8(StyleOnOff(XmlAttribute(reader, XML_NS_W, "val")) ? 1 : 0);
+      return;
+   }
+   if(XmlIsElement(reader, XML_NS_W, "webHidden")) {
+      direct->webHidden = si8(StyleOnOff(XmlAttribute(reader, XML_NS_W, "val")) ? 1 : 0);
       return;
    }
    if(XmlIsElement(reader, XML_NS_W, "vertAlign")) {
@@ -374,6 +379,7 @@ static cbool StyleReadStyle(STYLE_MODELptrc model, XML_READERptrc reader, boolpt
    record->role         = role;
    record->headingLevel = level;
    record->doubleStrike = runs.run.doubleStrike;
+   record->webHidden    = runs.run.webHidden;
    record->type         = type;
    record->vertAlign    = runs.run.vertAlign;
    record->isDefault    = marked;
@@ -427,6 +433,7 @@ static cbool StyleReadDefaults(STYLE_MODELptrc model, XML_READERptrc reader) {
    model->defaults.toggleTrue   = runs.run.toggleTrue;
    model->defaults.outlineLvl   = marks.outlineLvl;
    model->defaults.doubleStrike = runs.run.doubleStrike;
+   model->defaults.webHidden    = runs.run.webHidden;
    model->defaults.vertAlign    = runs.run.vertAlign;
    return true;
 }
@@ -470,6 +477,7 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
    resolved->role         = STYLE_ROLE_NORMAL;
    resolved->headingLevel = 0;
    resolved->doubleStrike = -1;
+   resolved->webHidden    = -1;
    resolved->vertAlign    = STYLE_VERT_UNSET;
    for(ui32 step = length; step > 0; --step) {
       cSTYLE_RECORDptr record = model->styles + chain[step - 1u];
@@ -477,6 +485,7 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
       resolved->toggleParity = ui16(resolved->toggleParity ^ record->toggleTrue);
       if(record->outlineLvl >= 0) resolved->outlineLvl = record->outlineLvl;
       if(record->doubleStrike >= 0) resolved->doubleStrike = record->doubleStrike;
+      if(record->webHidden >= 0) resolved->webHidden = record->webHidden;
       if(record->vertAlign != STYLE_VERT_UNSET) resolved->vertAlign = record->vertAlign;
       if(record->role != STYLE_ROLE_NORMAL) {
          resolved->role         = record->role;
@@ -491,6 +500,7 @@ void StyleOpen(STYLE_MODELptrc model) {
    mzero(model, sizeof(STYLE_MODEL));
    model->defaults.outlineLvl   = -1;
    model->defaults.doubleStrike = -1;
+   model->defaults.webHidden    = -1;
    model->defaults.vertAlign    = STYLE_VERT_UNSET;
    model->defaultParagraph      = -1;
    model->lastXml               = XML_OK;
@@ -638,7 +648,7 @@ cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleI
 }
 
 cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cSTYLE_DIRECT_RUNptr direct) {
-   STYLE_RUN_PROPS props = {0, false, STYLE_VERT_BASELINE};
+   STYLE_RUN_PROPS props = {0, false, false, STYLE_VERT_BASELINE};
 
    cbool paragraphKnown = (paragraphStyle >= 0 && ui32(paragraphStyle) < model->styleCount && model->resolved);
    cbool characterKnown = (direct->characterStyle >= 0 && ui32(direct->characterStyle) < model->styleCount && model->resolved);
@@ -667,6 +677,13 @@ cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cS
    if(doubleStrike < 0 && fromParagraph) doubleStrike = fromParagraph->doubleStrike;
    if(doubleStrike < 0) doubleStrike = model->defaults.doubleStrike;
    props.doubleStrike = (doubleStrike > 0);
+
+   si8 webHidden = direct->webHidden;
+
+   if(webHidden < 0 && fromCharacter) webHidden = fromCharacter->webHidden;
+   if(webHidden < 0 && fromParagraph) webHidden = fromParagraph->webHidden;
+   if(webHidden < 0) webHidden = model->defaults.webHidden;
+   props.webHidden = (webHidden > 0);
 
    STYLE_VERT_ALIGN vertAlign = direct->vertAlign;
 

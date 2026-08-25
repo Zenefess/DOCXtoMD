@@ -63,7 +63,10 @@
       </mc:AlternateContent>
     </w:p>
     <w:tbl>
-      <w:tr><w:tc><w:p><w:r><w:t>A table is skipped whole until M9.</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="9026"/></w:tblGrid>
+      <w:tr><w:tc><w:tcPr><w:tcW w:w="9026" w:type="dxa"/></w:tcPr>
+        <w:p><w:r><w:t>A table is skipped whole until M9.</w:t></w:r></w:p></w:tc></w:tr>
     </w:tbl>
     <w:p><w:r><w:t>The last paragraph.</w:t></w:r></w:p>
     <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>

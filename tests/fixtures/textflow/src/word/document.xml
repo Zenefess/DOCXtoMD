@@ -10,6 +10,10 @@
     <w:p><w:r><w:t>---</w:t></w:r></w:p>
     <w:p><w:r><w:t>===</w:t></w:r></w:p>
     <w:p><w:r><w:t>--</w:t></w:r></w:p>
+    <w:p><w:r><w:t>--- -</w:t></w:r></w:p>
+    <w:p><w:r><w:t>A newline inside a w:t&#10;is not a break.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>a|b</w:t><w:br/><w:t>-|-</w:t></w:r></w:p>
+    <w:p><w:r><w:t>- - -</w:t></w:r></w:p>
     <w:p><w:r><w:t>Above an underline</w:t><w:br/><w:t>===</w:t></w:r></w:p>
     <w:p><w:r><w:t>Above a short rule</w:t><w:br/><w:t>--</w:t></w:r></w:p>
     <w:p><w:r><w:t>#hash without a space is only a hash</w:t></w:r></w:p>

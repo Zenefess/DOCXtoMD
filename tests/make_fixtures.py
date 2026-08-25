@@ -687,7 +687,6 @@ def build_all(verbose=True, writing=True):
         expect(case + ".docx", 0, ["wrote", case + ".md"], "the %s golden fixture" % case)
         golden(case + ".docx", case)
 
-
     if verbose:
         print("built %d fixtures in %s" % (len(EXPECTATIONS), BUILD))
         print()

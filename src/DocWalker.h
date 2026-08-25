@@ -7,7 +7,8 @@
  * Description: The document walk: WordprocessingML body content into the intermediate representation.
  * To Do: 1) Walk w:tbl into table blocks at M9, and w:hyperlink into link spans at M7.
  *        2) Run the field state machine over w:fldChar and w:instrText at M10, which today are skipped.
- *        3) Honour a deleted paragraph mark by joining the paragraph with the next one (M10).
+ *        3) Emit the horizontal rule a lone w:pBdr bottom on an empty paragraph means (mapping row 25).
+ *        4) Honour a deleted paragraph mark by joining the paragraph with the next one (M10).
  * Dependencies: Ir.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -61,11 +62,23 @@ typedef const WALK_STATUS cWALK_STATUS;
 ///       mc:AlternateContent takes its mc:Fallback when it has one, because this build understands no
 ///       extension namespace and so understands no mc:Choice.
 /// @note What M5 does not walk yet, and skips whole rather than descending into: w:tbl, w:drawing,
-///       w:pict, the field elements, the note and comment references, and w:sym. Each arrives with the
-///       milestone that can emit it. An element this build has never heard of is skipped the same way,
-///       which is the OOXML compatibility model.
-/// @note A run whose effective w:vanish is on is dropped with its text. Word hides field instructions
-///       that way, so keeping them would put raw field codes in the output.
+///       w:pict, the field elements, the note and comment references, w:sym and m:oMath. Each arrives
+///       with the milestone that can emit it, except m:oMath and w:sym, which have none yet and are the
+///       two places text is lost rather than merely unformatted -- see the To Do. An element this build
+///       has never heard of is skipped the same way, which is the OOXML compatibility model.
+/// @note What is descended into although its own meaning waits for a later milestone, because dropping
+///       it would lose text: w:hyperlink, w:fldSimple, the bidirectional containers w:dir and w:bdo, and
+///       a w:ruby's w:rubyBase -- its w:rt annotation is printed above the base text, which Markdown has
+///       nowhere to put.
+/// @note A lone w:pBdr bottom on an otherwise empty paragraph is Word's autoformatted horizontal rule,
+///       and the ruled mapping row 25 turns it into "---". Nothing reads it yet, so such a paragraph
+///       converts to nothing at all; CONVERSION_REFERENCE 6.2 puts that classification in the stage M6
+///       owns, and the To Do names it so the milestone cannot close without it.
+/// @note A run whose effective w:vanish or w:webHidden is on is dropped with its text. Word hides field
+///       instructions that way, so keeping them would put raw field codes in the output.
+/// @note A run whose effective w:caps is on has its text uppercased, which is mapping row 37 -- caps is
+///       a transform on the bytes rather than a delimiter, so it belongs here and not to M6's emitter.
+///       w:smallCaps leaves the text as typed, which the same row says.
 cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, csi32 partIndex);
 
 /// Walks one WordprocessingML body part out of bytes that are already known to be well-formed UTF-8.

@@ -101,4 +101,5 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document);
 cchptr MdBytes(cMD_EMITTERptr emitter);
 
 /// How many bytes were emitted.
+/// @return The byte count, which is 0 before MdEmitDocument runs and after it fails.
 cui64 MdByteCount(cMD_EMITTERptr emitter);

@@ -197,16 +197,21 @@ below.
   - `DocWalker.h`/`DocWalker.cpp` — the body walk, one dispatcher for both block and run level because
     every transparent wrapper appears at both and means the same thing at each. Accept-all revisions
     (correctness rule 8): `w:ins` and `w:moveTo` are transparent, `w:del` and `w:moveFrom` are dropped
-    whole, and `w:sdt`, `w:smartTag`, `w:customXml` and `mc:ProcessContent` are transparent. A run
-    whose effective `w:vanish` is on is dropped with its text, which is what keeps Word's hidden field
-    instructions out of the output. A heading's spans have their bold bit cleared, because mapping row
-    1 rules that heading text is never additionally bolded and `IR_FMT` is the only channel M6 has.
-    `w:t` text is taken literally — `xml:space` is the producer's business — with U+00AD removed.
-    What is skipped whole and why: `w:tbl` (M9), `w:drawing`/`w:pict` (M7), `w:sym` (needs a Symbol and
-    Wingdings table), `w:instrText` and `w:fldChar` (M10's field state machine), and anything this
-    build has never heard of, which is the OOXML compatibility model. `w:hyperlink` and `w:fldSimple`
-    are descended into rather than skipped: their brackets and their field semantics arrive later, but
-    their text is content now.
+    whole, and `w:sdt`, `w:smartTag` and `w:customXml` are transparent. A run whose effective
+    `w:vanish` or `w:webHidden` is on is dropped with its text, which is what keeps Word's hidden field
+    instructions out of the output; a run whose `w:caps` is on has its text uppercased, which is
+    mapping row 37 and is a transform on the bytes rather than a delimiter, so it belongs here. A
+    heading's spans have their bold bit cleared, because mapping row 1 rules that heading text is never
+    additionally bolded and `IR_FMT` is the only channel M6 has. `w:t` text is taken literally —
+    `xml:space` is the producer's business — with U+00AD removed. What is skipped whole and why:
+    `w:tbl` (M9), `w:drawing`/`w:pict` (M7), `w:instrText` and `w:fldChar` (M10's field state machine),
+    `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
+    than merely unformatted — both are named in `DocWalker.h`'s To Do), and anything this build has
+    never heard of, which is the OOXML compatibility model. Descended into although their own meaning
+    waits: `w:hyperlink`, `w:fldSimple`, the bidirectional containers `w:dir` and `w:bdo`, and a
+    `w:ruby`'s `w:rubyBase`. `mc:Ignorable` and `mc:ProcessContent` are **attributes**, not elements,
+    and nothing reads either yet — an element in an ignorable namespace is skipped rather than having
+    its children promoted, which is a `To Do` and not a claim of MCE conformance.
   - `MdEscape.h`/`MdEscape.cpp` — correctness rule 6's context-aware writer, pure and allocating
     nothing: one core that measures when its destination is null and writes when it is not, so the two
     can never disagree about a length. The reference lists a `lineStart` context; this has none, and
@@ -518,7 +523,7 @@ because standard C++ habits violate nearly all of these. Intentional deviations 
 | r13 | Control structures: no space before `(`, exactly one space after each `;` — `if(x)`, `for(ui32 i = 0; i < n; ++i)`. |
 | r14/r15 | `{` on the same line as the control statement / function signature (functions: **exactly one space** before `{`; never on its own line). `}` on its own line, except a function body that fits on the signature line within e2 may close there. |
 | r3/r4 | Spreadsheet-style padding where it locally helps readability; same-line statements only when r3 justifies them, separated by **exactly three spaces**. |
-| r5/r6/d1 | `///` with `@param`/`@return`/`@tparam`/`@note` for API docs only (public APIs require it); `//` for notes; `//==`/`//--` grouping headers. Disable >5 lines of code with `/* */`, else `//`. |
+| r5/r6/d1 | `///` with `@param`/`@return`/`@tparam`/`@note` for API docs only (public APIs require it); `//` for notes; `//==`/`//--` grouping headers. Disable >5 lines of code with `/* */`, else `//`. House convention for a one-line accessor whose summary already names its only argument (`OpcRel`, `IrBlockAt`, `StyleName`, `MdBytes`): carry the `@return` and omit the `@param`, since a tag repeating the summary is noise. Anything with two arguments, or a return the summary does not spell, carries both. |
 | r17 | Every source file opens with the validated prolog (template below). |
 | c1/c2 | **No history in prologs** — record changes in root `CHANGELOG.md` (`[Unreleased]` + Added/Changed/Fixed/Removed/Perf per c3). |
 | p1 | `inline` in headers only when profile-hot and ODR/size safe; else in `.cpp`. |
@@ -823,6 +828,8 @@ implementation session must respect:
 | Footnotes/endnotes | `[^n]` refs + definitions at end, renumbered 1..n |
 | Horizontal rule (`pBdr` bottom on empty ¶) | `---` with blank lines around |
 | `w:br` (textWrapping) / page break | Backslash hard break (`<br>` in cells) / nothing |
+| Hidden text | Dropped, for `w:vanish` (a toggle) and `w:webHidden` (nearest-wins) alike |
+| `w:caps` | The run's text is uppercased — ASCII and the Latin-1 supplement, which is where a 0x20 offset is exactly right; anything beyond needs Unicode's case tables and is a `To Do` |
 | TOC (field or SDT), headers/footers, comments | Skipped |
 | Soft hyphens | Removed; NBSP and smart punctuation kept verbatim |
 | Output encoding | UTF-8, no BOM, LF line endings (tc2's CRLF governs source files, not program output) |
@@ -1229,48 +1236,79 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     run would make that table false. What is **not** taken early: no inline delimiter is emitted at all,
     because a delimiter is only safe after M6's coalescing and whitespace hoisting.
   - **Verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII only,
-    CRLF and ≤150 columns on all thirty `src/` files and all ten `tests/unit/` ones; `clang-format
+    CRLF and ≤150 columns on all thirty `src/` files and all eleven `tests/unit/` ones; `clang-format
     --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs well-formed
     XML, mutually byte-identical in their `Include=` paths, and every listed file present on disk.
-  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **774**
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **809**
     checks, `tests/run_golden.py` all **47** and `tests/run_container.py` all **99**, every one of them
     under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no diagnostic. The
-    47 are seven golden cases and fourteen container fixtures converted twice each — once to a file and
-    once through `--stdout`, which are different code paths — plus the `-o`, `--stdout`, `-q`, exit-6
-    and total-failure command lines.
+    47 are twenty archives converted twice each — once to a file and once through `--stdout`, which are
+    different code paths — plus the `-o`, `--stdout`, `-q`, exit-6 and total-failure command lines. The
+    twenty archives are the five case fixtures, `relocated-main.docx`, and the fourteen container
+    fixtures that carry the `minimal` document unaltered under fourteen different container and package
+    shapes; those fourteen share one `expected.md`, which is how seven `expected.md` files cover twenty
+    archives.
   - **The definition of done, and what discharges it**: `tests/run_golden.py` byte-compares seven
     fixture cases against a committed `expected.md`, and **each `expected.md` was written by hand from
     the specification before the converter was run against it**. All seven matched on the first run,
     which is the only reading of "byte-exact" worth having — a golden generated from the implementation
     asserts nothing.
   - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`
-    and M4 from expat: 7,500 generated documents — nested transparent wrappers, tracked changes,
+    and M4 from expat: 4,000 generated documents — nested transparent wrappers, tracked changes,
     `mc:AlternateContent` with and without a fallback, hidden runs, breaks, tabs, hyphens, and text
     chosen to collide with every Markdown construct — were converted and then re-parsed with
     `markdown-it-py`'s CommonMark mode, and the plain text it renders was compared against a Python
-    reimplementation of the documented walk. All 7,500 agree. That is the check that actually tests the
+    reimplementation of the documented walk. All 4,000 agree. That is the check that actually tests the
     escaping: it proves no text was reinterpreted as markup and no markup appeared the source never had.
     It found one real difference — a heading whose break kept the padding on both sides of it, emitting
     two spaces where one renders — and one difference that is the *parser's*: `markdown-it-py` strips
     Unicode whitespace from a block's edges, so it drops a leading U+00A0 that CommonMark keeps and
     mapping row 35 rules we emit. The first was fixed; the second is normalised out of both sides of the
     comparison rather than papered over on one.
-  - **Fuzzed**: 14,500 mutated archives and 8,700 generated well-formed documents through the exe, on
-    top of those 7,500.
+  - **The toggle XOR is differential-tested too**, which matters because it is the one algorithm in M5
+    that a plausible implementation can get wrong in a way no fixture notices: 3,150 randomly generated
+    style tables — random `w:basedOn` chains including cycles, self-references and chains past the
+    sixteen-link cap, random `w:docDefaults`, random `w:rStyle` and random direct formatting — were
+    resolved by the converter and by a second, independent implementation of ISO/IEC 29500-1 17.7.3
+    written from the specification. The two agree on every paragraph of every table, on both things a
+    style can observably do at M5: whether a run is hidden, and what heading level a paragraph is.
+  - **Fuzzed**: 15,000 mutated archives and 7,500 generated well-formed documents through the exe, on
+    top of those 4,000 and 3,150.
     Every mutated archive returns a documented exit code, every generated document satisfies the
     emitter's own invariants — UTF-8 out, LF endings, no trailing whitespace, no blank line inside a
     block, exactly one trailing newline — and neither sanitizer says anything.
   - **Reviewed** by a four-area design-and-critique workflow before the code was finished and by a
-    six-dimension adversarial review after it, each finding put to a skeptic told to refute it. What
-    that changed, beyond the heading-space defect above: escaping moved from per-span to per-assembled-
-    line, because the ampersand rule looks ahead and Word fragments runs, so per-span escaping made
+    six-dimension adversarial review after it, each finding put to a skeptic told to refute it. Three
+    of what it found were defects that produced wrong Markdown and that every fixture and every unit
+    check had missed. A **line end inside a `w:t`** reached the output as a line end: `<w:t>Total&#10;#
+    5</w:t>` came out as a paragraph followed by an `<h1>`, and a `w:t` a producer pretty-printed came
+    out as an indented code block. WordprocessingML spells a break `w:br`; a newline character in a
+    `w:t` is interior whitespace, and it now folds to one space. A **GFM delimiter row** could attach
+    to the line above it inside one paragraph, so `a|b` with a hard break and then `-|-` rendered as a
+    table rather than as two lines of text; the line-start pass now escapes the head of anything
+    shaped like a delimiter row, which is enough because a table needs both halves. And a **thematic
+    break with interior spaces** -- `--- -`, which CommonMark counts as four hyphens -- was not caught,
+    because the rule wanted one contiguous run; that one the differential oracle found on its own.
+    What the review changed besides, beyond the heading-space defect above: escaping moved from
+    per-span to per-assembled-line, because the ampersand rule looks ahead and Word fragments runs, so per-span escaping made
     `A&amp;B` depend on where the producer split it; `MD_CONTEXT_HTML` became the inline set plus two
     entities rather than instead of it, because GFM still parses the text between raw tags; the setext
     rule learned that an underline needs a line above it, which removed a backslash from every `===`
     line at the head of a block; the walker learned that mapping row 1 rules heading text is never
-    additionally bolded; `mc:ProcessContent` became transparent; the complex-script twins `w:bCs` and
+    additionally bolded; the complex-script twins `w:bCs` and
     `w:iCs` fold into the same formatting bit, because two runs that render identically must coalesce
-    at M6; and a container refusal now keeps the package's own exit code instead of always reporting 3.
+    at M6; a container refusal now keeps the package's own exit code instead of always reporting 3;
+    `w:caps` uppercases its run's text, which mapping row 37 rules and nothing was doing; `w:webHidden`
+    hides a run the way `w:vanish` does, which `docs/CONVERSION_REFERENCE.md` 2.3 asks for; `w:dir`,
+    `w:bdo` and a `w:ruby`'s `w:rubyBase` are descended into rather than skipped, because their text is
+    content; a dead `mc:ProcessContent` *element* branch went, because MCE spells it an attribute and
+    no conformant document can carry the element; and the `wrappers` fixture's `w:tbl` and dangling
+    `r:id` were made valid WordprocessingML, so M7 and M9 inherit a fixture rather than a typo.
+  - **One question the review raised is a ruling and not a fix, so it is D12 rather than a commit**:
+    GitHub renders `$...$` as LaTeX math and has since 2022, `docs/CONVERSION_REFERENCE.md` 4.1
+    predates that, and "costs $5 and $10" is corrupted on the one renderer this project's own mapping
+    table names. Escaping `$` everywhere is visible on every ordinary document; the row is in the
+    Decisions table awaiting the owner.
   - **The one real defect the tests found that the goldens could not**: `StyleModel`'s string heap never
     seeded offset 0 with the empty string, so a style declaring no `w:basedOn` read offset 0 as its
     parent and inherited whichever identifier happened to be stored first. Every golden fixture's first
@@ -1324,7 +1362,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
 ## Decisions (every row is ruled and settled — do not re-litigate)
 
 D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19, and D8–D11 on 2026-08-24, the day M4
-raised them: the owner accepted all four session recommendations as written. **No decision is open.** Keep the
+raised them: the owner accepted all four session recommendations as written. **D12 is open** — M5 raised it on
+2026-08-25 and it awaits the owner. Keep the
 IDs stable — `docs/CONVERSION_REFERENCE.md` cites D1, D2, D8 and D10 by name — and keep a ruled row's question and
 the reasoning that was put to the owner rather than trimming it to the answer, because a ruling records what was
 asked as much as what was decided. New questions get the next free ID (D12, D13, …) with the same
@@ -1343,6 +1382,7 @@ question/recommendation/status shape, and stay `Open — owner call` until the o
 | D9 | When the `officeDocument` relationship resolves to a part whose content type is **not** one of the four WordprocessingML main-document types, does the tool convert it (trusting the relationship and reporting the disagreement) or refuse it as not a valid DOCX? "Cross-check" in correctness rule 1 is ambiguous between *verify and fail* and *fall back*, and the two readings give opposite exit codes for the same file. | **Trust the relationship and convert**, as M4 implements: the relationship is the specification's discovery mechanism and `[Content_Types].xml` is metadata, and refusing loses documents from producers that omit the Override. The content-type table stays a cross-check in the one case M4 already gives it — a relationship that resolved to a part the archive does not contain. | M4 (already implemented; `content-type-mismatch.docx` pins it, so the choice cannot change silently) |
 | D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | **Leave it as it is until M11** and decide there with the producer-variance corpus in hand. Nothing is exposed meanwhile: part names are only ever compared in memory and no path reaches disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Deferred to M11 by the ruling** — that milestone owns the decision and must not close without recording it |
 | D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | **Yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it earlier would oblige every future file to pass a session-authored checker with no CI behind it. | M12 |
+| D12 | GitHub renders `$...$` and `$$...$$` as LaTeX math, and has since 2022. `docs/CONVERSION_REFERENCE.md` 4.1 predates that and does not list `$` among the characters to escape, so today a paragraph reading `costs $5 and $10` is emitted verbatim and github.com renders `5 and ` in math font, losing both dollar signs. Should `$` join the unconditional inline escape set, join it conditionally (only where a closing `$` could pair with it), or stay unescaped? Note the cost of each: unconditional puts a backslash in front of every price in every document, conditional needs a lookahead the line-assembly pass can do but the reference does not describe, and leaving it corrupts a real and common shape on the one renderer this converter names in its own mapping table. The same question reaches `docs/CONVERSION_REFERENCE.md`, which would gain the row either way. | *Open -- owner call.* **Recommendation: escape `$` conditionally**, where a later `$` on the same line could close it, and add the row to the reference. Unconditional escaping is the safe direction but it is visible on every ordinary document, and math is not a CommonMark feature -- it is one renderer's extension, so paying for it everywhere is out of proportion. | Not started -- awaiting the ruling |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the

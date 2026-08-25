@@ -305,7 +305,7 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
       if(verdict == EXIT_ALL_CONVERTED && !options->quiet) {
          char note[64];
 
-         snprintf(note, sizeof(note), "wrote %llu bytes", (unsigned long long)MdByteCount(&emitter));
+         snprintf(note, sizeof(note), "wrote %llu bytes", MdByteCount(&emitter));
          DiagNoteText(note, outputPath);
       }
    }

@@ -13,3 +13,9 @@ Kept.
 Only this is left.
 
 An unrecognised value reads as false.
+
+A STYLE WITH CAPS SHOUTS.
+
+Small caps are left as typed.
+
+This is not.

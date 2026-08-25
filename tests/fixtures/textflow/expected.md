@@ -16,6 +16,15 @@
 
 --
 
+\--- -
+
+A newline inside a w:t is not a break.
+
+a|b\
+\-|-
+
+\- - -
+
 Above an underline\
 \===
 

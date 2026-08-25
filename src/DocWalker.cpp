@@ -5,11 +5,14 @@
  * Created: 2026-08-25
  * Last Modified: 2026-08-25
  * Description: The body walk: transparent wrappers, paragraph properties, runs and run content.
- * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood.
- *        2) Map w:sym through a Symbol and Wingdings table instead of dropping it.
- *        3) Cache more than one paragraph style if a document is ever found alternating between many.
- * Dependencies: BuildGuards.h, DocWalker.h, Ir.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h,
- *               memory management.h, windows.h
+ * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
+ *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
+ *        2) Uppercase beyond ASCII and Latin-1 for w:caps, which needs Unicode's case tables.
+ *        3) Emit the horizontal rule a lone w:pBdr bottom on an empty paragraph means (mapping row 25).
+ *        4) Linearize m:oMath and map w:sym, both of which are skipped whole and so lose their text.
+ *        5) Cache more than one paragraph style if a document is ever found alternating between many.
+ * Dependencies: BuildGuards.h, DocWalker.h, Ir.h, OpcPackage.h, StyleModel.h, Utf.h, XmlPull.h,
+ *               typedefs.h, memory management.h, windows.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -25,6 +28,7 @@
 #include "Ir.h"
 #include "OpcPackage.h"
 #include "StyleModel.h"
+#include "Utf.h"
 #include "XmlPull.h"
 #include "DocWalker.h"
 
@@ -70,9 +74,11 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
 
 //-- Small helpers
 
-// Copies a view into a NUL-terminated buffer. Every view the reader hands out dies on the next XmlNext
-// call, and a style identifier has to outlive the lookup that follows it.
-static void DocCopyView(cXML_TEXT text, chptrc dest, cui64 destBytes) {
+// Copies a view into a NUL-terminated buffer, and reports how many bytes it wrote. Every view the reader
+// hands out dies on the next XmlNext call, and a style identifier has to outlive the lookup that follows
+// it. The length comes back because a caller that copies the buffer on again must not read past it: the
+// bytes after the terminator were never written, and reading one is indeterminate.
+static cui64 DocCopyView(cXML_TEXT text, chptrc dest, cui64 destBytes) {
    ui64 used = 0;
 
    if(text.bytes) {
@@ -82,36 +88,83 @@ static void DocCopyView(cXML_TEXT text, chptrc dest, cui64 destBytes) {
       }
    }
    dest[used] = 0;
+   return used;
 }
 
 // Resolves a style identifier, remembering the last one. Documents reuse a handful of styles over
 // thousands of paragraphs, so one cached answer removes almost every linear scan of the style table.
 static csi32 DocFindStyle(DOC_CONTEXTptrc context, cXML_TEXT value) {
-   char identifier[STYLE_MAX_NAME_BYTES];
+   char  identifier[STYLE_MAX_NAME_BYTES];
+   cui64 length = DocCopyView(value, identifier, sizeof(identifier));
 
-   DocCopyView(value, identifier, sizeof(identifier));
-   if(!identifier[0]) return -1;
+   if(!length) return -1;
 
    ui64 index = 0;
 
    while(context->cachedId[index] && context->cachedId[index] == identifier[index]) ++index;
    if(context->cachedId[index] == identifier[index]) return context->cachedStyle;
-   for(index = 0; index < sizeof(context->cachedId); ++index) context->cachedId[index] = identifier[index];
+   // The terminator is copied and nothing past it: the rest of the buffer was never written.
+   for(index = 0; index <= length; ++index) context->cachedId[index] = identifier[index];
    context->cachedStyle = StyleFind(context->styles, identifier);
    return context->cachedStyle;
 }
 
-// Appends text to the open span, dropping the soft hyphens CONVERSION_REFERENCE row 34 says to remove.
-// U+00AD is invisible and splits a word wherever a renderer decides not to hyphenate, so keeping one
-// corrupts the word for every reader that does not.
-static cbool DocAppendText(DOC_CONTEXTptrc context, cchptr bytes, cui64 byteCount) {
+// Uppercases one byte pair in place, for the w:caps transform, and reports how many bytes it consumed.
+// Two ranges are handled and no more: the ASCII letters, and the Latin-1 supplement's lowercase letters,
+// whose uppercase forms sit exactly 0x20 below them. Everything beyond those needs Unicode's case tables,
+// which this project does not carry -- see the To Do. The two exclusions are deliberate: U+00DF grows to
+// two characters when uppercased and U+00FF's uppercase is not 0x20 away, so neither is touched.
+static cui64 DocUpperOne(cchptr bytes, cui64 byteCount, ui8ptrc dest) {
+   cui8 lead = ui8(bytes[0]);
+
+   if(lead >= 'a' && lead <= 'z') {
+      dest[0] = ui8(lead - 'a' + 'A');
+      return 1u;
+   }
+   if(lead == 0xC3u && byteCount >= 2u) {
+      cui8 next = ui8(bytes[1]);
+
+      dest[0] = lead;
+      dest[1] = ui8(next >= 0xA0u && next <= 0xBEu && next != 0xB7u ? next - 0x20u : next);
+      return 2u;
+   }
+   dest[0] = lead;
+   return 1u;
+}
+
+// Appends text to the open span, dropping the soft hyphens CONVERSION_REFERENCE row 34 says to remove
+// and uppercasing when row 37's w:caps is in force. U+00AD is invisible and splits a word wherever a
+// renderer decides not to hyphenate, so keeping one corrupts the word for every reader that does not.
+static cbool DocAppendText(DOC_CONTEXTptrc context, cchptr bytes, cui64 byteCount, cbool upper) {
    ui64 run = 0;
 
    for(ui64 index = 0; index < byteCount; ++index) {
       cbool soft = (ui8(bytes[index]) == 0xC2u && index + 1u < byteCount && ui8(bytes[index + 1u]) == 0xADu);
+      cbool ends = (bytes[index] == '\n' || bytes[index] == '\r');
 
+      // A line end inside a w:t is interior whitespace and not a break: WordprocessingML spells a break
+      // w:br. Emitting the byte would end the Markdown block it stands in -- a heading would gain a
+      // second line, a paragraph would become two -- so it folds to one space. A carriage return can
+      // only arrive as a character reference, which XML says is not line-end normalised; a pair of them
+      // is one line end and becomes one space.
+      if(ends) {
+         if(run && !IrAppendText(context->document, bytes + index - run, run)) return false;
+         run = 0;
+         if(bytes[index] == '\r' && index + 1u < byteCount && bytes[index + 1u] == '\n') ++index;
+         if(!IrAppendText(context->document, " ", 1u)) return false;
+         continue;
+      }
       if(!soft) {
-         ++run;
+         if(!upper) {
+            ++run;
+            continue;
+         }
+
+         ui8   folded[UTF_MAX_ENCODED];
+         cui64 took = DocUpperOne(bytes + index, byteCount - index, folded);
+
+         if(!IrAppendText(context->document, (cchptr)folded, took)) return false;
+         index += took - 1u;
          continue;
       }
       if(run && !IrAppendText(context->document, bytes + index - run, run)) return false;
@@ -168,7 +221,7 @@ static cui32 DocFormatBits(cSTYLE_RUN_PROPS props) {
 //-- Runs
 
 // Reads the text of the w:t the reader is on into the open span.
-static cbool DocReadTextElement(DOC_CONTEXTptrc context) {
+static cbool DocReadTextElement(DOC_CONTEXTptrc context, cbool upper) {
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -180,7 +233,7 @@ static cbool DocReadTextElement(DOC_CONTEXTptrc context) {
          // One w:t can arrive as several text tokens, because a comment or a processing instruction ends
          // a run of character data. Nothing here trims: xml:space is the producer's business, and
          // CONVERSION_REFERENCE 2.2 says to parse a w:t literally either way.
-         if(!DocAppendText(context, context->reader->text.bytes, context->reader->text.length)) {
+         if(!DocAppendText(context, context->reader->text.bytes, context->reader->text.length, upper)) {
             context->memory = true;
             return false;
          }
@@ -198,6 +251,7 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
    bool             resolved = false;
    ui32             bits     = IR_FMT_NONE;
    bool             hidden   = false;
+   bool             upper    = false;
 
    StyleClearDirect(&direct);
    for(;;) {
@@ -216,8 +270,13 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
       if(!resolved) {
          cSTYLE_RUN_PROPS props = StyleResolveRun(context->styles, paragraphStyle, &direct);
 
-         hidden = (props.toggles & StyleToggleBit(STYLE_TOGGLE_VANISH)) != 0;
-         bits   = DocFormatBits(props);
+         // Hidden text is omitted whole whichever property says so. w:vanish is a toggle and
+         // w:webHidden is not, but CONVERSION_REFERENCE 2.3 drops a run for either.
+         hidden = ((props.toggles & StyleToggleBit(STYLE_TOGGLE_VANISH)) != 0) || props.webHidden;
+         // Row 37: caps uppercases the text, smallCaps leaves it as typed. It is a transform on the
+         // bytes rather than a delimiter, so it happens here, where the bytes are copied.
+         upper = (props.toggles & StyleToggleBit(STYLE_TOGGLE_CAPS)) != 0;
+         bits  = DocFormatBits(props);
          // A heading's bold is style-borne, and CLAUDE.md's mapping row 1 rules that heading text is
          // never additionally bolded. The bit is cleared here because IR_FMT is the only channel the
          // emitter has: left set, M6 would wrap every heading in delimiters it already carries.
@@ -238,7 +297,7 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
             }
             textOpen = true;
          }
-         if(!DocReadTextElement(context)) return false;
+         if(!DocReadTextElement(context, upper)) return false;
          continue;
       }
 
@@ -385,6 +444,25 @@ static cbool DocWalkStructuredTag(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi
    }
 }
 
+// Walks the w:ruby the reader is on, descending only into its w:rubyBase. The w:rt half is the
+// annotation printed above the base text, which Markdown has nowhere to put; the base is the sentence.
+static cbool DocWalkRuby(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool heading) {
+   cui32 depthHere = context->reader->depth;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_W, "rubyBase")) {
+         if(!DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading)) return false;
+         continue;
+      }
+      if(!XmlSkipElement(context->reader)) return false;
+   }
+}
+
 // Walks the mc:AlternateContent the reader is on. This build understands no extension namespace, so it
 // understands no mc:Choice and the mc:Fallback is the branch to take -- but a Fallback stands after the
 // Choices and a pull tokenizer cannot look ahead. So the first Choice is walked speculatively and rewound
@@ -438,9 +516,6 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    if(inserted || tagged) return DocWalkChildren(context, level, paragraphStyle, heading);
    if(XmlIsElement(context->reader, XML_NS_W, "sdt")) return DocWalkStructuredTag(context, level, paragraphStyle, heading);
    if(XmlIsElement(context->reader, XML_NS_MC, "AlternateContent")) return DocWalkAlternate(context, level, paragraphStyle, heading);
-   // mc:ProcessContent names an element to ignore while still processing its children, which is what
-   // descending into it without doing anything else is.
-   if(XmlIsElement(context->reader, XML_NS_MC, "ProcessContent")) return DocWalkChildren(context, level, paragraphStyle, heading);
    if(level == DOC_LEVEL_BLOCK) {
       if(XmlIsElement(context->reader, XML_NS_W, "p")) return DocWalkParagraph(context);
       // w:tbl waits for M9, w:sectPr describes page layout the mapping ignores, and everything else is
@@ -450,9 +525,13 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    if(XmlIsElement(context->reader, XML_NS_W, "r")) return DocWalkRun(context, paragraphStyle, heading);
    // A hyperlink and a simple field are run containers: their brackets and their field semantics arrive
    // at M7 and M10, but their text is content now and dropping it would lose part of the document.
-   if(XmlIsElement(context->reader, XML_NS_W, "hyperlink") || XmlIsElement(context->reader, XML_NS_W, "fldSimple")) {
-      return DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
-   }
+   // w:dir and w:bdo are bidirectional run containers and nothing else; w:hyperlink and w:fldSimple get
+   // their brackets and their field semantics at M7 and M10, but all four hold text that is content now.
+   cbool container = XmlIsElement(context->reader, XML_NS_W, "hyperlink") || XmlIsElement(context->reader, XML_NS_W, "fldSimple") ||
+                     XmlIsElement(context->reader, XML_NS_W, "dir") || XmlIsElement(context->reader, XML_NS_W, "bdo");
+
+   if(container) return DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
+   if(XmlIsElement(context->reader, XML_NS_W, "ruby")) return DocWalkRuby(context, paragraphStyle, heading);
    return XmlSkipElement(context->reader);
 }
 

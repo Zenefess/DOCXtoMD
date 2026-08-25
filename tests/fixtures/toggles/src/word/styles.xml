@@ -22,6 +22,11 @@
     <w:basedOn w:val="Normal"/>
     <w:rPr><w:vanish w:val="0"/></w:rPr>
   </w:style>
+  <w:style w:type="paragraph" w:styleId="Shouted">
+    <w:name w:val="Shouted Body"/>
+    <w:basedOn w:val="Normal"/>
+    <w:rPr><w:caps/></w:rPr>
+  </w:style>
   <w:style w:type="character" w:styleId="CharHidden">
     <w:name w:val="Hidden Character"/>
     <w:rPr><w:vanish/></w:rPr>

@@ -219,8 +219,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
     arena and all, which is what collapses runs of empty paragraphs for free.
   - `src/DocWalker.h`/`.cpp` — the body walk. `w:ins` and `w:moveTo` are transparent and `w:del` and
     `w:moveFrom` are dropped, which is correctness rule 8's accept-all policy; `w:sdt`, `w:smartTag`,
-    `w:customXml` and `mc:ProcessContent` are transparent at both block and run level; a hidden run is
-    dropped with its text.
+    `w:customXml`, `w:hyperlink`, `w:fldSimple`, `w:dir`, `w:bdo` and a `w:ruby`'s `w:rubyBase` are
+    transparent at the level each appears at; a hidden run is dropped with its text.
   - `src/MdEscape.h`/`.cpp` — the context-aware escaping writer of correctness rule 6, pure and
     allocation-free, with the line-start and heading-closing-sequence rules as post-passes over a
     finished line rather than as contexts, because those two patterns can only be judged once a whole
@@ -336,7 +336,43 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
-
+- A line end inside a `w:t` reached the Markdown as a line end, so `<w:t>Total&#10;# 5</w:t>` came out
+  as a paragraph followed by a heading, and a `w:t` a producer pretty-printed came out as an indented
+  code block. WordprocessingML spells a break `w:br`; a newline character inside a `w:t` is interior
+  whitespace and now folds to one space, a CR and LF pair to one.
+- A GFM delimiter row could attach to the line above it inside a single paragraph, so `a|b` followed by
+  a hard break and `-|-` rendered as a table rather than as two lines of text. The line-start pass now
+  escapes the head of anything shaped like a delimiter row, which is enough: a table needs both halves.
+- A thematic break whose hyphens were not one contiguous run was not escaped. CommonMark counts three or
+  more hyphens with any spacing between them, so `--- -` is a rule and not a line of text.
+- A heading whose hard break fell between two padded runs emitted two spaces where one renders.
+- `w:caps` was resolved and then discarded, so a run using it emitted lowercase where Word shows capitals
+  — mapping row 37 rules that the text is uppercased. ASCII and the Latin-1 supplement are covered, which
+  is where a 0x20 offset is exactly right; the rest needs Unicode's case tables and is a To Do.
+- `w:webHidden` did not hide a run. It is not one of 17.7.3's toggles, so it resolves nearest-wins rather
+  than by XOR, but `docs/CONVERSION_REFERENCE.md` 2.3 drops a run for it exactly as for `w:vanish`.
+- `w:dir`, `w:bdo` and a `w:ruby`'s `w:rubyBase` were skipped whole, losing their text. All three are run
+  containers whose content is content.
+- `DocFindStyle` copied a whole 256-byte buffer into its cache when only the first few bytes had been
+  written, reading indeterminate memory. Neither AddressSanitizer nor UndefinedBehaviorSanitizer sees
+  that; MSVC's `/RTCu` does.
+- `StyleModel`'s string heap did not reserve offset 0 for the empty string, so a style declaring no
+  `w:basedOn` read offset 0 as its parent and inherited whichever identifier happened to be stored first.
+  Every golden fixture's first style is `Normal` and every other style in them is based on `Normal`, so
+  the bug was invisible to all seven of them.
+- A dead `mc:ProcessContent` element branch, and the unit case that drove it. MCE spells `mc:Ignorable`
+  and `mc:ProcessContent` as attributes, so no conformant document can carry the element; the attribute
+  form is unimplemented and is now a To Do rather than a branch that looks like one.
+- `tests/fixtures/wrappers` carried a `w:tbl` with no `w:tblPr` or `w:tblGrid` and an `r:id` naming a
+  relationship its rels part does not declare. Neither is valid WordprocessingML, and M7 and M9 would
+  have had to decide something real against a fixture typo.
+- A raw `unsigned long long` cast reached the success note in `src/Convert.cpp`, in a translation unit
+  that is otherwise alias-only. r1 permits the width-encoded aliases and t3 forbids mixing the two
+  spellings in one file; the cast was also unnecessary, since `MdByteCount` already returns `cui64`.
+- Five public accessors carried a `///` summary with no tag at all, which d1 requires of a public API:
+  `IrBlockCount`, `IrFailed`, `StyleCount`, `MdByteCount` and M4's `OpcRelCount`. Every non-void
+  declaration in `src/*.h` now carries a `@return`, and the convention that lets a one-argument
+  accessor omit the `@param` is written down in `CLAUDE.md` rather than merely practised.
 - `tests/unit/Check.cpp` did not include `BuildGuards.h`, though its own prolog declared the dependency
   and every other project `.cpp` includes it first. It was the one file that could have compiled without
   D4's `#ifndef __AVX2__` guard, which is precisely the file list that guard exists to cover.

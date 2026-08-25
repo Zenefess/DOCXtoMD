@@ -126,6 +126,7 @@ typedef const STYLE_TYPE cSTYLE_TYPE;
 struct STYLE_RUN_PROPS {
    ui16             toggles;      ///< One bit per STYLE_TOGGLE: the effective on or off value
    bool             doubleStrike; ///< w:dstrike, nearest specification wins
+   bool             webHidden;    ///< w:webHidden, nearest specification wins
    STYLE_VERT_ALIGN vertAlign;    ///< w:vertAlign, nearest specification wins; never STYLE_VERT_UNSET here
 };
 
@@ -151,6 +152,7 @@ struct STYLE_DIRECT_RUN {
    ui16             toggleSpecified; ///< Bit set for each toggle the run specifies at all
    si32             characterStyle;  ///< Index of the w:rStyle style, or -1 when there is none
    si8              doubleStrike;    ///< -1 unspecified, 0 specified false, 1 specified true
+   si8              webHidden;       ///< -1 unspecified, 0 specified false, 1 specified true
    STYLE_VERT_ALIGN vertAlign;       ///< STYLE_VERT_UNSET when the run does not specify it
 };
 
@@ -175,6 +177,7 @@ struct STYLE_RECORD {
    STYLE_ROLE       role;         ///< What this one style's own name and id say it is
    ui8              headingLevel; ///< 1 to 9 as the name said, before clamping; 0 when the role is not heading
    si8              doubleStrike; ///< -1 unspecified, 0 specified false, 1 specified true
+   si8              webHidden;    ///< -1 unspecified, 0 specified false, 1 specified true
    STYLE_TYPE       type;         ///< What w:type said
    STYLE_VERT_ALIGN vertAlign;    ///< w:vertAlign, or STYLE_VERT_UNSET
    bool             isDefault;    ///< Whether w:default was true
@@ -187,6 +190,7 @@ struct STYLE_RESOLVED {
    STYLE_ROLE       role;         ///< The nearest role along the chain
    ui8              headingLevel; ///< Its heading level, before clamping
    si8              doubleStrike; ///< The nearest w:dstrike along the chain, or -1
+   si8              webHidden;    ///< The nearest w:webHidden along the chain, or -1
    STYLE_VERT_ALIGN vertAlign;    ///< The nearest w:vertAlign along the chain, or STYLE_VERT_UNSET
 };
 
@@ -196,6 +200,7 @@ struct STYLE_DEFAULTS {
    ui16             toggleTrue;   ///< Bit set for each toggle w:rPrDefault specifies as true
    si32             outlineLvl;   ///< w:pPrDefault/w:outlineLvl, or -1
    si8              doubleStrike; ///< -1 unspecified, 0 specified false, 1 specified true
+   si8              webHidden;    ///< -1 unspecified, 0 specified false, 1 specified true
    STYLE_VERT_ALIGN vertAlign;    ///< w:vertAlign, or STYLE_VERT_UNSET
 };
 
@@ -280,6 +285,7 @@ csi32 StyleFind(cSTYLE_MODELptr model, cchptr styleId);
 csi32 StyleDefaultParagraph(cSTYLE_MODELptr model);
 
 /// The number of styles the model holds.
+/// @return The count, or 0 for a model with no styles.xml behind it.
 cui32 StyleCount(cSTYLE_MODELptr model);
 
 /// The normalized name of one style, for a caller that wants to report or match it.
@@ -306,6 +312,9 @@ cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleI
 ///       run itself names is final; otherwise a docDefaults true wins outright; otherwise the value is
 ///       the XOR of every explicit true specification across the paragraph-style and character-style
 ///       chains, so an even number of them cancels out.
+/// @note w:webHidden is not in that set and is not a toggle: ISO/IEC 29500-1 17.7.3 does not list it, so
+///       the nearest specification wins the way w:dstrike's does. A caller drops a run for which either
+///       it or w:vanish is on, which is what CONVERSION_REFERENCE 2.3 asks for.
 cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cSTYLE_DIRECT_RUNptr direct);
 
 /// Reads one child element of a w:rPr into a direct run-property record.

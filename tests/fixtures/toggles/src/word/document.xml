@@ -11,6 +11,9 @@
     <w:p><w:pPr><w:pStyle w:val="HiddenStyle"/></w:pPr><w:r><w:t>Gone. </w:t></w:r><w:r><w:rPr><w:vanish w:val="false"/></w:rPr><w:t>Kept.</w:t></w:r></w:p>
     <w:p><w:r><w:rPr><w:vanish w:val="on"/></w:rPr><w:t>On means hidden.</w:t></w:r><w:r><w:t>Only this is left.</w:t></w:r></w:p>
     <w:p><w:r><w:rPr><w:vanish w:val="wobble"/></w:rPr><w:t>An unrecognised value reads as false.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Shouted"/></w:pPr><w:r><w:t>A style with caps shouts.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:smallCaps/></w:rPr><w:t>Small caps are left as typed.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:webHidden/></w:rPr><w:t>Web-hidden is gone. </w:t></w:r><w:r><w:t>This is not.</w:t></w:r></w:p>
     <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
   </w:body>
 </w:document>
