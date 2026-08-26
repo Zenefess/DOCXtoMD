@@ -137,8 +137,19 @@ static cui64 DocUpperOne(cchptr bytes, cui64 byteCount, ui8ptrc dest) {
 // Appends text to the open span, dropping the soft hyphens CONVERSION_REFERENCE row 34 says to remove
 // and uppercasing when row 37's w:caps is in force. U+00AD is invisible and splits a word wherever a
 // renderer decides not to hyphenate, so keeping one corrupts the word for every reader that does not.
-static cbool DocAppendText(DOC_CONTEXTptrc context, cchptr bytes, cui64 byteCount, cbool upper) {
+// Whether a range holds a byte that is neither a space nor a tab, which is what makes a run count as
+// content for row 12's vote.
+static cbool DocIsSolid(cchptr bytes, cui64 byteCount) {
+   for(ui64 index = 0; index < byteCount; ++index) {
+      if(bytes[index] != ' ' && bytes[index] != '\t') return true;
+   }
+   return false;
+}
+
+static cbool DocAppendText(DOC_CONTEXTptrc context, cchptr bytes, cui64 byteCount, cbool upper, boolptrc solid) {
    ui64 run = 0;
+
+   if(DocIsSolid(bytes, byteCount)) *solid = true;
 
    for(ui64 index = 0; index < byteCount; ++index) {
       cbool soft = (ui8(bytes[index]) == 0xC2u && index + 1u < byteCount && ui8(bytes[index + 1u]) == 0xADu);
@@ -203,6 +214,11 @@ static cbool DocReadRunProperties(DOC_CONTEXTptrc context, STYLE_DIRECT_RUNptrc 
 // Records that the paragraph being walked has produced text, and whether that run was monospace.
 // CONVERSION_REFERENCE row 12's code-block heuristic is "every run is monospace", so a single run that
 // is not settles the paragraph, and a run that produces no text at all must not vote either way.
+//
+// Nor may a run that produced nothing but whitespace. Word splits a logical run at every rsid boundary
+// and the space *between* two monospace runs routinely lands in the body font, so counting it would
+// break the fence on exactly the fragmentation correctness rule 4 exists to absorb -- and a space
+// renders identically in every face, so ignoring it loses nothing at all.
 static void DocNoteRunText(DOC_CONTEXTptrc context, cbool mono) {
    context->sawText = true;
    if(!mono) context->allMono = false;
@@ -240,7 +256,7 @@ static cui32 DocFormatBits(cSTYLE_RUN_PROPS props) {
 //-- Runs
 
 // Reads the text of the w:t the reader is on into the open span.
-static cbool DocReadTextElement(DOC_CONTEXTptrc context, cbool upper) {
+static cbool DocReadTextElement(DOC_CONTEXTptrc context, cbool upper, boolptrc solid) {
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -252,7 +268,7 @@ static cbool DocReadTextElement(DOC_CONTEXTptrc context, cbool upper) {
          // One w:t can arrive as several text tokens, because a comment or a processing instruction ends
          // a run of character data. Nothing here trims: xml:space is the producer's business, and
          // CONVERSION_REFERENCE 2.2 says to parse a w:t literally either way.
-         if(!DocAppendText(context, context->reader->text.bytes, context->reader->text.length, upper)) {
+         if(!DocAppendText(context, context->reader->text.bytes, context->reader->text.length, upper, solid)) {
             context->memory = true;
             return false;
          }
@@ -272,13 +288,19 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
    bool             hidden   = false;
    bool             upper    = false;
    bool             mono     = false;
+   bool             solid    = false; // Whether this run produced a byte that is neither space nor tab
 
    StyleClearDirect(&direct);
    for(;;) {
       cXML_TOKEN token = XmlNext(context->reader);
 
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
-      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) {
+         // The vote is taken once the whole run is read, because a run that produced nothing but
+         // whitespace must not settle row 12's "every run is monospace" either way.
+         if(solid) DocNoteRunText(context, mono);
+         return true;
+      }
       if(token != XML_TOKEN_START_ELEMENT) continue;
       if(!resolved && XmlIsElement(context->reader, XML_NS_W, "rPr")) {
          if(!DocReadRunProperties(context, &direct)) return false;
@@ -321,8 +343,7 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
             }
             textOpen = true;
          }
-         DocNoteRunText(context, mono);
-         if(!DocReadTextElement(context, upper)) return false;
+         if(!DocReadTextElement(context, upper, &solid)) return false;
          continue;
       }
 
@@ -339,13 +360,14 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
             }
             textOpen = true;
          }
-         DocNoteRunText(context, mono);
          // A tab becomes one space (row 28) and a non-breaking hyphen an ordinary one (2.2); a
          // w:softHyphen becomes nothing at all, which is what the absence of a case for it does.
          if(!IrAppendText(context->document, (isTab ? " " : "-"), 1u)) {
             context->memory = true;
             return false;
          }
+         // A tab is whitespace and votes on nothing; a non-breaking hyphen is a visible character.
+         if(isHyphen) solid = true;
          if(!XmlSkipElement(context->reader)) return false;
          continue;
       }
@@ -374,13 +396,28 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
 
 //-- Paragraphs
 
+// The two halves of CT_PBdr: the sides that make an empty paragraph a horizontal rule, and the sides
+// that say it is a box or a rule above rather than below. w:start and w:end belong to the table border
+// types and never appear in a paragraph's own w:pBdr.
+static constexpr cchptr DOC_BORDERS_UNDER[]  = {"bottom", "between", nullptr};
+static constexpr cchptr DOC_BORDERS_BESIDE[] = {"top", "left", "right", "bar", nullptr};
+
+// Whether the element the reader is on is one of a table's border names, in the WordprocessingML
+// namespace. Matching by name is what keeps an element this build has never heard of from voting.
+static cbool DocIsBorder(XML_READERptrc reader, cchptr const *names) {
+   for(ui64 index = 0; names[index]; ++index) {
+      if(XmlIsElement(reader, XML_NS_W, names[index])) return true;
+   }
+   return false;
+}
+
 // Reads the w:pBdr the reader is on, and reports whether its borders are the pattern Word writes for an
 // autoformatted horizontal rule: a bottom or a between border and no other (CONVERSION_REFERENCE 2.4).
 // A w:val of none or nil is a border switched off, which every producer writes rather than omitting the
 // element; a border element with no w:val at all is taken as present, since its presence is the signal.
 static cbool DocReadBorders(DOC_CONTEXTptrc context, boolptrc rule) {
    cui32 depthHere = context->reader->depth;
-   bool  under     = false;
+   bool  below     = false;
    bool  other     = false;
 
    for(;;) {
@@ -388,17 +425,21 @@ static cbool DocReadBorders(DOC_CONTEXTptrc context, boolptrc rule) {
 
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) {
-         *rule = under && !other;
+         *rule = below && !other;
          return true;
       }
       if(token != XML_TOKEN_START_ELEMENT) continue;
 
       cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
       cbool     drawn = !XmlTextEqual(value, "none") && !XmlTextEqual(value, "nil");
-      cbool     below = XmlIsElement(context->reader, XML_NS_W, "bottom") || XmlIsElement(context->reader, XML_NS_W, "between");
+      cbool     under = DocIsBorder(context->reader, DOC_BORDERS_UNDER);
+      // The sides of CT_PBdr are tested by name rather than by exclusion. An element this build has
+      // never heard of -- a vendor extension, an mc:AlternateContent -- is ignored rather than counted
+      // as a border, which is the OOXML compatibility model: what is not understood gets no vote.
+      cbool beside = DocIsBorder(context->reader, DOC_BORDERS_BESIDE);
 
-      if(drawn && below) under = true;
-      else if(drawn) other = true;
+      if(drawn && under) below = true;
+      else if(drawn && beside) other = true;
       if(!XmlSkipElement(context->reader)) return false;
    }
 }

@@ -92,9 +92,12 @@ cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark) {
    ui32        last  = document->spanCount; // One past the block's last span
 
    // A break with nothing before or after it renders as a stray hard-break marker, so both ends are
-   // trimmed before the block is judged.
-   while(first < last && document->spans[first].kind == IR_SPAN_BREAK) ++first;
-   while(last > first && document->spans[last - 1u].kind == IR_SPAN_BREAK) --last;
+   // trimmed before the block is judged -- except inside a fence, where a break is a real newline and
+   // no marker is written for it, so the reason to trim one does not arise and trimming loses a line.
+   if(block->kind != IR_BLOCK_CODE) {
+      while(first < last && document->spans[first].kind == IR_SPAN_BREAK) ++first;
+      while(last > first && document->spans[last - 1u].kind == IR_SPAN_BREAK) --last;
+   }
 
    // A horizontal rule is an empty paragraph by construction (CONVERSION_REFERENCE row 25), so the
    // emptiness test below would throw away every one. It keeps no spans either: a rule emits none.

@@ -549,6 +549,9 @@ static cbool StyleReadDefaults(STYLE_MODELptrc model, XML_READERptrc reader) {
    model->defaults.webHidden    = runs.run.webHidden;
    model->defaults.monospace    = runs.run.monospace;
    model->defaults.vertAlign    = runs.run.vertAlign;
+   // A document whose own default font is monospace says nothing about any particular run, so row 11's
+   // font heuristic is switched off rather than turned on everywhere -- see StyleResolveRun.
+   model->monoDefault = (runs.run.monospace > 0);
    return true;
 }
 
@@ -875,7 +878,9 @@ cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cS
 
    if(monospace < 0 && fromCharacter) monospace = fromCharacter->monospace;
    if(monospace < 0 && fromParagraph) monospace = fromParagraph->monospace;
-   if(monospace < 0) monospace = model->defaults.monospace;
+   // The one place this layering is not the same as w:dstrike's: a monospace w:docDefaults would make
+   // every run in the document code, so it makes none. See the note on this function in the header.
+   if(monospace < 0) monospace = (model->monoDefault ? si8(0) : model->defaults.monospace);
    props.monospace = (monospace > 0);
    // Only the *character* style chain can make a run a code span. A paragraph style carrying the code
    // role is a fenced block, and giving each of its runs a backtick pair inside the fence would put

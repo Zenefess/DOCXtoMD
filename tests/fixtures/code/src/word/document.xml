@@ -22,6 +22,17 @@
     <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>second ``` third</w:t></w:r><w:r><w:br/></w:r><w:r><w:t>after a break</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr></w:p>
     <w:p><w:r><w:t>After.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>A whitespace run between two monospace ones does not break the fence:</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas"/></w:rPr><w:t>let a</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Consolas"/></w:rPr><w:t>= 1;</w:t></w:r></w:p>
+    <w:p><w:r><w:t>A backtick run split across two spans still sizes the fence:</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>``</w:t></w:r><w:r><w:t>`x</w:t></w:r></w:p>
+    <w:p><w:r><w:t>A fence does not open on a line of padding, and keeps a break inside it:</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t xml:space="preserve">   </w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>one</w:t><w:br/></w:r></w:p>
+    <w:p><w:r><w:t>A blank line between two samples leaves them one fence:</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>first sample</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>second sample</w:t></w:r></w:p>
     <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
   </w:body>
 </w:document>

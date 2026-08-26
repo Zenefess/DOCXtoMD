@@ -53,3 +53,5 @@ word**été**after
 word<strong>।a।</strong>after
 
 word**ⅦaⅦ**after
+
+**bo**<strong><em>th</em></strong>*ree*

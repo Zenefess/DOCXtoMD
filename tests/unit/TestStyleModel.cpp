@@ -378,6 +378,32 @@ void TestStyleModel(void) {
    CHECK(!StyleResolveRun(&model, -1, &direct).monospace);
    StyleClose(&model);
 
+   CheckGroup("StyleModel: a monospace docDefaults switches the font heuristic off");
+   // A document whose own default font is monospace says nothing about any particular run. Without the
+   // guard every run in a Courier-set filing is code, every paragraph satisfies row 12's "every run is
+   // monospace", and the whole document converts to one fence with every delimiter dead inside it.
+   CHECK(LoadStyles(&model, "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr>"
+                            "</w:rPrDefault></w:docDefaults>"
+                            "<w:style w:styleId=\"Body\"><w:name w:val=\"Body\"/></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"CodeChar\"><w:name w:val=\"Code\"/></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"Fixed\"><w:name w:val=\"Fixed\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>") == STYLE_OK);
+   CHECK(!ResolveUnder(&model, "Body").monospace);
+   CHECK(!ResolveUnder(&model, "Nope").monospace);
+
+   // What says something about the *run* still says it: a code character style, and a run or a style
+   // that names its own monospace family.
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "CodeChar");
+   CHECK(StyleResolveRun(&model, -1, &direct).codeStyle);
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "Fixed");
+   CHECK(StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClearDirect(&direct);
+   direct.monospace = 1;
+   CHECK(StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClose(&model);
+
    CheckGroup("StyleModel: a value that had to be decoded outlives the token that carried it");
    // A value holding a reference is built in the reader's scratch, which the next token rewinds -- so
    // this is the case that catches a view kept a moment too long, and no ASCII-only literal can.

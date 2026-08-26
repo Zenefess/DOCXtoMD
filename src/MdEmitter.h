@@ -89,6 +89,12 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       adjacent pair with equal formatting, so a split entity can only be separated by markup that
 ///       stops it being one; and D12's dollar count is taken over the whole line and passed into each
 ///       span's escape call, which is what MdEscapeWrite's dollars argument is for.
+/// @note One consequence of grouping worth stating rather than discovering: `IrEndBlock` drops an empty
+///       paragraph completely, so a blank Normal-styled line between two separate code samples leaves
+///       the two runs of code blocks adjacent and they become **one** fence. That is a real change to
+///       the document and it is deliberate only in the sense that the alternative -- recording that a
+///       block was dropped, so the grouping can see the gap -- is more machinery than the case has
+///       earned. `tests/fixtures/code` pins the behaviour, so changing it is a visible diff.
 /// @note What each block kind emits: a paragraph is its lines; a heading is one ATX line, its hashes
 ///       written before the content and a break inside it folded to one space; a blockquote is its
 ///       lines with "> " in front of each; a horizontal rule is "---"; and a run of consecutive code

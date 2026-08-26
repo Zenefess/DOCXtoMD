@@ -36,3 +36,29 @@ after a break
 ````
 
 After.
+
+A whitespace run between two monospace ones does not break the fence:
+
+```
+let a = 1;
+```
+
+A backtick run split across two spans still sizes the fence:
+
+````
+```x
+````
+
+A fence does not open on a line of padding, and keeps a break inside it:
+
+```
+one
+
+```
+
+A blank line between two samples leaves them one fence:
+
+```
+first sample
+second sample
+```

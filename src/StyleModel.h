@@ -242,6 +242,7 @@ struct al32 STYLE_MODEL {
    XML_RESULT        lastXml;          ///< Which XML rule the part broke, for the message
    OPC_RESULT        lastOpc;          ///< How the package refused the part, for the message
    bool              hasPart;          ///< Whether a styles part was found and read at all
+   bool              monoDefault;      ///< w:docDefaults itself names a monospace family (see StyleResolveRun)
 };
 
 // Zeroed with mzero, which dispatches on SIZE: a size that is a multiple of 32 takes a path of aligned
@@ -338,6 +339,13 @@ cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleI
 /// @note w:webHidden is not in that set and is not a toggle: ISO/IEC 29500-1 17.7.3 does not list it, so
 ///       the nearest specification wins the way w:dstrike's does. A caller drops a run for which either
 ///       it or w:vanish is on, which is what CONVERSION_REFERENCE 2.3 asks for.
+/// @note monospace is nearest-wins like the others with one guard: a w:docDefaults that itself names a
+///       monospace family switches the font heuristic **off** for the whole document rather than on.
+///       Legal filings set Courier as the document default, and without the guard every run in one is
+///       code, every paragraph satisfies row 12's "every run is monospace", and the whole document
+///       converts to a single fence with every delimiter dead inside it. The heuristic is a signal only
+///       where it tells one run from its neighbours. A code *character* style is unaffected, because
+///       that is a statement about a run and not about the document.
 cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cSTYLE_DIRECT_RUNptr direct);
 
 /// Reads one child element of a w:rPr into a direct run-property record.

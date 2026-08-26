@@ -38,7 +38,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   row 11's monospace families. Consecutive code paragraphs merge into one fence, whose length is longer
   than the longest backtick run anywhere inside it; there is no info string, because the language is
   never recoverable. An empty code paragraph is a blank line of the fence and is trimmed only where it
-  falls at either end of one, which is the one place `IrEndBlock`'s emptiness test is now suspended.
+  falls at either end of one, which is the one place `IrEndBlock`'s emptiness test is now suspended --
+  and its break trim with it, because inside a fence a break is a real newline rather than a marker.
 - The horizontal rule of row 25: a lone `w:pBdr` bottom or between border on a paragraph that came to
   nothing becomes `---`. "Lone" is enforced at both ends -- a paragraph wearing a box is not a rule, and
   neither is a bordered paragraph that has text in it -- and "came to nothing" covers a paragraph of
@@ -49,13 +50,15 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   `tests/fixtures/headings` has carried a paragraph style called exactly that since M5. `w:rFonts` is
   read for its `w:ascii` alone and reduced to a tri-state at parse time, so the model stores no font
   names; a `w:rFonts` naming only a theme slot specifies nothing rather than specifying false.
-- Six golden fixture cases, each pinning a decision that would otherwise be unpinned: `fragments`
+- Seven golden fixture cases, each pinning a decision that would otherwise be unpinned: `fragments`
   (mid-word run splits across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting`
   (a trailing space inside bold, a leading one, a whitespace-only span, U+00A0 and a tab), `inline`
   (every delimiter and combination, and the fallbacks below), `code` (both code detections, backtick
-  collisions, and two fences), `quotes` and `rules`. The two the milestone names by name are the first
-  two. Every `expected.md` was written by hand from the specification before the converter was run at
-  it, and every one matched on the first run.
+  collisions, two fences and the blank line that does *not* separate them), `quotes`, `rules`, and
+  `monodefault`, whose `w:docDefaults` names Courier and which must not become one fence. The two the
+  milestone names by name are the first two. Every `expected.md` was written by hand from the
+  specification before the converter was run at it; six matched on the first run, and `monodefault`
+  was authored afterwards as a regression pin, so it failed until the guard below landed.
 - `tests/unit/TestRunCoalescer.cpp`, and the trace notation the other suites already use extended with
   `c` for a code span and `Q`, `C` and `R` for the three new block kinds.
 
@@ -106,6 +109,44 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   `docs/CONVERSION_REFERENCE.md`
   gains an eleventh pitfall in 4.2 for the flanking rules, and mapping rows 6 and 11 gain the two
   caveats it implies, so the two documents do not disagree about what a delimiter may do.
+- **A document whose default font is monospace is no longer one enormous code block.** Row 12's second
+  detection asks whether every text-bearing run in a paragraph is monospace, and a `w:docDefaults`
+  naming Courier -- which legal filings routinely do -- makes that true of every paragraph in the file,
+  so the whole document converted to a single fence with every heading, emphasis and link delimiter
+  dead inside it. Such a default now switches the font heuristic off rather than on: it is a signal only
+  where it distinguishes one run from its neighbours. A code *character* style is unaffected, because
+  that is a statement about a run and not about the document. `tests/fixtures/monodefault` pins it.
+- **A space between two code runs no longer breaks the fence.** Word splits a logical run at every rsid
+  boundary and the space between two monospace runs routinely lands in the body font, so a run that
+  produced nothing but whitespace was voting against row 12 on exactly the fragmentation correctness
+  rule 4 exists to absorb. The vote is now taken once a whole run is read, and only by a run that
+  produced a byte which is neither a space nor a tab -- a space renders identically in every face.
+- **Three adjacent asterisk spans no longer lose all three.** CommonMark reads adjacent runs of one
+  delimiter character as a single run and pairs openers to closers by length -- its rule of three -- so
+  `**bo*****th****ree*` came out as six literal asterisks. That is arithmetic no character class can
+  express, so the flanking test could not see it; a span abutted by an identical run on both sides now
+  takes the element form, which has neither a length nor a flanking rule and also keeps the two
+  Markdown runs apart.
+- **A fenced block no longer closes on its own content.** The backtick run was measured within each
+  span, but a code block's spans need not carry equal formatting -- a bold ` `` ` beside a plain
+  `` ` `` stays two spans -- so a fence sized at three met content holding three. The run now carries
+  from span to span and resets at a line end.
+- **A fence no longer opens on a line of invisible padding.** Its outermost blank blocks were trimmed by
+  byte count, so a code paragraph of nothing but spaces counted as a line of code; the test is now the
+  same has-content test `IrEndBlock` applies to every other block kind. Inside the fence a blank line
+  still stays verbatim, because there it is content.
+- **A blank line inside a fence survives.** `IrEndBlock` trimmed a block's leading and trailing break
+  spans on the reasoning that a break with nothing beside it renders as a stray marker -- which is true
+  everywhere except inside a fence, where a break is a real newline and no marker is written for it, so
+  the trim simply lost a line. `IR_BLOCK_CODE` is exempt.
+- **A vendor element inside a `w:pBdr` no longer suppresses a horizontal rule.** The borders that make an
+  empty paragraph a rule were matched by name and every *other* element counted against it, so an
+  extension element or an `mc:AlternateContent` inside the `w:pBdr` read as a fourth border. Both halves
+  of `CT_PBdr` are now matched by name from their own tables, which is the OOXML compatibility model:
+  what this build has never heard of gets no vote.
+  All seven were raised by a review reading the code against the specification rather than by a test,
+  and every one was reproduced on the build before it was fixed. Each is pinned by a fixture, a unit
+  case, or both.
 
 - Decision **D12**, ruled 2026-08-26: a `$` is escaped as `\$`, but only where the assembled line holds
   two or more of them. GitHub has read `$...$` as inline math and `$$...$$` as display math since 2022,

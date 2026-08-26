@@ -491,6 +491,11 @@ void TestDocWalker(void) {
                   "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr>"
                   "<w:r><w:t>a</w:t></w:r></w:p>",
                   "P{[a]}"));
+   // The sides are tested by name, so an element this build has never heard of inside a w:pBdr is
+   // ignored rather than counted as another border. That is the OOXML compatibility model.
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/><w:glow w:rad=\"1\"/></w:pBdr></w:pPr></w:p>", "R{}"));
+   // A side that really is one still votes.
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/><w:bar w:val=\"single\"/></w:pBdr></w:pPr></w:p>", ""));
    // A paragraph that came to nothing is one whether it held no runs or only whitespace.
    CHECK(TracedAs(nullptr,
                   "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr>"

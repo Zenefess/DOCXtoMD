@@ -164,15 +164,18 @@ static cbool MdLineInsert(MD_EMITTERptrc emitter, cui64 at, cchar byte) {
 // Whether a byte is one of the two Markdown treats as insignificant at the ends of a line.
 static cbool MdIsPad(cchar byte) { return byte == ' ' || byte == '\t'; }
 
-// The longest run of backticks in a range, which is what a code delimiter has to be longer than.
-static cui64 MdLongestTickRun(cchptr bytes, cui64 byteCount) {
-   ui64 longest = 0;
-   ui64 run     = 0;
+// The longest run of backticks in a range, which is what a code delimiter has to be longer than. The
+// run may begin before the range and continue past it, so it carries in and out: a caller measuring one
+// span at a time would otherwise see two short runs where the reader sees one long one.
+static cui64 MdLongestTickRun(cchptr bytes, cui64 byteCount, cui64 carryIn, ui64ptrc carryOut) {
+   ui64 longest = carryIn;
+   ui64 run     = carryIn;
 
    for(ui64 index = 0; index < byteCount; ++index) {
       run = (bytes[index] == '`' ? run + 1u : 0);
       if(run > longest) longest = run;
    }
+   if(carryOut) *carryOut = run;
    return longest;
 }
 
@@ -406,7 +409,7 @@ static cMD_CONTEXT MdSpanContext(cui32 fmt, cbool safe) {
 // strikethrough or the vertical alignment, because those wrap a code span perfectly well in GFM and
 // dropping them would lose formatting the reference never asked to lose. The strikethrough changes
 // spelling when it wraps anything at all -- see MdStrikeAsHtml for why "~~" cannot survive there.
-static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cui32 fmt, cbool dollars, cMD_EDGE ahead) {
+static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cui32 fmt, cbool dollars, cMD_EDGE ahead, cui32 nextFmt) {
    if(!byteCount) return true;
 
    // A superscript or a subscript is an HTML element, and an element shields everything inside it from
@@ -419,11 +422,21 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
    cbool tested   = !shielded && !wrapping && (strike || emphasis);
    // Which character the outermost delimiter is made of is settled before the verdict and not by it: the
    // verdict only decides whether that delimiter is written or an HTML element takes its place.
-   cchar    delimiter  = (strike ? '~' : '*');
-   cMD_EDGE behind     = MdEdgeBehind(emitter->line, emitter->lineUsed, delimiter);
-   cbool    safe       = !tested || MdFlankingSafe(behind, bytes, byteCount, ahead);
-   cbool    strikeHtml = MdStrikeAsHtml(fmt, safe);
-   cbool    emphHtml   = MdEmphasisAsHtml(fmt, safe);
+   cchar    delimiter = (strike ? '~' : '*');
+   cMD_EDGE behind    = MdEdgeBehind(emitter->line, emitter->lineUsed, delimiter);
+   // CommonMark reads adjacent runs of the same delimiter character as one run and then matches openers
+   // to closers by length -- its rule of three -- so three emphasis spans meeting with no text between
+   // them can leave a run that no pairing resolves: "**bo*****th****ree*" comes out as six literal
+   // asterisks with all three spans lost. The flanking test models that merge for the character classes
+   // but not for the length arithmetic, which no character class can express. A span abutted by an
+   // identical run on *both* sides is therefore written as an element instead: HTML has neither a run
+   // length nor a flanking rule, and an element between two Markdown runs also keeps those two apart.
+   cbool asterisk   = !strike && emphasis;
+   cbool runAhead   = (nextFmt & (IR_FMT_BOLD | IR_FMT_ITALIC)) != 0 && (nextFmt & (IR_FMT_STRIKE | IR_FMT_SUPER | IR_FMT_SUB | IR_FMT_CODE)) == 0;
+   cbool abutted    = asterisk && emitter->lineUsed && emitter->line[emitter->lineUsed - 1u] == '*' && runAhead;
+   cbool safe       = (!tested || MdFlankingSafe(behind, bytes, byteCount, ahead)) && !abutted;
+   cbool strikeHtml = MdStrikeAsHtml(fmt, safe);
+   cbool emphHtml   = MdEmphasisAsHtml(fmt, safe);
 
    cMD_CONTEXT context = MdSpanContext(fmt, safe);
 
@@ -439,7 +452,7 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
       // the longest run in the content. A space on each side keeps a leading or trailing backtick from
       // joining the delimiter; CommonMark strips exactly one such pair again when it renders. A code
       // span has no flanking rule of its own, which is why it never needs an HTML form.
-      cui64 ticks = MdLongestTickRun(bytes, byteCount) + 1u;
+      cui64 ticks = MdLongestTickRun(bytes, byteCount, 0, nullptr) + 1u;
       cbool pad   = (bytes[0] == '`' || bytes[byteCount - 1u] == '`');
 
       if(!MdLineRun(emitter, '`', ticks)) return false;
@@ -516,6 +529,17 @@ static cMD_EDGE MdEdgeAhead(cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 
    return MD_EDGE_SPACE;
 }
 
+// The formatting the next text span carries, which is what says whether it will open with an asterisk.
+static cui32 MdFormatAhead(cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 from, cui32 to) {
+   for(ui32 index = from; index < to; ++index) {
+      cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
+
+      if(!span || span->kind != IR_SPAN_TEXT || !span->textBytes) continue;
+      return span->fmt;
+   }
+   return IR_FMT_NONE;
+}
+
 // Assembles one line out of a range of spans, trimming the padding at both of its ends. A line's own
 // leading padding goes because four leading spaces would be an indented code block, and its trailing
 // padding because two trailing spaces are Markdown's other spelling of a hard line break.
@@ -537,9 +561,10 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
       }
       if(start >= span->textBytes) continue;
 
-      cMD_EDGE ahead = MdEdgeAhead(document, block, index + 1u, to);
+      cMD_EDGE ahead   = MdEdgeAhead(document, block, index + 1u, to);
+      cui32    nextFmt = MdFormatAhead(document, block, index + 1u, to);
 
-      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead)) return false;
+      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt)) return false;
       started = true;
    }
    while(emitter->lineUsed && MdIsPad(emitter->line[emitter->lineUsed - 1u])) emitter->lineUsed -= 1u;
@@ -581,9 +606,10 @@ static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document,
       }
       // A break inside a heading becomes one space, so the whole block is one line and what stands
       // after a span is simply the next span, wherever the break happened to fall.
-      cMD_EDGE ahead = MdEdgeAhead(document, block, index + 1u, block->spanCount);
+      cMD_EDGE ahead   = MdEdgeAhead(document, block, index + 1u, block->spanCount);
+      cui32    nextFmt = MdFormatAhead(document, block, index + 1u, block->spanCount);
 
-      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead)) return false;
+      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt)) return false;
       started = true;
    }
    while(emitter->lineUsed && MdIsPad(emitter->line[emitter->lineUsed - 1u])) emitter->lineUsed -= 1u;
@@ -671,17 +697,26 @@ static cbool MdEmitRule(MD_EMITTERptrc emitter) { return MdAppendText(emitter, "
 
 //-- Fenced code blocks
 
-// How many bytes of text one block holds, which is what decides whether a code paragraph is a blank
-// line rather than a line of code. Whitespace counts: inside a fence it is the indentation.
-static cui64 MdBlockBytes(cIR_DOCUMENTptr document, cIR_BLOCKptr block) {
-   ui64 total = 0;
-
+// Whether one block holds a byte worth putting on a line of its own, which is what decides that a code
+// paragraph is a blank line rather than a line of code. The test is the one IrEndBlock uses on every
+// other kind, so a paragraph of nothing but spaces counts as blank here too -- at the edge of a fence
+// that is a line of invisible padding, and trimming it is what keeps the fence opening on real code.
+// Inside the fence a blank line stays verbatim, because there a blank line is content.
+static cbool MdBlockHasContent(cIR_DOCUMENTptr document, cIR_BLOCKptr block) {
    for(ui32 index = 0; index < block->spanCount; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
-      if(span && span->kind == IR_SPAN_TEXT) total += span->textBytes;
+      if(!span || span->kind != IR_SPAN_TEXT) continue;
+
+      cchptr bytes = IrText(document, span->textAt);
+
+      for(ui32 at = 0; at < span->textBytes; ++at) {
+         cchar byte = bytes[at];
+
+         if(byte != ' ' && byte != '\t' && byte != '\r' && byte != '\n') return true;
+      }
    }
-   return total;
+   return false;
 }
 
 // Emits one fenced block out of a run of consecutive code paragraphs, which mapping row 12 merges into
@@ -693,14 +728,23 @@ static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32
 
    for(ui32 index = first; index < last; ++index) {
       cIR_BLOCKptr block = IrBlockAt(document, index);
+      ui64         open  = 0; // Backticks the previous span ended on, which the next one continues
 
       if(!block) continue;
+      // The run is counted across the block's spans and not within each: a code block's spans need not
+      // carry equal formatting, so RunCoalescer leaves a bold "``" beside a plain "`" as two spans, and
+      // measuring them apart would size the fence at three -- which the content's own three would close.
       for(ui32 at = 0; at < block->spanCount; ++at) {
          cIR_SPANptr span = IrSpanAt(document, block->spanAt + at);
 
-         if(!span || span->kind != IR_SPAN_TEXT) continue;
+         if(!span) continue;
+         if(span->kind != IR_SPAN_TEXT) {
+            open = 0; // A break starts a new line, and a backtick run does not cross one
+            continue;
+         }
 
-         cui64 run = MdLongestTickRun(IrText(document, span->textAt), span->textBytes) + 1u;
+         cchptr bytes = IrText(document, span->textAt);
+         cui64  run   = MdLongestTickRun(bytes, span->textBytes, open, &open) + 1u;
 
          if(run > ticks) ticks = run;
       }
@@ -787,8 +831,8 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
          // A blank code paragraph is a blank line of code, which is worth keeping inside the fence and
          // is nothing at all at either end of it. Trimming here rather than after the separator is
          // written is what keeps a run of blank ones from leaving a stray blank line behind.
-         while(from < to && !MdBlockBytes(document, IrBlockAt(document, from))) ++from;
-         while(to > from && !MdBlockBytes(document, IrBlockAt(document, to - 1u))) --to;
+         while(from < to && !MdBlockHasContent(document, IrBlockAt(document, from))) ++from;
+         while(to > from && !MdBlockHasContent(document, IrBlockAt(document, to - 1u))) --to;
          if(from < to) {
             if(wrote && !MdSeparate(emitter, previous, IR_BLOCK_CODE)) return MD_ERROR_MEMORY;
             if(!MdEmitFence(emitter, document, from, to)) return MD_ERROR_MEMORY;

@@ -418,6 +418,43 @@ void TestMdEmitter(void) {
    // Row 12's second detection: every run monospace makes the paragraph a fence with no style at all.
    CHECK(Converts("<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a();</w:t></w:r></w:p>", "```\na();\n```\n"));
 
+   CheckGroup("MdEmitter: three delimiter runs meeting");
+   // CommonMark matches openers to closers by run length -- its rule of three -- so three emphasis
+   // spans that meet with no text between them can leave a run no pairing resolves, and
+   // "**bo*****th****ree*" loses all three to six literal asterisks. A span abutted by an identical run
+   // on both sides is written as an element instead, which has neither a run length nor a flanking rule.
+   CHECK(Converts("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bo</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>th</w:t></w:r>"
+                  "<w:r><w:rPr><w:i/></w:rPr><w:t>ree</w:t></w:r></w:p>",
+                  "**bo**<strong><em>th</em></strong>*ree*\n"));
+   // Two of them meeting is not three, and CommonMark resolves that pair the way the source meant it,
+   // so the narrower shape keeps the Markdown spelling.
+   CHECK(Converts("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bo</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>ld</w:t></w:r></w:p>",
+                  "**bo*****ld***\n"));
+   // A run of a different character on one side does not abut, so neither does the test fire.
+   CHECK(Converts("<w:p><w:r><w:rPr><w:strike/></w:rPr><w:t>a</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r>"
+                  "<w:r><w:rPr><w:i/></w:rPr><w:t>c</w:t></w:r></w:p>",
+                  "~~a~~**b***c*\n"));
+
+   CheckGroup("MdEmitter: what a fence must not lose");
+   // The backtick run is measured across a block's spans, not within each: a code block's spans need
+   // not carry equal formatting, and a fence of three would be closed by the content's own three.
+   CHECK(Styled(STYLE_CODE,
+                "<w:p>" IN_CODE "<w:r><w:rPr><w:b/></w:rPr><w:t>``</w:t></w:r>"
+                "<w:r><w:t>`x</w:t></w:r></w:p>",
+                "````\n```x\n````\n"));
+   // A code paragraph of nothing but padding is a blank line, so it is trimmed at the fence's edge --
+   // by the same test IrEndBlock uses on every other kind, not by a byte count.
+   CHECK(Styled(STYLE_CODE,
+                "<w:p>" IN_CODE "<w:r><w:t xml:space=\"preserve\">   </w:t></w:r></w:p>"
+                "<w:p>" IN_CODE "<w:r><w:t>a</w:t></w:r></w:p>",
+                "```\na\n```\n"));
+   // Inside a fence a break is a real newline and no marker is written for it, so a trailing one is a
+   // blank line of the code rather than the stray marker IrEndBlock trims everywhere else.
+   CHECK(Styled(STYLE_CODE, "<w:p>" IN_CODE "<w:r><w:t>x</w:t><w:br/></w:r></w:p>", "```\nx\n\n```\n"));
+
    CheckGroup("MdEmitter: blockquotes");
    CHECK(Styled(STYLE_QUOTE, "<w:p><w:pPr><w:pStyle w:val=\"Q\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "> a\n"));
    // Every line of the block takes the prefix, the continuation line included.

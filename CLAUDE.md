@@ -190,7 +190,13 @@ below.
     and `tests/fixtures/headings` has carried a paragraph style called exactly that since M5. The
     monospace verdict is a tri-state read off `w:rFonts/@ascii` at parse time, so the model stores no
     font names; a `w:rFonts` naming only `w:asciiTheme` specifies nothing rather than specifying false,
-    because a specified false would cancel a monospace family an outer layer had established. That match goes through an **open-addressed index
+    because a specified false would cancel a monospace family an outer layer had established. It layers
+    nearest-wins like `w:dstrike` with **one guard**: a `w:docDefaults` that itself names a monospace
+    family switches the heuristic *off* for the whole document instead of on. Set Courier as a document
+    default — which legal filings do — and without the guard every run is code, every paragraph
+    satisfies row 12, and the file converts to a single fence with every delimiter dead inside it. The
+    font is a signal only where it tells one run from its neighbours; a code *character* style is
+    unaffected, because that is a statement about a run rather than about the document. That match goes through an **open-addressed index
     built once at load**, and the index is a correctness matter more than a speed one: the walker looks
     up a style per styled paragraph behind a one-entry cache, so a linear scan makes a spec-legal 45 KB
     `.docx` — many long-prefixed identifiers, paragraphs alternating between two of them — spin for
@@ -205,7 +211,9 @@ below.
     emitter reads: blocks and spans as arrays of POD records over one growable byte arena, addressed by
     offset so a growth invalidates nothing. Five block kinds since M6 — paragraph, heading, quote, code
     and rule — and two of them are exempt from the emptiness test: a rule is an empty paragraph by
-    construction, and an empty code paragraph is a blank line inside a fence. `IrEndBlock` trims a block's leading and trailing break spans and then unwinds
+    construction, and an empty code paragraph is a blank line inside a fence. `IrEndBlock` trims a
+    block's leading and trailing break spans — except inside a fence, where a break *is* a newline and
+    no marker is written for it, so the reason to trim one never arises and trimming loses a line — and then unwinds
     the whole block — records, spans and arena — when nothing but ASCII whitespace is left, which is
     what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` exist for one caller:
     `mc:AlternateContent`, where the first `mc:Choice` is walked speculatively and rewound if an
@@ -222,9 +230,15 @@ below.
     italic bits cleared for a different reason, which is that row 11 drops them and two runs that come
     out as the same code span have to coalesce. The walker also classifies the paragraph: a quote or a
     code style gives its own block kind, so does a paragraph whose every text-bearing run is monospace
-    (row 12's second detection, settled here because the font is a run property the IR does not carry),
-    and a lone `w:pBdr` bottom or between border on a paragraph that came to nothing gives the
-    horizontal rule of row 25. A heading beats all of them. `w:t` text is taken literally —
+    (row 12's second detection, settled here because the font is a run property the IR does not carry).
+    That vote is taken once a whole run is read and only by a run that produced a byte which is neither
+    a space nor a tab: Word splits a logical run at every rsid boundary and the space *between* two
+    monospace runs routinely lands in the body font, so counting it would break the fence on exactly the
+    fragmentation correctness rule 4 exists to absorb — and a space renders identically in every face,
+    so ignoring it loses nothing. A lone `w:pBdr` bottom or between border on a paragraph that came to
+    nothing gives the horizontal rule of row 25; both halves of `CT_PBdr` are matched **by name** from
+    two tables rather than one half by exclusion, so a vendor extension or an `mc:AlternateContent`
+    inside a `w:pBdr` is ignored instead of counting as a fourth border and suppressing the rule. A heading beats all of them. `w:t` text is taken literally —
     `xml:space` is the producer's business — with U+00AD removed. What is skipped whole and why:
     `w:tbl` (M9), `w:drawing`/`w:pict` (M7), `w:instrText` and `w:fldChar` (M10's field state machine),
     `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
@@ -284,8 +298,19 @@ below.
     the content, padded with a space when the content begins or ends with a backtick. **Where a
     Markdown delimiter cannot parse where it stands, an HTML element takes its place**; see the mapping
     table's three rows on it, and `MdStrikeAsHtml`, `MdFlankingSafe` and `MdEdgeBehind` for the rules.
-    That fallback is session-derived, not ruled, and it is the one place M6 writes markup the mapping
+    The element also stands in where the flanking classes cannot see the problem at all: CommonMark
+    reads adjacent runs of one delimiter character as a single run and then pairs openers to closers by
+    *length* — its rule of three — so three emphasis spans meeting with no text between them can leave a
+    run no pairing resolves, and `**bo*****th****ree*` comes out as six literal asterisks with all three
+    spans lost. A span abutted by an identical run on both sides is therefore written as an element,
+    which has neither a length nor a flanking rule and also keeps the two Markdown runs apart. That
+    fallback is session-derived, not ruled, and it is the one place M6 writes markup the mapping
     table does not name.
+    A fence is sized from the longest backtick run **across** its blocks' spans rather than within each,
+    because a code block's spans need not carry equal formatting — a bold ` `` ` beside a plain `` ` ``
+    stays two spans, and measuring them apart sizes the fence at three, which the content's own three
+    then closes. Its outermost blank lines are trimmed by whether a block holds a byte worth a line of
+    its own, not by its byte count, so a code paragraph of nothing but padding does not open the fence.
   - `Convert.h`/`Convert.cpp` — the per-file pipeline: container, package, relationships, styles, walk,
     coalesce, emit, write. This is the function one worker runs when M13 adds the bounded pool, which is why it
     is a module and not a lump of `main.cpp`. `ConvertOutputPath` is pure and allocation-free and is
@@ -447,15 +472,18 @@ below.
   `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
   code and the message; `run_golden.py` converts every golden and byte-compares it. All three
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
-  a POSIX host — run them as `python tests/<name>.py`. There are **fourteen** part trees under
+  a POSIX host — run them as `python tests/<name>.py`. There are **fifteen** part trees under
   `fixtures/`: `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`,
-  `nostyles` and `wrappers`, `dollars`, which D12 added, and M6's six — `fragments` (mid-word run splits
-  across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting` (a trailing space inside
-  bold, a leading one, a whitespace-only span, U+00A0 and a tab), `inline` (every delimiter and
-  combination, and the HTML fallbacks), `code` (both code detections, backtick collisions and two
-  fences), `quotes` and `rules`. Each has an `expected.md` beside its `src/`, and each of the six was
-  written by hand from the specification before the converter was run at it; all six matched on the
-  first run.
+  `nostyles` and `wrappers`, `dollars`, which D12 added, and M6's seven — `fragments` (mid-word run
+  splits across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting` (a trailing space
+  inside bold, a leading one, a whitespace-only span, U+00A0 and a tab), `inline` (every delimiter and
+  combination, and the HTML fallbacks), `code` (both code detections, backtick collisions, two fences
+  and the blank line that does *not* separate them), `quotes`, `rules` and `monodefault` (a
+  `w:docDefaults` naming Courier, which must **not** turn the document into one fence). Each has an
+  `expected.md` beside its `src/`, and each of the seven was written by hand from the specification
+  before the converter was run at it. Six matched on the first run; `monodefault` did not, and was not
+  meant to — it was authored as the regression pin for a defect a review had just found, so it failed
+  against the build as it stood and passed once the guard landed.
   `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
   `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
   `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
@@ -534,7 +562,7 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M6 they return **113**, **61** and **1000** checks; those are the shim's numbers, and a Windows
+At M6 they return **115**, **63** and **1014** checks; those are the shim's numbers, and a Windows
 session is expected to see the same three, as it has at every milestone since M3.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
@@ -1458,9 +1486,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     case — mid-word splits across differing rsids, with a `w:proofErr`, a `bookmarkStart`/`End` pair and
     an accepted `w:ins` between the halves, since 5.1 says merging must ignore all of them — and
     `tests/fixtures/hoisting` is the trailing-space-in-bold case, with the leading-space, whitespace-only,
-    U+00A0 and tab variants beside it. Both convert byte-exact, and **every one of the six new
-    `expected.md` files was written by hand from the specification before the converter was run at it**;
-    all six matched on the first run.
+    U+00A0 and tab variants beside it. Both convert byte-exact, and **every one of the seven new
+    `expected.md` files was written by hand from the specification before the converter was run at it**.
+    Six matched on the first run; `monodefault` was authored later, as the regression pin for a defect a
+    review had just found, so it failed against the build as it stood and passed once the guard landed.
   - **What the milestone took beyond its own line, and why each.** The three escaping contexts M5 left
     caller-less are named in its own roadmap entry, and giving `MD_CONTEXT_CODE_BLOCK` a caller means a
     fenced block, which means mapping row 12; row 13's blockquote is `MdEmitter`'s To Do 2 and row 25's
@@ -1471,8 +1500,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     CRLF and ≤150 columns on all thirty-two `src/` files and all twelve `tests/unit/` ones;
     `clang-format --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs
     well-formed XML, mutually byte-identical in their `Include=` paths and every listed file on disk.
-  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1000**
-    checks, `tests/run_golden.py` all **61** and `tests/run_container.py` all **113**, every one of them
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1014**
+    checks, `tests/run_golden.py` all **63** and `tests/run_container.py` all **115**, every one of them
     under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no diagnostic.
   - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`,
     M4 from expat and M5 from `markdown-it-py`'s plain text. M6's claim is about *markup* rather than
@@ -1481,8 +1510,14 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     extension, and the sequence of (text, formatting) spans it produces compared against an independent
     Python model of merge, hoist and delimiter emission. All 4,000 agree. Separately, all **960**
     ordered pairs of formatting combinations, with and without a word character on either side, round
-    trip exactly. Both harnesses are scratch and **the commit does not carry them**; what it carries is
-    the fixtures they motivated.
+    trip exactly, as do all **1,458** ordered triples of the same combinations and 1,500 random
+    emphasis lines. All three harnesses are scratch and **the commit does not carry them**; what they
+    leave behind is the fixtures they motivated.
+  - **Fuzzed**, from a fourth scratch harness: 600 mutated archives and 600 generated documents through
+    the sanitizer build, every archive returning a documented exit code and every document satisfying
+    the emitter's own invariants — UTF-8 out, LF endings, no trailing whitespace, no blank line inside a
+    block, exactly one trailing newline. No AddressSanitizer or UndefinedBehaviorSanitizer diagnostic
+    anywhere, here or in the oracle, the triples or the three committed suites.
   - **What that oracle found, none of it reachable from the fixtures or the unit suite as they stood.**
     A **strikethrough that wraps another delimiter vanishes**: `word~~**x**~~` emits four literal tildes,
     because a `~~` in front of a `**` is followed by punctuation and so may only open where the
@@ -1500,6 +1535,27 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     table does not name. It is recorded as three rows in that table rather than as a decision because
     the alternative is not a policy but a defect: the delimiter it replaces does not render at all.
     An owner who wants it spelled differently — always HTML for strike, say, or never — should say so.
+  - **What a second review found after that, all seven of it verified on the code before it was
+    fixed.** The worst was catastrophic and silent: a **`w:docDefaults` naming a monospace family turned
+    the whole document into one fenced code block**, because row 12's font heuristic asks whether every
+    run is monospace and a document default makes every run monospace — a legal filing set in Courier
+    converted to a single fence with every heading, emphasis and link delimiter dead inside it. The
+    heuristic is now switched off by such a default rather than turned on everywhere. Beside it, a
+    **whitespace-only run between two monospace runs broke the fence**, because Word splits a run at
+    every rsid boundary and the space between two code runs routinely lands in the body font — the vote
+    is now taken at the end of a run and only by a run that produced something that is not a space or a
+    tab. **Three adjacent asterisk spans lost all three**, which is CommonMark's rule of three and is
+    arithmetic no character class can express; a span abutted on both sides now takes the element form.
+    A **fence measured its backtick run per span**, so a bold ` `` ` beside a plain `` ` `` sized the
+    fence at three and the content's own three closed it early; the run now carries across spans and
+    breaks at a line end. A **fence's edges were trimmed by byte count**, so a code paragraph of nothing
+    but padding opened it; the test is now the same has-content test `IrEndBlock` uses. `IrEndBlock`'s
+    own **break trim lost a blank line inside a fence**, where a break is a real newline rather than a
+    marker, so `IR_BLOCK_CODE` is exempt from it. And a **vendor element inside a `w:pBdr` suppressed a
+    horizontal rule**, because the other borders were found by exclusion; both halves of `CT_PBdr` are
+    now matched by name, which is the OOXML compatibility model — what is not understood gets no vote.
+    Each is pinned: `monodefault` and the extended `code`, `inline` and `rules` fixtures, plus unit
+    cases in `TestStyleModel`, `TestDocWalker` and `TestMdEmitter`.
   - **The punctuation the test rests on is CommonMark's own definition, not an approximation of it**:
     the Unicode P and S categories, as a 338-range table generated from the character database and
     binary-searched. A first cut carried a hand-written subset, and auditing it against the database
