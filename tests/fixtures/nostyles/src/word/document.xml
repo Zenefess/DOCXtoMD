@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>A pStyle with no styles part is not a heading.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:outlineLvl w:val="1"/></w:pPr><w:r><w:t>An outline level still is</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>Direct formatting resolves with no styles at all.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t>Hidden with no styles part.</w:t></w:r><w:r><w:t>Ordinary text.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

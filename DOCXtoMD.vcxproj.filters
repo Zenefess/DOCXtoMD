@@ -18,19 +18,37 @@
     <ClCompile Include="src\CliOptions.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\Convert.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\Crc32.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\Diag.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\DocWalker.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\Inflate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Ir.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\MdEmitter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\MdEscape.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\OpcPackage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\StyleModel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\Utf.cpp">
@@ -68,16 +86,34 @@
     <ClInclude Include="src\CliOptions.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\Convert.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\Crc32.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\Diag.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\DocWalker.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\Inflate.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\Ir.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\MdEmitter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\MdEscape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\OpcPackage.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\StyleModel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\Utf.h">

@@ -8,7 +8,25 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
-
+- Decision **D12**, ruled 2026-08-26: a `$` is escaped as `\$`, but only where the assembled line holds
+  two or more of them. GitHub has read `$...$` as inline math and `$$...$$` as display math since 2022,
+  so `costs $5 and $10` rendered `5 and ` in math font and lost both signs; `docs/CONVERSION_REFERENCE.md`
+  4.1 predates the feature and now carries the row, with a tenth pitfall in 4.2. A math span needs two
+  delimiters, so the rule is a count and not a grammar -- GitHub, Pandoc and the KaTeX-based previews
+  disagree about whether a space may follow the opener or a digit the closer, and a count is safe under
+  every one of those readings without reproducing any. A line holding one `$` keeps it bare, which is
+  what the ruling chose conditional escaping for: a price is the common case and pays nothing. It applies
+  in the five contexts whose text a renderer parses as inline content and in none of the other three.
+  `tests/fixtures/dollars` is the golden pair, its `expected.md` written by hand from the specification
+  before the converter was run at it, and it matched on the first run. Two of its cases exist to pin
+  the scope the rule depends on: a line built from two runs holding one dollar each, which is escaped
+  only while the count is taken over the whole line, and a heading whose break folds to a space, so
+  its two dollars share one scope and both escape -- the opposite answer to the paragraph beside it,
+  whose break splits them into two lines that each keep their dollar bare. An adversarial review
+  raised the first: `textflow` already pinned per-line escaping in general through the ampersand
+  rule, but nothing pinned the dollar count's dependence on it, and nothing pinned the heading scope
+  at all. Both were checked against a scratch build that escapes at span boundaries, which is what
+  M6 will do: it fails these two cases and no others.
 - `.clang-format` per GCS tc1 — 3-space indent, no tabs, 180-column limit, attached braces,
   short function bodies on one line, and aligned declarations, assignments and trailing
   comments, over a `BasedOnStyle: LLVM` base — so every option tc1 does not name is LLVM's
@@ -205,6 +223,54 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   answered against the producer-variance corpus rather than guessed. D11 commits the mechanical GCS
   validator at M12 with CI, `include/` exempt. No decision is open.
 
+- **M5: the converter.** Six new modules turn a resolved package into Markdown, so `DOCXtoMD` writes a
+  `.md` file and exit code 0 is truthful for the first time.
+  - `src/StyleModel.h`/`.cpp` — `styles.xml` as a resolved-property cache. It folds each style's whole
+    `w:basedOn` chain once at load, with a cycle guard and a sixteen-link cap, and resolves a run's
+    effective properties by ISO/IEC 29500-1 17.7.3: a toggle the run's own `w:rPr` names is final, a
+    `w:docDefaults` true beats every style, and otherwise the value is the XOR of every explicit true
+    across the paragraph-style and character-style chains, so an even number of them cancels. Style
+    roles come from the normalized `w:name` and, failing that, the normalized `w:styleId`, which is what
+    lets `Heading_20_4` and a localized identifier under an English name both resolve.
+  - `src/Ir.h`/`.cpp` — the intermediate representation: blocks and spans over one growable arena, with
+    a mark-and-rewind pair. A block that holds nothing but ASCII whitespace is unwound completely,
+    arena and all, which is what collapses runs of empty paragraphs for free.
+  - `src/DocWalker.h`/`.cpp` — the body walk. `w:ins` and `w:moveTo` are transparent and `w:del` and
+    `w:moveFrom` are dropped, which is correctness rule 8's accept-all policy; `w:sdt`, `w:smartTag`,
+    `w:customXml`, `w:hyperlink`, `w:fldSimple`, `w:dir`, `w:bdo` and a `w:ruby`'s `w:rubyBase` are
+    transparent at the level each appears at; a hidden run is dropped with its text.
+  - `src/MdEscape.h`/`.cpp` — the context-aware escaping writer of correctness rule 6, pure and
+    allocation-free, with the line-start and heading-closing-sequence rules as post-passes over a
+    finished line rather than as contexts, because those two patterns can only be judged once a whole
+    line exists.
+  - `src/MdEmitter.h`/`.cpp` — one growable UTF-8 buffer, the blank-line discipline, line assembly,
+    hard breaks in both `--hard-break` spellings, and ATX headings.
+  - `src/Convert.h`/`.cpp` — the per-file pipeline and the output-path derivation D7b's operand
+    grammar needs. This is the function one worker will run when M13 adds the bounded pool.
+- `DiagWriteOutBytes`, the door `--stdout` hands a converted document through. It bypasses the C
+  runtime's stream deliberately: stdout is a text stream on Windows, so `fwrite` would turn every LF in
+  the document into a CRLF and break the emitter's stated output contract.
+- `tests/run_golden.py` — the golden runner M5 owes. It converts every golden fixture twice, once to a
+  file beside the input and once through `--stdout`, and byte-compares both against the case's
+  `expected.md`; the two are different code paths and only comparing both tests the contract. It also
+  covers `-o` as a filename and as a directory, a trailing separator, `--stdout` with two inputs,
+  `-q`, exit code 6 and a run in which everything failed.
+- Five golden fixture trees — `headings`, `toggles`, `textflow`, `nostyles` and `wrappers` — and an
+  `expected.md` for `minimal` and `relocated` as well. Fourteen container fixtures are registered
+  against `minimal/expected.md`: stored and deflated entries, fixed-Huffman blocks, ZIP64, a data
+  descriptor, an archive comment, ISO 29500 Strict URIs, a byte-order mark, a UTF-16 part, a main part
+  reached through the content-type table, a content type that disagrees with its relationship, a
+  decoy relationship, mixed-case part names and a duplicated entry name all have to produce the same
+  bytes, which is a stronger statement than the exit code and the message substring they asserted
+  before.
+- Five unit suites — `TestStyleModel`, `TestDocWalker`, `TestMdEscape`, `TestMdEmitter` and
+  `TestConvert` — driven entirely from string literals. `StyleLoadBytes` and `DocWalkBytes` exist so
+  that they can be: they are the halves of `StyleLoad` and `DocWalk` that work over bytes rather than
+  over a package, and the suite opens no file and builds no package.
+- Exit code 6. A run that converted at least one input and failed at least one now returns it, as D7c
+  says it should. The failures name themselves where they happen, so 6 is a summary rather than the
+  only diagnosis.
+
 ### Changed
 
 - `docs/CONVERSION_REFERENCE.md` 5.12 no longer says to "replace invalid sequences with U+FFFD rather
@@ -272,8 +338,94 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - A run in which several inputs fail now returns the **highest** of their per-file verdicts. Exit code 6
   stays unreachable, because D7c reserves it for a run that converted something.
 
-### Fixed
+- A sound container no longer exits 5 saying the converter does not exist. It converts, writes its
+  Markdown and exits 0, and `tests/make_fixtures.py`'s expectation table says so for twenty-four
+  fixtures -- the nineteen sound packages M4 left expecting 5, and the five golden cases M5 adds.
+  The `sound` flag's default moved with it, from `code == 5` to `code == 0`.
+- `src/main.cpp` is wiring again: the M4 package probe is gone, and the per-input loop calls
+  `ConvertFile`.
+- `StyleModel` and `DocWalker` report a container or encoding refusal with the package's own sentence
+  and the package's own exit code, rather than folding every one of them into "the part could not be
+  read" and exit 3. A failed allocation while reading a part is this program's fault, not the
+  document's.
+- Mapping row 1's ruling — heading text is never additionally bolded — is now kept in the walker, which
+  clears the bold bit on a heading's spans. `IR_FMT` is the only channel the emitter has, so leaving it
+  set would have M6 wrapping every heading in delimiters its style already carries.
+- `-o` with a trailing separator names a directory even when there is one input. No Windows file name
+  may end in a separator, so the other reading names something that cannot exist. A session-derived
+  refinement of D7d rather than a departure from it.
 
+### Fixed
+- A line end inside a `w:t` reached the Markdown as a line end, so `<w:t>Total&#10;# 5</w:t>` came out
+  as a paragraph followed by a heading, and a `w:t` a producer pretty-printed came out as an indented
+  code block. WordprocessingML spells a break `w:br`; a newline character inside a `w:t` is interior
+  whitespace and now folds to one space, a CR and LF pair to one.
+- A GFM delimiter row could attach to the line above it inside a single paragraph, so `a|b` followed by
+  a hard break and `-|-` rendered as a table rather than as two lines of text. The line-start pass now
+  escapes the head of anything shaped like a delimiter row, which is enough: a table needs both halves.
+- A thematic break whose hyphens were not one contiguous run was not escaped. CommonMark counts three or
+  more hyphens with any spacing between them, so `--- -` is a rule and not a line of text.
+- A heading whose hard break fell between two padded runs emitted two spaces where one renders.
+- `w:caps` was resolved and then discarded, so a run using it emitted lowercase where Word shows capitals
+  — mapping row 37 rules that the text is uppercased. ASCII and the Latin-1 supplement are covered, which
+  is where a 0x20 offset is exactly right; the rest needs Unicode's case tables and is a To Do.
+- `w:webHidden` did not hide a run. It is not one of 17.7.3's toggles, so it resolves nearest-wins rather
+  than by XOR, but `docs/CONVERSION_REFERENCE.md` 2.3 drops a run for it exactly as for `w:vanish`.
+- `w:dir`, `w:bdo` and a `w:ruby`'s `w:rubyBase` were skipped whole, losing their text. All three are run
+  containers whose content is content.
+- `DocFindStyle` copied a whole 256-byte buffer into its cache when only the first few bytes had been
+  written, reading indeterminate memory. Neither AddressSanitizer nor UndefinedBehaviorSanitizer sees
+  that; MSVC's `/RTCu` does.
+- `StyleModel`'s string heap did not reserve offset 0 for the empty string, so a style declaring no
+  `w:basedOn` read offset 0 as its parent and inherited whichever identifier happened to be stored first.
+  Every golden fixture's first style is `Normal` and every other style in them is based on `Normal`, so
+  the bug was invisible to all seven of them.
+- A dead `mc:ProcessContent` element branch, and the unit case that drove it. MCE spells `mc:Ignorable`
+  and `mc:ProcessContent` as attributes, so no conformant document can carry the element; the attribute
+  form is unimplemented and is now a To Do rather than a branch that looks like one.
+- `tests/fixtures/wrappers` carried a `w:tbl` with no `w:tblPr` or `w:tblGrid` and an `r:id` naming a
+  relationship its rels part does not declare. Neither is valid WordprocessingML, and M7 and M9 would
+  have had to decide something real against a fixture typo.
+- A raw `unsigned long long` cast reached the success note in `src/Convert.cpp`, in a translation unit
+  that is otherwise alias-only. r1 permits the width-encoded aliases and t3 forbids mixing the two
+  spellings in one file; the cast was also unnecessary, since `MdByteCount` already returns `cui64`.
+- Five public accessors carried a `///` summary with no tag at all, which d1 requires of a public API:
+  `IrBlockCount`, `IrFailed`, `StyleCount`, `MdByteCount` and M4's `OpcRelCount`. Every non-void
+  declaration in `src/*.h` now carries a `@return`, and the convention that lets a one-argument
+  accessor omit the `@param` is written down in `CLAUDE.md` rather than merely practised.
+- `--stdout` reported success after a write that failed or stopped part way. `DiagWriteOutBytes`
+  returned `void` and bailed out silently on a bad handle or a short `WriteFile`, so `ConvertFile`
+  could not see it and the process exited 0 having emitted nothing, or half a document. It now
+  returns whether every byte reached the handle and the caller returns exit 4, which is what the
+  file path has always done -- it deletes a half-written `.md` on the same reasoning. Reproduced on
+  Linux as `DOCXtoMD --stdout x.docx >&-`, which exited 0 before the fix and exits 4 after it; on
+  Windows the same shapes are a volume that fills mid-write and a consumer that closes the pipe.
+- Two of the unit suite's checks could not fail: `OpcResultText` has no path that returns null, so
+  asserting it non-null asserted nothing and would have survived the whole sentence table shifting
+  by a row -- the drift the same check caught in `Utf` at M4. Three rows are now pinned by content.
+- `src/Convert.h` cited D7b for the rule that `-o` is a filename for one input and a directory for
+  many, which is D7d; `src/Convert.cpp` already said D7d, so the module contradicted itself.
+- `DocWalker.h` told the reader to see its own To Do for `m:oMath` and `w:sym`, which are named in
+  `DocWalker.cpp`'s To Do instead.
+- A spec-legal 45 KB `.docx` could spin for seconds with no output and no refusal. `StyleFind` was a
+  linear scan of full byte comparisons and the walker caches one style identifier, so a document
+  whose paragraphs alternate between two of many long-prefixed identifiers cost paragraphs x styles
+  x identifier length. Measured on the shim at `-O2`, with a control of identical parse volume whose
+  paragraphs all name one style: 13.53 s against 0.08 s. `StyleFind` now answers from an
+  open-addressed index built once at load, which puts the same file at 0.09 s and emits the same
+  99,999 bytes. The index goes in before `StyleLinkChains`, which is a lookup per style and was the
+  load-time half of the same shape. A model whose index cannot be allocated keeps the scan.
+- A `w:styleId` longer than 255 bytes was stored in full while the walker truncated its lookup key to
+  255, so the two differed at that byte and the paragraph silently took the default style -- a
+  heading lost with no diagnostic. Both the identifier and `w:basedOn` are now stored capped at the
+  ceiling the lookup key uses. ISO/IEC 29500 caps `ST_String` at 255, so nothing in spec changes.
+- Two inputs whose derived output paths collide silently overwrote each other: `-o dst/`
+  `p/report.docx q/report.docx` converted both, kept the second and exited 0. A pre-flight now runs
+  before anything is written -- the first input to name a path keeps it, later ones are refused into
+  D7c's failure list, and an input whose derived output is another input of the same run is refused
+  rather than destroying it. One input named twice is not a collision: it writes the same bytes over
+  its own output. The architecture note recommending this pre-flight gives it to `Batch` at M13; the
+  loop in `main.cpp` is what `Batch` replaces, so it lives there until then.
 - `tests/unit/Check.cpp` did not include `BuildGuards.h`, though its own prolog declared the dependency
   and every other project `.cpp` includes it first. It was the one file that could have compiled without
   D4's `#ifndef __AVX2__` guard, which is precisely the file list that guard exists to cover.
@@ -362,5 +514,9 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   instead of building ([#2]).
 - `DOCXtoMD.cpp`. Its r17 prolog and its `#ifndef __AVX2__` / `#error` guard live on in `src/main.cpp`
   and `src/BuildGuards.h`, and its `.vcxproj` and `.filters` entries moved with them in the same commit.
+- The M4 package probe from `src/main.cpp`, with the two notes it printed. What it proved -- that the
+  main part is resolved through relationships and not by name -- is proved better by `relocated`'s
+  golden, which compares the converted bytes rather than a substring of a message.
+
 
 [#2]: https://github.com/Zenefess/DOCXtoMD/pull/2

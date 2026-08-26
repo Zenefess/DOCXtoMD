@@ -3,11 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-08-25
  * Description: Diagnostic sink: UTF-8 stdout and stderr writers, and the stable process exit codes.
  * To Do: 1) Take include/spinlocks.h and become MT-safe when M13 gives every worker this one sink (D6).
  *        2) Collect the per-file failure list that exit code 6 summarises at M13 (D7c).
  *        3) Take over -q from the callers, so a note is suppressed in one place rather than at each site.
+ *        4) Buffer the document written by DiagWriteOutBytes, once a document is large enough to want it.
  * Dependencies: typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -44,6 +45,18 @@ typedef const EXIT_CODE cEXIT_CODE;
 /// @param text  NUL-terminated UTF-8; a null pointer writes nothing.
 /// @note The console is put into CP_UTF8 by wmain, so the same bytes suit a console and a redirected file.
 void DiagWriteOut(cchptr text);
+
+/// Writes UTF-8 bytes to stdout verbatim, with no newline translation whatever.
+/// @param bytes      The bytes; a null pointer writes nothing.
+/// @param byteCount  How many.
+/// @return true when every byte reached the handle. A caller handing over a converted document must
+///         treat false as an output failure: stdout is the only copy, and a caller redirecting it into
+///         a file has no other way to learn the document was lost.
+/// @note This is the door --stdout hands a converted document through, and it deliberately bypasses the
+///       C runtime's stream: stdout is a text stream on Windows, so fwrite would turn every LF in the
+///       document into a CRLF and break the emitter's stated output contract. Buffered output already
+///       queued on stdout is flushed first, so ordering is kept.
+cbool DiagWriteOutBytes(cui8ptr bytes, cui64 byteCount);
 
 /// Writes UTF-8 text to stderr verbatim, with no prefix and no added newline.
 /// @param text  NUL-terminated UTF-8; a null pointer writes nothing.

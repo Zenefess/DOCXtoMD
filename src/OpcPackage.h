@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-08-25
  * Description: The OPC package model: content types, relationship graphs, and main-part discovery.
  * To Do: 1) Add an uncached part read for MediaExtractor at M7, which streams an image out once.
  *        2) Add the content-type to file-extension table when M7 first names an extracted image.
@@ -299,6 +299,7 @@ cui64 OpcPartByteCount(cOPC_PACKAGEptr package, csi32 partIndex);
 cOPC_RESULT OpcLoadRels(OPC_PACKAGEptrc package, csi32 partIndex);
 
 /// How many relationships a part has, once they have been loaded.
+/// @return The count, or 0 for a part whose relationships were never loaded or that declares none.
 cui32 OpcRelCount(cOPC_PACKAGEptr package, csi32 partIndex);
 
 /// The index of one of a part's relationships, for OpcRel.
