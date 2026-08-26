@@ -91,6 +91,8 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context);
 ///       line: M6 moves escaping to per coalesced span, and a per-span count would see "costs $5"
 ///       and "and $10" as two runs of one dollar each and escape neither, silently restoring exactly
 ///       the corruption D12 was ruled to fix. M6 must count over the line and pass the verdict down.
+///       `tests/fixtures/dollars` pins that: it carries a line built from two runs holding one dollar
+///       each, which comes out escaped only while the count is taken over the whole line.
 /// @note What the line scope does not cover, stated rather than hidden: one dollar before a hard break
 ///       and one after are two runs of one each, so both stay bare. This build assumes inline math
 ///       does not cross a line end -- GitHub documents `$$` for multi-line expressions, which reads

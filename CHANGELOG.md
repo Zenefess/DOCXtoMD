@@ -18,7 +18,15 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   what the ruling chose conditional escaping for: a price is the common case and pays nothing. It applies
   in the five contexts whose text a renderer parses as inline content and in none of the other three.
   `tests/fixtures/dollars` is the golden pair, its `expected.md` written by hand from the specification
-  before the converter was run at it, and it matched on the first run.
+  before the converter was run at it, and it matched on the first run. Two of its cases exist to pin
+  the scope the rule depends on: a line built from two runs holding one dollar each, which is escaped
+  only while the count is taken over the whole line, and a heading whose break folds to a space, so
+  its two dollars share one scope and both escape -- the opposite answer to the paragraph beside it,
+  whose break splits them into two lines that each keep their dollar bare. An adversarial review
+  raised the first: `textflow` already pinned per-line escaping in general through the ampersand
+  rule, but nothing pinned the dollar count's dependence on it, and nothing pinned the heading scope
+  at all. Both were checked against a scratch build that escapes at span boundaries, which is what
+  M6 will do: it fails these two cases and no others.
 - `.clang-format` per GCS tc1 — 3-space indent, no tabs, 180-column limit, attached braces,
   short function bodies on one line, and aligned declarations, assignments and trailing
   comments, over a `BasedOnStyle: LLVM` base — so every option tc1 does not name is LLVM's
