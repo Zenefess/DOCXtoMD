@@ -1243,12 +1243,25 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     beyond bookkeeping: M2 established that the six shared headers come through `/W3` clean, so a
     warning appearing from here on belongs to the commit that introduces it rather than being a latent
     header problem. M4 puts six new `src/` files and six `tests/unit/` ones under that inheritance.
-- **M5 `[done-unverified]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal
+- **M5 `[done]` Paragraphs & headings** — `StyleModel` (chains + toggle XOR), minimal
   `DocWalker`/`Ir`/`MdEmitter`, plus `tests/run_golden.py` (exe runner + byte-compare + exit-code
   assertions). DoD: first golden fixture converts byte-exact.
-  **Status**: the code landed from Linux on 2026-08-25. The next Windows session verifies rather than
-  reimplements it, by running the four commands under "Build & run"; **only that run may flip this
-  marker to `[done]`**.
+  **Status**: the code landed from Linux on 2026-08-25 as `[done-unverified]`, and the owner verified it
+  on Windows the same day: every command under "Build & run" runs clean. Both x64 configurations of the
+  solution and of `DOCXtoMD.vcxproj`, and a Release `/t:Rebuild`, build with **no errors and no
+  warnings**; `python tests\run_container.py` passes all **99** checks against `x64\Release` and all
+  **99** again against `x64\Debug`; `python tests\run_golden.py` passes all **47**; and
+  `tests\x64\Release\DOCXtoMD.Tests.exe` passes all **839**. That discharges the milestone's own
+  definition of done -- `run_golden.py` is what byte-compares the goldens -- and the global one, so the
+  marker is `[done]` with nothing outstanding.
+  - **The three suites return exactly what the shim returned on Linux**: 99, 47 and 839, the same
+    numbers in the same order. That is the third milestone running where a Linux session's harness
+    predicted the real MSVC binary rather than only itself, which is what makes the shim worth
+    building -- but it proves nothing about `/W3`, `/sdl`, `/arch:AVX2` or the real `include/` headers,
+    and those are exactly what the owner's run covers instead. The Debug run matters on its own: the
+    Debug configuration is where `/RTCu` would catch an indeterminate read like the `DocFindStyle` one
+    an M5 review found, and where `mzero`'s aligned 256-bit path over the three new `al32` structures
+    would fault if any of them had lost its alignment.
   - **Scope taken past the minimum, and why each.** `MdEscape` is M6's line in the roadmap and lands
     here whole, because correctness rule 6 forbids an emitter concatenating raw text and the module is
     pure, fully specified by `docs/CONVERSION_REFERENCE.md` 4.1 and testable with no caller — M6 gets
@@ -1356,11 +1369,12 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     parent and inherited whichever identifier happened to be stored first. Every golden fixture's first
     style is `Normal`, and every other style in them is based on `Normal`, so the bug was invisible to
     all seven; the unit suite, whose styles are ordered to make that untrue, failed seven checks at once.
-  - **What a Linux session cannot reach, and a Windows session must**: `/W3` and its zero-warnings
-    requirement, `/sdl`, `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the three
-    new `al32` structures behaves — the shim traps a misaligned 256-bit store rather than reproducing
-    MSVC's fault, which is stricter, but it is not the same code. Two of the four defects M4's review
-    fixed were reachable only on that path.
+  - **What a Linux session could not reach, and the owner's Windows run did**: `/W3` and its
+    zero-warnings requirement, `/sdl`, `/arch:AVX2`, the real `include/` headers, and whether `mzero`
+    on the three new `al32` structures behaves — the shim traps a misaligned 256-bit store rather than
+    reproducing MSVC's fault, which is stricter, but it is not the same code. Two of the four defects
+    M4's review fixed were reachable only on that path. All of it is now covered: both configurations
+    build warning-free and every suite passes against the real binary.
 - **M6 `[todo]` Inline formatting** — `RunCoalescer` (merge + hoist), the remaining `MdEscape` callers,
   bold/italic/strike/code/sup/sub. DoD: fragmented-run and trailing-space-in-bold fixtures pass.
   M5 leaves three things waiting here by name: every span already carries its effective formatting, so
