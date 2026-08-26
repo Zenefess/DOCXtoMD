@@ -62,3 +62,5 @@ A blank line between two samples leaves them one fence:
 first sample
 second sample
 ```
+
+Bold code merges with plain code: `code`.

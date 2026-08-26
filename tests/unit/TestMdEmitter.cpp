@@ -334,6 +334,22 @@ void TestMdEmitter(void) {
    CHECK(Converts("<w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>(a)</w:t></w:r>"
                   "<w:r><w:t>after</w:t></w:r></w:p>",
                   "word<strong>(a)</strong>after\n"));
+   // The mirror image, which the cases above cannot reach: nothing stands in front of the span but a
+   // space, so the opening half is satisfied and only the closing half can refuse. Delete it and
+   // "word **a(**b" is emitted, which renders as five literal characters and no emphasis.
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">word </w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>a(</w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>",
+                  "word <strong>a(</strong>b\n"));
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">x </w:t></w:r>"
+                  "<w:r><w:rPr><w:strike/></w:rPr><w:t>a#</w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>",
+                  "x <del>a#</del>b\n"));
+   // Every Zs counts as whitespace for flanking, not the ASCII space alone, so an EN SPACE in front of
+   // the span is enough to keep the Markdown spelling -- reading it as a word character would spend an
+   // HTML element where a delimiter parses perfectly well.
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">a&#8194;</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>(b</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>",
+                  "a\xE2\x80\x82"
+                  "**(b**c\n"));
    // A space on either side is all it takes for the Markdown spelling to be safe again, which is why
    // the fallback is rare: it needs punctuation at the very edge of the span and no space outside it.
    CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">word </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>(a)</w:t></w:r>"

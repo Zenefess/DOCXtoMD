@@ -55,3 +55,7 @@ word<strong>।a।</strong>after
 word**ⅦaⅦ**after
 
 **bo**<strong><em>th</em></strong>*ree*
+
+word <strong>a(</strong>b
+
+x <del>a#</del>b

@@ -134,18 +134,32 @@ static cui64 DocUpperOne(cchptr bytes, cui64 byteCount, ui8ptrc dest) {
    return 1u;
 }
 
-// Appends text to the open span, dropping the soft hyphens CONVERSION_REFERENCE row 34 says to remove
-// and uppercasing when row 37's w:caps is in force. U+00AD is invisible and splits a word wherever a
-// renderer decides not to hyphenate, so keeping one corrupts the word for every reader that does not.
-// Whether a range holds a byte that is neither a space nor a tab, which is what makes a run count as
-// content for row 12's vote.
+// Whether a range holds anything that would put a visible character on the line, which is what makes a
+// run count as content for row 12's vote.
+//
+// The question is about what the run will *contribute*, not about the bytes it arrived as, so this has
+// to agree with DocAppendText below: a CR or an LF inside a w:t is interior whitespace and folds to one
+// space there, and a U+00AD is dropped outright, so a run made only of those adds nothing a reader can
+// see and must not settle a paragraph either way. Word gives a hyphenation point from a later editing
+// session its own w:r, and a soft-hyphen-only run breaking a fence is exactly the fragmentation
+// correctness rule 4 exists to absorb. A U+00A0 is content, per mapping row 35, and is not in the set.
 static cbool DocIsSolid(cchptr bytes, cui64 byteCount) {
    for(ui64 index = 0; index < byteCount; ++index) {
-      if(bytes[index] != ' ' && bytes[index] != '\t') return true;
+      cchar byte = bytes[index];
+
+      if(byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n') continue;
+      if(ui8(byte) == 0xC2u && index + 1u < byteCount && ui8(bytes[index + 1u]) == 0xADu) {
+         ++index;
+         continue;
+      }
+      return true;
    }
    return false;
 }
 
+// Appends text to the open span, dropping the soft hyphens CONVERSION_REFERENCE row 34 says to remove
+// and uppercasing when row 37's w:caps is in force. U+00AD is invisible and splits a word wherever a
+// renderer decides not to hyphenate, so keeping one corrupts the word for every reader that does not.
 static cbool DocAppendText(DOC_CONTEXTptrc context, cchptr bytes, cui64 byteCount, cbool upper, boolptrc solid) {
    ui64 run = 0;
 
@@ -402,9 +416,9 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
 static constexpr cchptr DOC_BORDERS_UNDER[]  = {"bottom", "between", nullptr};
 static constexpr cchptr DOC_BORDERS_BESIDE[] = {"top", "left", "right", "bar", nullptr};
 
-// Whether the element the reader is on is one of a table's border names, in the WordprocessingML
+// Whether the element the reader is on is one of a paragraph's border names, in the WordprocessingML
 // namespace. Matching by name is what keeps an element this build has never heard of from voting.
-static cbool DocIsBorder(XML_READERptrc reader, cchptr const *names) {
+static cbool DocIsBorder(XML_READERptrc reader, cchptrcptr names) {
    for(ui64 index = 0; names[index]; ++index) {
       if(XmlIsElement(reader, XML_NS_W, names[index])) return true;
    }
@@ -650,6 +664,11 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    cIR_MARK mark         = IrMark(context->document);
    bool     tookChoice   = false;
    bool     tookFallback = false;
+   // The paragraph's row 12 vote is walker state rather than IR, so IR_MARK does not carry it and a
+   // rewind has to undo it here. Without this a discarded Choice votes: a plain Choice beside an
+   // all-monospace Fallback demotes the fence that survives to an inline code span.
+   cbool markedText = context->sawText;
+   cbool markedMono = context->allMono;
 
    for(;;) {
       cXML_TOKEN token = XmlNext(context->reader);
@@ -658,7 +677,11 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
       if(token != XML_TOKEN_START_ELEMENT) continue;
       if(!tookFallback && XmlIsElement(context->reader, XML_NS_MC, "Fallback")) {
-         if(tookChoice) IrRewind(context->document, mark);
+         if(tookChoice) {
+            IrRewind(context->document, mark);
+            context->sawText = markedText;
+            context->allMono = markedMono;
+         }
          if(!DocWalkChildren(context, level, paragraphStyle, heading)) return false;
          tookFallback = true;
          continue;

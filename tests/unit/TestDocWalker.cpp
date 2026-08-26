@@ -317,6 +317,22 @@ void TestDocWalker(void) {
                   "<w:p><mc:AlternateContent><mc:Fallback><w:r><w:t>only a fallback</w:t></w:r></mc:Fallback>"
                   "</mc:AlternateContent></w:p>",
                   "P{[only a fallback]}"));
+   // A rewound Choice must not have voted. The paragraph's row 12 verdict is walker state rather than
+   // IR, so IrRewind does not carry it and the walk restores it by hand -- without which the discarded
+   // plain Choice below demotes the all-monospace Fallback that survives from a fence to a code span.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><mc:AlternateContent><mc:Choice Requires=\"wps\"><w:r><w:t>plain</w:t></w:r></mc:Choice>"
+                  "<mc:Fallback><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>let a = 1;</w:t></w:r>"
+                  "</mc:Fallback></mc:AlternateContent></w:p>",
+                  "C{c[let a = 1;]}"));
+   // And the other direction: a rewound *monospace* Choice must not leave a plain Fallback looking
+   // like code either, which is what a restore that only cleared the flags would do.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><mc:AlternateContent>"
+                  "<mc:Choice Requires=\"wps\"><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr>"
+                  "<w:t>code</w:t></w:r></mc:Choice>"
+                  "<mc:Fallback><w:r><w:t>plain</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>",
+                  "P{[plain]}"));
 
    CheckGroup("DocWalker: caps uppercases the text, and hidden runs go either way");
    // Mapping row 37: caps uppercases, smallCaps leaves the text as typed.
@@ -471,6 +487,24 @@ void TestDocWalker(void) {
                   "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a</w:t>"
                   "<w:br/><w:t>b</w:t></w:r></w:p>",
                   "C{c[a]|c[b]}"));
+   // A run that contributes no visible character votes on nothing either, and the two ways a run can do
+   // that are the two DocAppendText removes: a CR or an LF inside a w:t folds to one space, and a soft
+   // hyphen is dropped outright. Word gives a hyphenation point from a later session its own w:r.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>let a</w:t></w:r>"
+                  "<w:r><w:t xml:space=\"preserve\">&#10;</w:t></w:r>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>= 1;</w:t></w:r></w:p>",
+                  "C{c[let a][ ]c[= 1;]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>let b</w:t></w:r>"
+                  "<w:r><w:t>&#xAD;</w:t></w:r>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t> = 2;</w:t></w:r></w:p>",
+                  "C{c[let b][]c[ = 2;]}"));
+   // A non-breaking space is content, per mapping row 35, so a run of one is not in that set.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a</w:t></w:r>"
+                  "<w:r><w:t>\xC2\xA0</w:t></w:r></w:p>",
+                  "P{c[a][\xC2\xA0]}"));
    // A paragraph with nothing in it is not a code block by the font heuristic: there is no run to look at.
    CHECK(TracedAs(nullptr, "<w:p/>", ""));
    // But an empty paragraph wearing a code *style* is a blank line of the fence, so it keeps its block.

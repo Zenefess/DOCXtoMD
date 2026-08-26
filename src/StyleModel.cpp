@@ -220,7 +220,7 @@ cui64 StyleNormalizeName(cchptr text, cui64 byteCount, chptrc dest, cui64 destBy
 }
 
 // Whether a normalized name appears in one of the tables above.
-static cbool StyleNameInTable(cchptr normalized, cchptr const *table, cui64 rows) {
+static cbool StyleNameInTable(cchptr normalized, cchptrcptr table, cui64 rows) {
    for(ui64 index = 0; index < rows; ++index) {
       if(StyleTextEqual(normalized, table[index])) return true;
    }
@@ -549,9 +549,6 @@ static cbool StyleReadDefaults(STYLE_MODELptrc model, XML_READERptrc reader) {
    model->defaults.webHidden    = runs.run.webHidden;
    model->defaults.monospace    = runs.run.monospace;
    model->defaults.vertAlign    = runs.run.vertAlign;
-   // A document whose own default font is monospace says nothing about any particular run, so row 11's
-   // font heuristic is switched off rather than turned on everywhere -- see StyleResolveRun.
-   model->monoDefault = (runs.run.monospace > 0);
    return true;
 }
 
@@ -654,6 +651,30 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
    }
 }
 
+//-- The document's font baseline
+
+// Settles whether row 12's monospace heuristic can say anything about this document at all.
+//
+// The heuristic asks whether every text-bearing run of a paragraph is monospace, which is a useful
+// signal only where it tells one run from its neighbours. A document that sets a monospace family as its
+// *baseline* makes it true of every run, so every paragraph becomes a fenced code block and the whole
+// file converts to one fence with every delimiter dead inside it. Legal filings set Courier that way.
+//
+// A document declares that baseline in two places and the nearer one wins, exactly as w:dstrike layers:
+// the w:default="1" paragraph style, folded down its own basedOn chain, and w:docDefaults behind it.
+// Both halves matter and the first is the likelier: Word's w:docDefaults normally names a *theme* slot,
+// which specifies no family at all, and Modify Style on Normal is what actually carries the font. A
+// default paragraph style naming a proportional family therefore switches the heuristic back *on* even
+// under a monospace w:docDefaults, which is the right answer -- an unstyled paragraph is proportional
+// there, so a monospace run really does stand out.
+static void StyleReadBaseline(STYLE_MODELptrc model) {
+   si8 baseline = -1;
+
+   if(model->defaultParagraph >= 0) baseline = model->resolved[model->defaultParagraph].monospace;
+   if(baseline < 0) baseline = model->defaults.monospace;
+   model->monoDefault = (baseline > 0);
+}
+
 //== Entry points
 
 void StyleOpen(STYLE_MODELptrc model) {
@@ -747,6 +768,7 @@ cSTYLE_RESULT StyleLoadBytes(STYLE_MODELptrc model, cui8ptr bytes, cui64 byteCou
    StyleBuildIndex(model);
    StyleLinkChains(model);
    for(ui32 index = 0; index < model->styleCount; ++index) StyleFoldChain(model, index);
+   StyleReadBaseline(model);
    model->hasPart = true;
    return STYLE_OK;
 }
@@ -877,10 +899,15 @@ cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cS
    si8 monospace = direct->monospace;
 
    if(monospace < 0 && fromCharacter) monospace = fromCharacter->monospace;
-   if(monospace < 0 && fromParagraph) monospace = fromParagraph->monospace;
-   // The one place this layering is not the same as w:dstrike's: a monospace w:docDefaults would make
-   // every run in the document code, so it makes none. See the note on this function in the header.
-   if(monospace < 0) monospace = (model->monoDefault ? si8(0) : model->defaults.monospace);
+   // The one place this layering is not the same as w:dstrike's. A monospace document baseline would
+   // make every run in the file code, so it makes none: the two layers that carry the baseline are
+   // dropped and only the run's own w:rFonts and its character style may still say monospace. Those two
+   // survive because each is a statement about one run rather than about the document, which is the
+   // whole of what the heuristic is for. See StyleReadBaseline and the note in the header.
+   if(monospace < 0 && !model->monoDefault) {
+      if(fromParagraph) monospace = fromParagraph->monospace;
+      if(monospace < 0) monospace = model->defaults.monospace;
+   }
    props.monospace = (monospace > 0);
    // Only the *character* style chain can make a run a code span. A paragraph style carrying the code
    // role is a fenced block, and giving each of its runs a backtick pair inside the fence would put

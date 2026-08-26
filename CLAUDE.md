@@ -25,10 +25,10 @@ below.
 ## Current state (do not assume more exists)
 
 - `src/` — **exists** and holds the CLI skeleton (M2), the container layer (M3), the XML and package
-  layer (M4) and the converter (M5): thirty files, all
+  layer (M4) and the converter (M5): thirty-two files, all
   CRLF, tab-free, ASCII-only, none over 150 columns, each carrying a validated r17 prolog at `v0.1.0`
   with `ISA: Scalar`. Unlike
-  `include/`, `src/` is **not** exempt from the repository style, and all thirty are committed in
+  `include/`, `src/` is **not** exempt from the repository style, and all thirty-two are committed in
   the shape `.clang-format` produces — running the formatter over them is a verified no-op, so a
   format-on-save cannot manufacture a diff. Keep it that way: format after editing, then re-check the
   r17 prolog, since the formatter has no opinion about it. Two shapes are worth copying because they
@@ -268,10 +268,11 @@ below.
     merges adjacent text spans carrying equal formatting (correctness rule 4 / reference 5.1) and then
     hoists leading and trailing whitespace out of every formatted one (5.3), **in that order**: merged
     first, a bold `one ` beside a bold `two` is one span reading `**one two**`; hoisted first it comes
-    apart into `**one** **two**`. Whitespace here is the ASCII space, the tab and U+00A0 — the
-    non-breaking space is in the set because CommonMark counts every Zs for flanking, so a closing
-    delimiter behind one may not parse, and that is a deliberate asymmetry with `IrEndBlock`, where
-    U+00A0 is *content*. A span left holding nothing but whitespace loses its formatting rather than
+    apart into `**one** **two**`. Whitespace here is the tab and the whole Unicode Zs category — U+0020,
+    U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 — because CommonMark counts every Zs for
+    flanking, so a closing delimiter behind any of them may not parse; U+200B is deliberately excluded,
+    being Cf rather than Zs. U+00A0's membership is a deliberate asymmetry with `IrEndBlock`, where it
+    is *content*. A span left holding nothing but whitespace loses its formatting rather than
     its bytes, which makes 5.5's "never emit delimiters around empty content" structural instead of a
     test the emitter has to remember. Nothing is hoisted inside a fenced block, where the whitespace is
     the indentation. The merge is a length extension over the arena and never moves a byte, which is
@@ -300,7 +301,7 @@ below.
     the emphasis, then a code span's backticks — whose run is one longer than the longest run inside
     the content, padded with a space when the content begins or ends with a backtick. **Where a
     Markdown delimiter cannot parse where it stands, an HTML element takes its place**; see the mapping
-    table's three rows on it, and `MdStrikeAsHtml`, `MdFlankingSafe` and `MdEdgeBehind` for the rules.
+    table's four rows on it, and `MdStrikeAsHtml`, `MdFlankingSafe` and `MdEdgeBehind` for the rules.
     The element also stands in where the flanking classes cannot see the problem at all: CommonMark
     reads adjacent runs of one delimiter character as a single run and then pairs openers to closers by
     *length* — its rule of three — so three emphasis spans meeting with no text between them can leave a
@@ -475,18 +476,23 @@ below.
   `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
   code and the message; `run_golden.py` converts every golden and byte-compares it. All three
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
-  a POSIX host — run them as `python tests/<name>.py`. There are **fifteen** part trees under
+  a POSIX host — run them as `python tests/<name>.py`. There are **sixteen** part trees under
   `fixtures/`: `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`,
-  `nostyles` and `wrappers`, `dollars`, which D12 added, and M6's seven — `fragments` (mid-word run
+  `nostyles` and `wrappers`, `dollars`, which D12 added, and M6's eight — `fragments` (mid-word run
   splits across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting` (a trailing space
-  inside bold, a leading one, a whitespace-only span, U+00A0 and a tab), `inline` (every delimiter and
-  combination, and the HTML fallbacks), `code` (both code detections, backtick collisions, two fences
-  and the blank line that does *not* separate them), `quotes`, `rules` and `monodefault` (a
-  `w:docDefaults` naming Courier, which must **not** turn the document into one fence). Each has an
-  `expected.md` beside its `src/`, and each of the seven was written by hand from the specification
-  before the converter was run at it. Six matched on the first run; `monodefault` did not, and was not
-  meant to — it was authored as the regression pin for a defect a review had just found, so it failed
-  against the build as it stood and passed once the guard landed.
+  inside bold, a leading one, a whitespace-only span, a tab, and the Zs characters beyond the ASCII
+  space: U+00A0, U+2002, U+3000 and U+202F, with U+200B beside them because it is Cf and must *not*
+  hoist), `inline` (every delimiter and combination, and the HTML fallbacks, including the one the
+  closing half of the flanking test decides), `code` (both code detections, backtick collisions, two
+  fences, the blank line that does *not* separate them, and the bold code run that must merge with the
+  plain one beside it), `quotes`, `rules`, and the two monospace-baseline pins — `monodefault`, whose
+  `w:docDefaults` names Courier, and `monostyle`, whose `w:docDefaults` names a *theme* slot and whose
+  default `Normal` paragraph style names Courier, which is what Word actually writes. Neither may turn
+  its document into one fence. Each case has an `expected.md` beside its `src/`, and every one was
+  written by hand from the specification before the converter was run at it. The six M6 wrote up front
+  all matched on the first run; the two monospace-baseline pins did not, and were not meant to — each
+  was authored as the regression pin for a defect a review had just found, so each failed against the
+  build as it stood and passed once its guard landed.
   `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
   `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
   `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
@@ -565,7 +571,7 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M6 they return **115**, **63** and **1014** checks; those are the shim's numbers, and a Windows
+At M6 they return **117**, **65** and **1036** checks; those are the shim's numbers, and a Windows
 session is expected to see the same three, as it has at every milestone since M3.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
@@ -925,11 +931,12 @@ implementation session must respect:
 |---|---|
 | Heading styles / `outlineLvl` 0–8 | `#`–`######` (clamp 7–9 to `######`); heading text never additionally bolded — the walker clears the bold bit on a heading's spans, so M6 cannot re-add it |
 | `Title` / `Subtitle` styles | `#` / `##`, with no demotion of a real `heading 1` — session-derived at M5, which is what `docs/CONVERSION_REFERENCE.md` row 2 asks for by calling it policy |
-| Bold / italic / strike | `**` / `*` (never `_`) / `~~`, except where CommonMark's flanking rules will not let the delimiter parse where it stands — see the three rows below |
+| Bold / italic / strike | `**` / `*` (never `_`) / `~~`, except where CommonMark's flanking rules will not let the delimiter parse where it stands, or where its delimiter run cannot be paired by length — see the four rows below |
 | Superscript / subscript | `<sup>` / `<sub>` |
 | Underline, highlight, color, size | **Dropped** (no Markdown equivalent; hyperlink styling suppressed) |
 | A strikethrough that wraps another delimiter | `<del>` — session-derived at M6. `word~~**x**~~` emits four literal tildes and no strikethrough: a `~~` in front of a `**` is followed by punctuation, so it may only open where the character before it is whitespace or punctuation too, and mid-sentence it is a letter. Two `~~` runs that meet fail as completely — `~~a~~~~b~~` is a run of four tildes, which GFM does not recognise at all. Raw HTML has no flanking rule |
 | Emphasis or a strikethrough whose content touches punctuation at the edge, hard against a word character outside | `<strong>` / `<em>` / `<del>` — session-derived at M6, and the same rule as the row above generalised. `word**(a)**after` loses its emphasis entirely. Two delimiter runs that meet are one run to a parser, so the test steps back over an adjacent run before looking at what precedes it. "Punctuation" is CommonMark's own definition exactly — the Unicode P and S categories, as a generated range table `MdEmitter.cpp` binary-searches — so an Arabic full stop and a Devanagari danda are punctuation while a Roman numeral and a CJK ideograph are not |
+| An emphasis span with an identical delimiter run hard against it on **both** sides | `<strong>` / `<em>` — session-derived at M6, and the one trigger that is not a flanking rule. CommonMark merges adjacent runs of one delimiter character into a single run and then pairs openers to closers by *length* — its rule of three — so three emphasis spans meeting with no text between them can leave a run no pairing resolves: `**bo*****th****ree*` is six literal asterisks with all three spans lost, and there is no punctuation anywhere in it for a character class to catch. An element has neither a length nor a flanking rule, and it also keeps the two Markdown runs apart |
 | A code span, wherever it stands | `` ` `` always. A code span has no flanking rule of its own, so it never needs the fallback |
 | Inline code | `` ` `` — via code-named character styles or monospace `rFonts`. Code wins over bold and italic, and the bits are cleared in the **walker** so that two runs coming out as the same code span coalesce; left set, their backtick delimiters would meet and a renderer would read the pair as one span |
 | Code block | Fenced ``` — consecutive all-monospace paragraphs merge into one fence, whose length is one more than the longest backtick run inside it and never fewer than three. No info string: the language is not recoverable. An empty code paragraph is a blank line of the fence, and is trimmed only where it falls at either end of one |
@@ -951,7 +958,7 @@ implementation session must respect:
 | Two hard breaks with nothing between them | Collapse to one, and a hard break with nothing after it is dropped. A Markdown line that is empty ends the paragraph, so neither `--hard-break` spelling can carry an empty continuation line |
 | A hard break inside a heading | One space. An ATX heading is a single line by construction |
 
-## Planned architecture (`docs/`, `include/`, `tests/` and sixteen `src/` modules exist — build the rest by Roadmap)
+## Planned architecture (`docs/`, `include/`, `tests/` and seventeen `src/` modules exist — build the rest by Roadmap)
 
 **Written so far (M2 + M3 + M4 + M5 + M6)**: `src/main.cpp`, `src/BuildGuards.h`,
 `src/CliOptions.h`/`.cpp`, `src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`,
@@ -1010,10 +1017,12 @@ src/
                          exit-code mapping. MT-safe from M13: every worker reports through this one
                          sink, so it locks then (D6). Reentrant at M2
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
-                         run_container.py [both written at M3, extended at M4 and M5]; run_golden.py
+                         run_container.py [make_fixtures.py written at M3 and extended at M4, M5 and
+                         M6; run_container.py written at M3 and extended at M4]; run_golden.py
                          [written at M5];
                          unit/ holds the CHECK header and one suite per module, built by
-                         tests/DOCXtoMD.Tests.vcxproj [written at M4, five more suites at M5]
+                         tests/DOCXtoMD.Tests.vcxproj [written at M4, five more suites at M5, a
+                         ninth at M6]
 bench/                   GCS p4 microbenches (create with the first performance claim)
 docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
 include/                 the six owner-authored shared headers (already here); on the include path
@@ -1097,7 +1106,7 @@ still accept only one input; what it must not do is assume there will only ever 
   RFC 1951 block type — `strategy=Z_FIXED` for fixed Huffman, the default strategy on a large body for
   dynamic, and `level=0` for stored blocks inside a deflate stream, which is a different code path from
   a stored ZIP entry.
-- Three runners, with different jobs. `tests/run_container.py` (M3, extended at M4 and M5) runs the exe
+- Three runners, with different jobs. `tests/run_container.py` (M3, extended at M4) runs the exe
   over every fixture and asserts the exit code and a substring of the message, and reads every *sound*
   archive back with Python's `zipfile`; `tests/x64/Release/DOCXtoMD.Tests.exe` (M4, extended at M5 and M6) runs
   the unit suite, which drives every case from a string literal and touches no file;
@@ -1503,8 +1512,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     CRLF and ≤150 columns on all thirty-two `src/` files and all twelve `tests/unit/` ones;
     `clang-format --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs
     well-formed XML, mutually byte-identical in their `Include=` paths and every listed file on disk.
-  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1014**
-    checks, `tests/run_golden.py` all **63** and `tests/run_container.py` all **115**, every one of them
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1036**
+    checks, `tests/run_golden.py` all **65** and `tests/run_container.py` all **117**, every one of them
     under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no diagnostic.
   - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`,
     M4 from expat and M5 from `markdown-it-py`'s plain text. M6's claim is about *markup* rather than
@@ -1533,9 +1542,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     delimiters met and a renderer read the pair as one span with backticks in it. The first two are
     fixed by falling back to `<del>`, `<strong>` and `<em>` exactly where a Markdown delimiter cannot
     parse where it stands; the third by clearing the bits in the walker, where the complex-script twins
-    are already folded for the same reason. All three are pinned by `tests/fixtures/inline` now.
+    are already folded for the same reason. The first two are pinned by `tests/fixtures/inline`; the
+    third is pinned by `tests/fixtures/code` and `TestRunCoalescer`, because it is invisible at emission
+    -- clearing the bits changes nothing a reader sees, only whether the two spans merge.
   - **The fallback is session-derived, not ruled**, and it is the one place M6 writes markup the mapping
-    table does not name. It is recorded as three rows in that table rather than as a decision because
+    table does not name. It is recorded as four rows in that table rather than as a decision because
     the alternative is not a policy but a defect: the delimiter it replaces does not render at all.
     An owner who wants it spelled differently — always HTML for strike, say, or never — should say so.
   - **What a second review found after that, all seven of it verified on the code before it was
@@ -1569,6 +1580,35 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     Devanagari danda take the fallback while a Roman numeral, a letterlike symbol, an accented letter
     and a CJK ideograph correctly keep the Markdown spelling. Regenerating and diffing the table is how
     a reader who doubts a row checks it.
+  - **What a third review found, all of it verified on the code before it was fixed, and none of it
+    reachable from the suites as they stood.** Two were serious. The **monospace-baseline guard covered
+    only half of what declares a baseline**: it read `w:docDefaults`, and the other half is the
+    `w:default="1"` paragraph style — which is what Word's *Modify Style ▸ Normal* writes, and the
+    likelier half, because Word's `w:docDefaults` normally names a *theme* slot that specifies no family
+    at all. A Word-shaped `styles.xml` still converted the whole document to one fence, its headings
+    becoming `` # `Chapter One` ``. The baseline is now folded from both halves, nearest-wins, and a
+    *proportional* default style correctly puts the heuristic back on over a monospace `w:docDefaults`.
+    And **hoisting covered three whitespace characters out of the seventeen CommonMark counts**: every
+    Zs flanks alike, so a bold span beginning with U+2002 emitted `a** bold** c`, four literal asterisks
+    with the formatting lost. Neither character is exotic — U+2002 is one Insert ▸ Symbol away in Word,
+    U+3000 is what a CJK keyboard's space bar produces. Both the hoist set and the emitter's flanking
+    classifier are the Zs category now, U+200B deliberately excluded because it is Cf.
+    Beside those: a **discarded `mc:Choice` voted on the paragraph it was rewound out of**, because the
+    row 12 verdict is walker state that `IR_MARK` does not carry, so a plain Choice beside an
+    all-monospace Fallback demoted the surviving fence to an inline code span; and **a run contributing
+    no visible character still voted**, because the abstention rule counted bytes as they arrived rather
+    than as they would be emitted — a CR or LF inside a `w:t` folds to one space and a soft hyphen is
+    dropped, and Word gives a hyphenation point from a later session its own `w:r`. Two GCS breaches went
+    with them: `cchptr const *` written at two use sites, which is r2/t2 and breaks t3 in both TUs, now
+    `cchptrcptr`; and a comment block orphaned from the function it describes.
+  - **The same review found three rules that were implemented and pinned by nothing**, each confirmed by
+    deleting the rule and watching the whole suite stay green: row 11's "code drops bold and italic",
+    whose only observable effect is whether two spans merge, so no golden could ever see it; the
+    **closing** half of the flanking test, because every fallback case in the suite was decided by the
+    opening half; and the guard suppressing hoisting inside a fence, whose case drove an *unformatted*
+    span and so returned before the guard was read. All three now have cases that fail without the rule,
+    and every one of the nine defects above is pinned at both the unit and the golden level — verified
+    by re-running each mutation against the finished suite.
   - **What a Linux session could not reach**: `/W3` and its zero-warnings requirement, `/sdl`,
     `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the structures this commit
     touches behaves — the shim asserts the alignment `mzero`'s 256-bit path needs rather than faulting

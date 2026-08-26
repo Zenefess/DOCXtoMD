@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Chapter One</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Word puts a theme slot in docDefaults and the real font on Normal, so this is the </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>likelier</w:t></w:r><w:r><w:t xml:space="preserve"> half of the same guard.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">A character style still says </w:t></w:r><w:r><w:rPr><w:rStyle w:val="CodeChar"/></w:rPr><w:t>code</w:t></w:r><w:r><w:t>, because that is about the run.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr><w:t>And a run that names its own monospace family is code again.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

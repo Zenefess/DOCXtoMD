@@ -290,11 +290,20 @@ static constexpr MD_RANGE MD_PUNCTUATION[] = {
     {0x1FB00u, 0x1FB92u}, {0x1FB94u, 0x1FBCAu}                                              // Block Sextant-1
 };
 
-// Which class one code point falls into. Whitespace is only what CommonMark's flanking rules ever meet
-// at a span's edge: the emitter has already trimmed a line's own padding and hoisted the rest, and the
-// three below are what a document can still put there.
+// Whether a code point is one CommonMark counts as whitespace for flanking: the Unicode Zs category,
+// plus the tab. It is spelled out rather than looked up in MD_PUNCTUATION because Zs is neither P nor S,
+// so a space left in the word class would make a delimiter beside it look like one beside a letter --
+// and the class is seventeen code points in five contiguous groups, which is smaller than a table.
+// U+200B is deliberately absent: it is Cf, not Zs, and CommonMark does not count it.
+static cbool MdIsSpacePoint(cui32 point) {
+   if(point == ' ' || point == '\t' || point == 0x00A0u) return true;
+   if(point == 0x1680u || point == 0x202Fu || point == 0x205Fu || point == 0x3000u) return true;
+   return point >= 0x2000u && point <= 0x200Au;
+}
+
+// Which class one code point falls into, for the flanking rules.
 static cMD_EDGE MdEdgeOfPoint(cui32 point) {
-   if(point == ' ' || point == '\t' || point == 0x00A0u || point == 0x3000u) return MD_EDGE_SPACE;
+   if(MdIsSpacePoint(point)) return MD_EDGE_SPACE;
 
    ui64 low  = 0;
    ui64 high = sizeof(MD_PUNCTUATION) / sizeof(MD_PUNCTUATION[0]);

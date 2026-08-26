@@ -202,6 +202,22 @@ void TestRunCoalescer(void) {
                    "P{[x\t]b[b][\ty]}"));
    // An unformatted span is never hoisted from: there is no delimiter for its whitespace to escape.
    CHECK(Coalesces("<w:p><w:r><w:t xml:space=\"preserve\"> a </w:t></w:r></w:p>", "P{[ a ]}"));
+   // The set is every Zs, not the ASCII pair and U+00A0 alone, because CommonMark's flanking rules do
+   // not distinguish them: a delimiter written hard against an EN SPACE parses no better than one
+   // against an ordinary space. U+2002 is one Insert-Symbol away in Word and U+3000 is what a CJK
+   // keyboard's space bar produces, so neither is exotic.
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r><w:r><w:rPr><w:b/></w:rPr>"
+                   "<w:t xml:space=\"preserve\">&#8194;bold</w:t></w:r></w:p>",
+                   "P{[a\xE2\x80\x82]b[bold]}"));
+   CHECK(Coalesces("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">bold&#8194;</w:t></w:r>"
+                   "<w:r><w:t>c</w:t></w:r></w:p>",
+                   "P{b[bold][\xE2\x80\x82"
+                   "c]}"));
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r><w:r><w:rPr><w:i/></w:rPr>"
+                   "<w:t xml:space=\"preserve\">&#12288;em&#8239;</w:t></w:r></w:p>",
+                   "P{[a\xE3\x80\x80]i[em][\xE2\x80\xAF]}"));
+   // U+200B is deliberately not in the set: it is Cf rather than Zs, and CommonMark does not count it.
+   CHECK(Coalesces("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b&#8203;</w:t></w:r></w:p>", "P{b[b\xE2\x80\x8B]}"));
 
    CheckGroup("RunCoalescer: merging happens before hoisting");
    // This is the whole reason the two passes are ordered. Merged first, the pair is one bold span with
@@ -215,7 +231,14 @@ void TestRunCoalescer(void) {
                    "P{b[x][  ]i[y]}"));
 
    CheckGroup("RunCoalescer: the block kinds it must leave alone");
-   // Nothing is hoisted inside a fenced block: its whitespace is the indentation of the code.
+   // Nothing is hoisted inside a fenced block: its whitespace is the indentation of the code. The span
+   // has to *carry* formatting for this to assert anything -- an unformatted one returns before the
+   // guard is read, so the case would pass with the guard deleted.
+   CHECK(CoalescesAs(STYLE_CODE,
+                     "<w:p><w:pPr><w:pStyle w:val=\"SC\"/></w:pPr>"
+                     "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr>"
+                     "<w:t xml:space=\"preserve\">   indented   </w:t></w:r></w:p>",
+                     "C{c[   indented   ]}"));
    CHECK(CoalescesAs(STYLE_CODE,
                      "<w:p><w:pPr><w:pStyle w:val=\"SC\"/></w:pPr>"
                      "<w:r><w:t xml:space=\"preserve\">   indented   </w:t></w:r></w:p>",
@@ -231,6 +254,18 @@ void TestRunCoalescer(void) {
                      "Q{b[q][ r]}"));
 
    CheckGroup("RunCoalescer: code spans and the two halves of row 11");
+   // Row 11 drops bold and italic from a code run, and the bits are cleared in the *walker* so that two
+   // runs which come out as the same code span merge here. Left set, their two backtick delimiters meet
+   // and a renderer reads the pair as one span with backticks in it. Nothing else asserts the rule: it
+   // is invisible at emission, so its only observable effect is this merge.
+   CHECK(CoalescesAs(STYLE_SPAN,
+                     "<w:p><w:r><w:rPr><w:rStyle w:val=\"CC\"/><w:b/></w:rPr><w:t>co</w:t></w:r>"
+                     "<w:r><w:rPr><w:rStyle w:val=\"CC\"/></w:rPr><w:t>de</w:t></w:r></w:p>",
+                     "P{c[code]}"));
+   CHECK(Coalesces("<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/><w:i/></w:rPr><w:t>co</w:t></w:r>"
+                   "<w:r><w:rPr><w:rFonts w:ascii=\"Menlo\"/></w:rPr><w:t>de</w:t></w:r>"
+                   "<w:r><w:t> and prose</w:t></w:r></w:p>",
+                   "P{c[code][ and prose]}"));
    // A run that is code because of its character style and one that is code because of its font carry
    // the same bit, so two of them side by side are one code span rather than two.
    CHECK(CoalescesAs(STYLE_SPAN,

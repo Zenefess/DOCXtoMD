@@ -15,3 +15,11 @@ before **nbsp**
 **one two**
 
 **x**  *y*
+
+**enspace** after
+
+before　*ideo*
+
+ **narrow**
+
+**​zwsp**

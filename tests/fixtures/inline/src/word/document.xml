@@ -30,6 +30,8 @@
     <w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>&#2404;a&#2404;</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
     <w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>&#8550;a&#8550;</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
     <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bo</w:t></w:r><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>th</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>ree</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">word </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>a(</w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">x </w:t></w:r><w:r><w:rPr><w:strike/></w:rPr><w:t>a#</w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>
     <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
   </w:body>
 </w:document>

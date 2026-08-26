@@ -31,23 +31,59 @@ constexpr cui64 RUN_SPLIT_MAX = 3u;
 
 //-- Whitespace
 
-// Whether the two bytes at an offset are U+00A0. The non-breaking space is hoisted like an ASCII one
-// (CONVERSION_REFERENCE 5.3), and it is two bytes in UTF-8, so it is tested as a pair rather than by
-// its trailing byte -- 0xA0 alone is a continuation byte of any number of other characters.
-static cbool RunIsNbsp(cchptr bytes, cui64 at, cui64 byteCount) { // Tested as a pair, never by 0xA0 alone
-   return at + 1u < byteCount && ui8(bytes[at]) == 0xC2u && ui8(bytes[at + 1u]) == 0xA0u;
+// How many bytes of hoistable whitespace stand at an offset, or 0 for anything else.
+//
+// The set is the one CommonMark counts for flanking -- the Unicode Zs category, plus the tab -- and not
+// merely the ASCII pair plus U+00A0 that CONVERSION_REFERENCE 5.3 names by example. Every Zs flanks the
+// same way, so a delimiter written hard against an EN SPACE or an ideographic space does not parse any
+// more than one against an ASCII space does, and the emitter's flanking test relies on this pass having
+// removed all of them. U+200B is deliberately not in the set: it is Cf rather than Zs, and CommonMark
+// does not count it. Each is matched by its whole UTF-8 form, never by a trailing byte -- 0xA0 alone is
+// a continuation byte of any number of other characters.
+static cui64 RunSpaceAt(cchptr bytes, cui64 at, cui64 byteCount) {
+   if(at >= byteCount) return 0;
+
+   cui8 lead = ui8(bytes[at]);
+
+   if(lead == ' ' || lead == '\t') return 1u; // U+0020, U+0009
+   if(at + 1u >= byteCount) return 0;
+
+   cui8 second = ui8(bytes[at + 1u]);
+
+   if(lead == 0xC2u && second == 0xA0u) return 2u; // U+00A0
+   if(at + 2u >= byteCount) return 0;
+
+   cui8 third = ui8(bytes[at + 2u]);
+
+   if(lead == 0xE1u && second == 0x9Au && third == 0x80u) return 3u; // U+1680
+   if(lead == 0xE3u && second == 0x80u && third == 0x80u) return 3u; // U+3000
+   if(lead == 0xE2u && second == 0x81u && third == 0x9Fu) return 3u; // U+205F
+   if(lead != 0xE2u || second != 0x80u) return 0;
+   if(third == 0xAFu) return 3u;                       // U+202F
+   return (third >= 0x80u && third <= 0x8Au ? 3u : 0); // U+2000..U+200A
+}
+
+// The same question asked backwards: how many bytes of hoistable whitespace *end* at an offset. Trying
+// each width in turn is sound because every form above begins with a byte of 0xC0 or more, which a
+// continuation byte never is, so no suffix of a longer character can be mistaken for one of them.
+static cui64 RunSpaceEndingAt(cchptr bytes, cui64 at, cui64 floorAt, cui64 byteCount) {
+   for(ui64 width = 1u; width <= 3u; ++width) {
+      if(at < floorAt + width) break;
+      if(RunSpaceAt(bytes, at - width, byteCount) == width) return width;
+   }
+   return 0;
 }
 
 // How many bytes of hoistable whitespace a run begins with.
 static cui64 RunLeadingSpace(cchptr bytes, cui64 byteCount) {
    ui64 at = 0;
 
-   while(at < byteCount) {
-      if(bytes[at] == ' ' || bytes[at] == '\t') ++at;
-      else if(RunIsNbsp(bytes, at, byteCount)) at += 2u;
-      else break;
+   for(;;) {
+      cui64 width = RunSpaceAt(bytes, at, byteCount);
+
+      if(!width) return at;
+      at += width;
    }
-   return at;
 }
 
 // How many bytes of hoistable whitespace a run ends with, never reaching back past what its leading
@@ -55,12 +91,12 @@ static cui64 RunLeadingSpace(cchptr bytes, cui64 byteCount) {
 static cui64 RunTrailingSpace(cchptr bytes, cui64 byteCount, cui64 floorAt) {
    ui64 at = byteCount;
 
-   while(at > floorAt) {
-      if(bytes[at - 1u] == ' ' || bytes[at - 1u] == '\t') --at;
-      else if(at >= floorAt + 2u && RunIsNbsp(bytes, at - 2u, byteCount)) at -= 2u;
-      else break;
+   for(;;) {
+      cui64 width = RunSpaceEndingAt(bytes, at, floorAt, byteCount);
+
+      if(!width) return byteCount - at;
+      at -= width;
    }
-   return byteCount - at;
 }
 
 //-- The merge pass

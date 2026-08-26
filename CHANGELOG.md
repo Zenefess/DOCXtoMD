@@ -61,6 +61,12 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   was authored afterwards as a regression pin, so it failed until the guard below landed.
 - `tests/unit/TestRunCoalescer.cpp`, and the trace notation the other suites already use extended with
   `c` for a code span and `Q`, `C` and `R` for the three new block kinds.
+- Three rules that were implemented but pinned by nothing now have tests, each verified by deleting the
+  rule and watching the new case fail: row 11's "code drops bold and italic", whose only observable
+  effect is whether two spans merge, so no golden could see it; the **closing** half of the flanking
+  test, which every existing fallback case reached the opening half of instead; and the guard that
+  suppresses hoisting inside a fence, whose case drove an *unformatted* span and so returned before the
+  guard was read.
 
 ### Changed
 - `MdEscapeMeasure` and `MdEscapeWrite` take the D12 dollar verdict as an argument rather than counting
@@ -91,9 +97,7 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   and `***T*****=eq=**`, and the general answer is the same one: where the outermost Markdown delimiter
   cannot open or close where it stands, an HTML element takes its place. Two delimiter runs that meet
   are one run to a parser, so the test steps back over an adjacent run before looking at what precedes
-  it. Punctuation is CommonMark's own ASCII list plus the non-ASCII ranges a converted document actually
-  holds -- mapping row 36 keeps smart quotes, dashes and the ellipsis verbatim, so those are the
-  characters a formatted span really does end in.
+  it.
 - **Two adjacent runs that render as the same code span now merge.** Code drops bold and italic, so a
   bold monospace run and a plain one beside it come out identical -- and left unmerged their two
   backtick delimiters met and a renderer read the pair as one span with backticks in it. The bits are
@@ -147,6 +151,37 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   All seven were raised by a review reading the code against the specification rather than by a test,
   and every one was reproduced on the build before it was fixed. Each is pinned by a fixture, a unit
   case, or both.
+- **The monospace-baseline guard now covers the half that matters more.** It read `w:docDefaults` alone,
+  and the other place a document declares a font baseline is the `w:default="1"` paragraph style -- which
+  is what Word's *Modify Style ▸ Normal* writes, and what LibreOffice and Pandoc reference documents
+  carry. It is also the likelier of the two, because Word's `w:docDefaults` normally names a *theme*
+  slot, which specifies no family at all. A file with a theme `w:docDefaults` and Courier on `Normal`
+  still converted to one fence, its headings becoming `` # `Chapter One` `` and its quotes
+  `` > `A quotation.` ``. The baseline is now computed once after the chains are folded, nearest-wins
+  over both halves, and both lower layers are suppressed where it is monospace -- a run's own `w:rFonts`
+  and its character style still speak, because each is a statement about a run and not about the
+  document. A *proportional* default style beats a monospace `w:docDefaults` and puts the heuristic back
+  on, which is the same nearest-wins rule and the right answer: an unstyled paragraph is proportional
+  there, so a monospace run really does stand out. `tests/fixtures/monostyle` is the golden pair.
+- **Whitespace hoisting now covers the whole Zs category**, not the ASCII space, the tab and U+00A0
+  alone: U+1680, U+2000-U+200A, U+202F, U+205F and U+3000 flank exactly the way an ordinary space does,
+  so a delimiter written hard against one does not parse and the formatting was silently lost --
+  `a<EN SPACE>bold` in bold emitted `a** bold** c`, which renders as four literal asterisks. Neither
+  character is exotic: U+2002 is one Insert ▸ Symbol away in Word and U+3000 is what a CJK keyboard's
+  space bar produces. The emitter's flanking classifier gained the same set, which also *relaxes* it --
+  a Zs in front of a span is whitespace rather than a word character, so a delimiter that parses
+  perfectly well no longer spends an HTML element. U+200B stays out of both: it is Cf, not Zs, and
+  CommonMark does not count it.
+- **A discarded `mc:Choice` no longer votes on the paragraph it was rewound out of.** The row 12 verdict
+  is walker state rather than intermediate representation, so `IrRewind` does not carry it and the walk
+  has to restore it by hand, exactly as `DocWalkParagraph` already did around a paragraph. Without it a
+  plain `mc:Choice` beside an all-monospace `mc:Fallback` demoted the fence that survived to an inline
+  code span, and a monospace Choice beside a plain Fallback did the reverse.
+- **A run that contributes no visible character no longer breaks a fence.** The abstention rule counted
+  bytes as they arrived rather than as they would be emitted, but a CR or an LF inside a `w:t` folds to
+  one space and a soft hyphen is dropped outright -- so a run made only of those voted, and Word gives a
+  hyphenation point from a later editing session its own `w:r`. A U+00A0 is still content, per mapping
+  row 35, and is not in the set.
 
 - Decision **D12**, ruled 2026-08-26: a `$` is escaped as `\$`, but only where the assembled line holds
   two or more of them. GitHub has read `$...$` as inline math and `$$...$$` as display math since 2022,

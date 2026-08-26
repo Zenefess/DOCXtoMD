@@ -404,6 +404,37 @@ void TestStyleModel(void) {
    CHECK(StyleResolveRun(&model, -1, &direct).monospace);
    StyleClose(&model);
 
+   CheckGroup("StyleModel: the baseline is the default paragraph style before docDefaults");
+   // The other half of the same guard, and the likelier one: Word's w:docDefaults normally names a
+   // *theme* slot, which specifies no family, and Modify Style on Normal is what carries the font. A
+   // guard that reads only w:docDefaults leaves this document converting to one fence.
+   CHECK(LoadStyles(&model, "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme=\"minorHAnsi\"/>"
+                            "</w:rPr></w:rPrDefault></w:docDefaults>"
+                            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"Body\"><w:name w:val=\"Body\"/>"
+                            "<w:basedOn w:val=\"Normal\"/></w:style>") == STYLE_OK);
+   CHECK(!ResolveUnder(&model, "Normal").monospace);
+   CHECK(!ResolveUnder(&model, "Body").monospace);
+   StyleClearDirect(&direct);
+   direct.monospace = 1;
+   CHECK(StyleResolveRun(&model, StyleFind(&model, "Body"), &direct).monospace);
+   StyleClose(&model);
+
+   CheckGroup("StyleModel: a proportional default style beats a monospace docDefaults");
+   // Nearest-wins runs the other way too, and the answer is the same rule rather than an exception: an
+   // unstyled paragraph is proportional here, so a monospace run really does stand out and the
+   // heuristic belongs back on.
+   CHECK(LoadStyles(&model, "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr>"
+                            "</w:rPrDefault></w:docDefaults>"
+                            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:rPr><w:rFonts w:ascii=\"Calibri\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"Fixed\"><w:name w:val=\"Fixed\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>") == STYLE_OK);
+   CHECK(!ResolveUnder(&model, "Normal").monospace);
+   CHECK(ResolveUnder(&model, "Fixed").monospace);
+   StyleClose(&model);
+
    CheckGroup("StyleModel: a value that had to be decoded outlives the token that carried it");
    // A value holding a reference is built in the reader's scratch, which the next token rewinds -- so
    // this is the case that catches a view kept a moment too long, and no ASCII-only literal can.

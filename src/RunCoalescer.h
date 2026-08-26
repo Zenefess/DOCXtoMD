@@ -34,12 +34,15 @@
 ///       rules refuse "**bold **text" -- a closing delimiter may not be preceded by whitespace, nor an
 ///       opening one followed by it. Hoisting before merging would be wrong: "**a **" beside "**b**"
 ///       has to become "**a b**", and hoisting first would make it "**a** **b**".
-/// @note Whitespace here is the ASCII space, the tab and U+00A0. The non-breaking space is in the set
-///       because CommonMark 0.30 counts every Zs character as whitespace for flanking, so a closing
-///       delimiter behind one may not parse -- and moving it outside the delimiters renders the same in
-///       every renderer, which is what mapping row 35 asks for. Note the deliberate asymmetry with
-///       IrEndBlock, where U+00A0 is *content*: a paragraph holding one was written to hold something,
-///       and that is a different question from where a delimiter may stand.
+/// @note Whitespace here is the tab and the whole Unicode Zs category -- U+0020, U+00A0, U+1680,
+///       U+2000..U+200A, U+202F, U+205F and U+3000 -- because CommonMark 0.30 counts every Zs as
+///       whitespace for flanking, so a closing delimiter behind any of them may not parse, and moving it
+///       outside the delimiters renders the same in every renderer (mapping row 35). None of them is
+///       exotic: U+2002 is one Insert-Symbol away in Word and U+3000 is what a CJK keyboard's space bar
+///       produces. U+200B is deliberately absent -- it is Cf rather than Zs, and CommonMark does not
+///       count it. Note the deliberate asymmetry with IrEndBlock, where U+00A0 is *content*: a paragraph
+///       holding one was written to hold something, and that is a different question from where a
+///       delimiter may stand.
 /// @note A span left holding nothing but whitespace loses its formatting rather than its bytes, which is
 ///       5.5's "never emit delimiters around empty or whitespace-only content" made structural: after
 ///       this pass a formatted span always begins and ends with a byte a delimiter may touch, so the
