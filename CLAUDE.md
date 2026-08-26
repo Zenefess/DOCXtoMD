@@ -191,12 +191,26 @@ below.
     monospace verdict is a tri-state read off `w:rFonts/@ascii` at parse time, so the model stores no
     font names; a `w:rFonts` naming only `w:asciiTheme` specifies nothing rather than specifying false,
     because a specified false would cancel a monospace family an outer layer had established. It layers
-    nearest-wins like `w:dstrike` with **one guard**: a `w:docDefaults` that itself names a monospace
-    family switches the heuristic *off* for the whole document instead of on. Set Courier as a document
-    default — which legal filings do — and without the guard every run is code, every paragraph
-    satisfies row 12, and the file converts to a single fence with every delimiter dead inside it. The
-    font is a signal only where it tells one run from its neighbours; a code *character* style is
-    unaffected, because that is a statement about a run rather than about the document.
+    nearest-wins like `w:dstrike` with **one guard**, and the guard is about the document's font
+    *baseline* rather than about any one declaration of it. `StyleReadBaseline` folds that baseline once
+    at load, nearest-wins over two places: the `w:default="1"` paragraph style, down its own `w:basedOn`
+    chain, and `w:docDefaults` behind it. Both halves are needed and the first is the likelier — Word
+    normally puts a *theme* slot in `w:docDefaults`, which specifies no family at all, and carries the
+    real one on `Normal`. Where that baseline is monospace the heuristic is switched *off* for the whole
+    document instead of on: set Courier that way — which legal filings do — and without the guard every
+    run is code, every paragraph satisfies row 12, and the file converts to a single fence with every
+    delimiter dead inside it. Nearest-wins runs the other way too, and that is the same rule rather than
+    an exception: a *proportional* default paragraph style over a monospace `w:docDefaults` puts the
+    heuristic back on, because an unstyled paragraph is proportional there and a monospace run really
+    does stand out. When the guard is on, only a run's own `w:rFonts` and its **character** style may
+    still say monospace — each is a statement about one run rather than about the document, which is the
+    whole of what the heuristic is for, so a code character style is unaffected. That last exemption is
+    why a `w:basedOn` across two style *types* is dropped at load (ISO/IEC 29500-1 17.7.4.3 requires it
+    anyway): a character style based on a monospace default *paragraph* style inherits its family, and
+    the character layer is read before the guard, so the link is a hole straight through it. The test
+    needs both styles to have **said** what they are, because `w:type` is optional and an absent one
+    reads as paragraph — comparing the stored types alone would drop a typeless style's link to a real
+    character style and silently lose the code span it carries.
     That match goes through an **open-addressed index built once at load**, and the index is a
     correctness matter more than a speed one: the walker looks
     up a style per styled paragraph behind a one-entry cache, so a linear scan makes a spec-legal 45 KB
@@ -233,11 +247,16 @@ below.
     out as the same code span have to coalesce. The walker also classifies the paragraph: a quote or a
     code style gives its own block kind, so does a paragraph whose every text-bearing run is monospace
     (row 12's second detection, settled here because the font is a run property the IR does not carry).
-    That vote is taken once a whole run is read and only by a run that produced a byte which is neither
-    a space nor a tab: Word splits a logical run at every rsid boundary and the space *between* two
-    monospace runs routinely lands in the body font, so counting it would break the fence on exactly the
-    fragmentation correctness rule 4 exists to absorb — and a space renders identically in every face,
-    so ignoring it loses nothing. A lone `w:pBdr` bottom or between border on a paragraph that came to
+    That vote is taken once a whole run is read and only by a run that produced a character a reader can
+    see: Word splits a logical run at every rsid boundary and the gap *between* two monospace runs
+    routinely lands in the body font, so counting it would break the fence on exactly the fragmentation
+    correctness rule 4 exists to absorb — and a space renders identically in every face, so ignoring it
+    loses nothing. What abstains is the tab, the Zs category and the two things the walker removes on the
+    way out, a CR or LF folding to one space and a soft hyphen dropped outright — with **one** exclusion,
+    U+00A0, which mapping row 35 makes content and which therefore settles a paragraph like any visible
+    character. That is the third of the three questions this project asks about whitespace and the only
+    one where U+00A0 goes the other way: `RunCoalescer` hoists it, `IrEndBlock` counts it as content, and
+    here it counts as content too. A lone `w:pBdr` bottom or between border on a paragraph that came to
     nothing gives the horizontal rule of row 25; both halves of `CT_PBdr` are matched **by name** from
     two tables rather than one half by exclusion, so a vendor extension or an `mc:AlternateContent`
     inside a `w:pBdr` is ignored instead of counting as a fourth border and suppressing the rule.
@@ -571,7 +590,7 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M6 they return **117**, **65** and **1036** checks; those are the shim's numbers, and a Windows
+At M6 they return **117**, **65** and **1058** checks; those are the shim's numbers, and a Windows
 session is expected to see the same three, as it has at every milestone since M3.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
@@ -1512,7 +1531,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     CRLF and ≤150 columns on all thirty-two `src/` files and all twelve `tests/unit/` ones;
     `clang-format --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs
     well-formed XML, mutually byte-identical in their `Include=` paths and every listed file on disk.
-  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1036**
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1058**
     checks, `tests/run_golden.py` all **65** and `tests/run_container.py` all **117**, every one of them
     under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no diagnostic.
   - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`,
@@ -1606,9 +1625,26 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     whose only observable effect is whether two spans merge, so no golden could ever see it; the
     **closing** half of the flanking test, because every fallback case in the suite was decided by the
     opening half; and the guard suppressing hoisting inside a fence, whose case drove an *unformatted*
-    span and so returned before the guard was read. All three now have cases that fail without the rule,
-    and every one of the nine defects above is pinned at both the unit and the golden level — verified
-    by re-running each mutation against the finished suite.
+    span and so returned before the guard was read. All three now have cases that fail without the rule.
+  - **What a fourth review found, and the one methodological lesson worth keeping.** It confirmed four
+    more defects and none of them was a regression: a body-font U+2002 or U+3000 between two monospace
+    runs still broke the fence, because `DocIsSolid` was widened in a *different* direction from the
+    other two whitespace sites and never reached the Zs class — one fence became three blocks and the
+    demoted line lost its indentation; and a `w:basedOn` **across two style types** leaked the monospace
+    baseline past the new guard, so a character style based on the default paragraph style turned italic
+    prose into a fenced code block, with the role leaking the same way in the other direction and
+    needing no monospace font at all. ISO/IEC 29500-1 17.7.4.3 requires the link to be ignored, and the
+    test has to ask whether both styles **said** what they are: `w:type` is optional, an absent one
+    reads as paragraph, and comparing the stored types alone drops a typeless style's link to a real
+    character style — a shape producers write, and dropping it loses the code span. Beside those, the
+    baseline's `w:basedOn` fold was pinned by nothing, and a comment miscounted its own class.
+  - **The lesson: a claim that a rule is pinned is itself a claim that has to be run.** The previous
+    round's assertion that all nine defects were pinned at both the unit and the golden level was
+    **false for five of them**, and the review caught it by doing what the sentence described. Mutating
+    each rule and running all three suites also found six rules that were live and covered by nothing at
+    all — among them three members of the emitter's own whitespace class, and the fold above. Every rule
+    either round introduced now fails under mutation; the table of which suite catches which is in the
+    commit message rather than here, because it is a fact about a moment and this file is not.
   - **What a Linux session could not reach**: `/W3` and its zero-warnings requirement, `/sdl`,
     `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the structures this commit
     touches behaves — the shim asserts the alignment `mzero`'s 256-bit path needs rather than faulting

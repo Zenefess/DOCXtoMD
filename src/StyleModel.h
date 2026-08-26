@@ -194,6 +194,7 @@ struct STYLE_RECORD {
    STYLE_TYPE       type;         ///< What w:type said
    STYLE_VERT_ALIGN vertAlign;    ///< w:vertAlign, or STYLE_VERT_UNSET
    bool             isDefault;    ///< Whether w:default was true
+   bool             typeSaid;     ///< Whether w:type was written at all; type is a *default* when it was not
 };
 
 /// One style's properties folded down its whole basedOn chain, computed once when the part is loaded.

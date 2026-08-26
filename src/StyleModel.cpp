@@ -494,6 +494,7 @@ static cbool StyleReadStyle(STYLE_MODELptrc model, XML_READERptrc reader, boolpt
    record->webHidden    = runs.run.webHidden;
    record->monospace    = runs.run.monospace;
    record->type         = type;
+   record->typeSaid     = (typeValue.bytes != nullptr);
    record->vertAlign    = runs.run.vertAlign;
    record->isDefault    = marked;
    ++model->styleCount;
@@ -596,6 +597,18 @@ static void StyleBuildIndex(STYLE_MODELptrc model) {
 //-- Chain folding
 
 // Resolves every w:basedOn identifier to an index, now that every style has been read.
+//
+// A link across two style *types* is dropped, which ISO/IEC 29500-1 17.7.4.3 requires: a character
+// style's parent shall be a character style, and an implementation ignores the reference when it is
+// not. It matters here beyond conformance, because a cross-type link is a hole straight through the
+// monospace guard StyleReadBaseline sets: a character style based on a monospace default *paragraph*
+// style inherits its family, and StyleResolveRun takes the character layer before the guard is read --
+// so italic prose converts to a fenced code block. A role leaks the same way in the other direction.
+//
+// The test needs both styles to have *said* what they are. w:type is optional and this reader defaults
+// an absent one to paragraph, so comparing the stored types alone would drop a typeless style's link to
+// a real character style -- which is a shape producers write, and dropping it silently loses the code
+// span it carries.
 static void StyleLinkChains(STYLE_MODELptrc model) {
    for(ui32 index = 0; index < model->styleCount; ++index) {
       cchptr parent = StyleHeapText(model, model->styles[index].basedOnAt);
@@ -603,6 +616,15 @@ static void StyleLinkChains(STYLE_MODELptrc model) {
       model->styles[index].basedOn = (parent[0] ? StyleFind(model, parent) : -1);
       // A style based on itself is a one-element cycle, and files carrying one exist.
       if(model->styles[index].basedOn == si32(index)) model->styles[index].basedOn = -1;
+
+      csi32 found = model->styles[index].basedOn;
+
+      if(found < 0) continue;
+
+      cSTYLE_RECORDptr child    = model->styles + index;
+      cSTYLE_RECORDptr parentOf = model->styles + found;
+
+      if(child->typeSaid && parentOf->typeSaid && child->type != parentOf->type) model->styles[index].basedOn = -1;
    }
 }
 

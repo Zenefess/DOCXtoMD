@@ -61,12 +61,18 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   was authored afterwards as a regression pin, so it failed until the guard below landed.
 - `tests/unit/TestRunCoalescer.cpp`, and the trace notation the other suites already use extended with
   `c` for a code span and `Q`, `C` and `R` for the three new block kinds.
-- Three rules that were implemented but pinned by nothing now have tests, each verified by deleting the
-  rule and watching the new case fail: row 11's "code drops bold and italic", whose only observable
-  effect is whether two spans merge, so no golden could see it; the **closing** half of the flanking
-  test, which every existing fallback case reached the opening half of instead; and the guard that
-  suppresses hoisting inside a fence, whose case drove an *unformatted* span and so returned before the
-  guard was read.
+- Rules that were implemented but pinned by nothing now have tests, each verified by deleting the rule
+  and watching the new case fail. Row 11's "code drops bold and italic", whose only observable effect is
+  whether two spans merge, so no golden could see it; the **closing** half of the flanking test, which
+  every existing fallback case reached the opening half of instead; and the guard that suppresses
+  hoisting inside a fence, whose case drove an *unformatted* span and so returned before the guard was
+  read. Then a second sweep, which mutated every rule the first round had touched and ran all three
+  suites against each: it found six more that were live and covered by nothing -- `DocIsSolid`'s CR and
+  tab, four of the six members of the emitter's flanking whitespace class, and `StyleReadBaseline`'s
+  `w:basedOn` fold, whose absence restores the whole-document fence verbatim because every
+  `w:default="1"` style in the repository named its font directly rather than inheriting it.
+  `tests/fixtures/monostyle` now inherits it through a parent, so the fold is pinned at golden level for
+  nothing.
 
 ### Changed
 - `MdEscapeMeasure` and `MdEscapeWrite` take the D12 dollar verdict as an argument rather than counting
@@ -180,8 +186,25 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - **A run that contributes no visible character no longer breaks a fence.** The abstention rule counted
   bytes as they arrived rather than as they would be emitted, but a CR or an LF inside a `w:t` folds to
   one space and a soft hyphen is dropped outright -- so a run made only of those voted, and Word gives a
-  hyphenation point from a later editing session its own `w:r`. A U+00A0 is still content, per mapping
-  row 35, and is not in the set.
+  hyphenation point from a later editing session its own `w:r`. The set is now the tab and the whole Zs
+  category as well, which is where the first cut of this fix stopped short: it was widened in a
+  different direction from the other two whitespace sites and never reached the class they had just
+  agreed on, so a body-font U+2002 or U+3000 between two monospace runs still broke the fence. On a
+  four-line listing with one such character, one fence became three blocks **and the demoted line's
+  leading indentation was silently dropped** by the emitter's padding trim -- bytes that survive under an
+  ASCII space. U+00A0 stays out of the set by mapping row 35, which makes it content; that is the one
+  place this question and `RunCoalescer`'s answer differ, and it is deliberate.
+- **A `w:basedOn` across two style types is now ignored**, which ISO/IEC 29500-1 17.7.4.3 requires: a
+  character style's parent shall be a character style. Beyond conformance it was a hole straight through
+  the monospace guard above -- a character style based on a monospace default *paragraph* style inherits
+  its family, and `StyleResolveRun` takes the character layer *before* the guard is read, so a document
+  whose only sin was `<w:basedOn w:val="Normal"/>` on an italic character style converted its prose to a
+  fenced code block. The role leaks the same way in the other direction, and that manifestation needs no
+  monospace font at all: a paragraph style based on a character style named "HTML Code" made ordinary
+  prose a fence. The test asks whether **both** styles said what they are, because `w:type` is optional
+  and this reader defaults an absent one to paragraph -- comparing the stored types alone would drop a
+  typeless style's link to a real character style, which is a shape producers write, and would silently
+  lose the code span it carries.
 
 - Decision **D12**, ruled 2026-08-26: a `$` is escaped as `\$`, but only where the assembled line holds
   two or more of them. GitHub has read `$...$` as inline math and `$$...$$` as display math since 2022,

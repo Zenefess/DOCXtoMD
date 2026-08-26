@@ -346,10 +346,39 @@ void TestMdEmitter(void) {
    // Every Zs counts as whitespace for flanking, not the ASCII space alone, so an EN SPACE in front of
    // the span is enough to keep the Markdown spelling -- reading it as a word character would spend an
    // HTML element where a delimiter parses perfectly well.
+   // Every member of the class needs its own case: the emitter's classifier is reached only through the
+   // *preceding* span, which no fixture exercises, so a member left out of it goes unnoticed while an
+   // HTML element is silently spent where a delimiter parses. Verified against markdown-it: all six
+   // license the Markdown spelling, and U+200B, being Cf, correctly does not.
    CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">a&#8194;</w:t></w:r>"
                   "<w:r><w:rPr><w:b/></w:rPr><w:t>(b</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>",
                   "a\xE2\x80\x82"
                   "**(b**c\n"));
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">a&#160;</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>(b</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>",
+                  "a\xC2\xA0"
+                  "**(b**c\n"));
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">a&#5760;</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>(b</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>",
+                  "a\xE1\x9A\x80"
+                  "**(b**c\n"));
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">a&#8239;</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>(b</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>",
+                  "a\xE2\x80\xAF"
+                  "**(b**c\n"));
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">a&#8287;</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>(b</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>",
+                  "a\xE2\x81\x9F"
+                  "**(b**c\n"));
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">a&#12288;</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>(b</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>",
+                  "a\xE3\x80\x80"
+                  "**(b**c\n"));
+   // U+200B is Cf rather than Zs, so it is a word character here and the element is correct.
+   CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">a&#8203;</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>(b</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>",
+                  "a\xE2\x80\x8B"
+                  "<strong>(b</strong>c\n"));
    // A space on either side is all it takes for the Markdown spelling to be safe again, which is why
    // the fallback is rare: it needs punctuation at the very edge of the span and no space outside it.
    CHECK(Converts("<w:p><w:r><w:t xml:space=\"preserve\">word </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>(a)</w:t></w:r>"

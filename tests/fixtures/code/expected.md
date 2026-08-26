@@ -64,3 +64,7 @@ second sample
 ```
 
 Bold code merges with plain code: `code`.
+
+```
+int x;
+```

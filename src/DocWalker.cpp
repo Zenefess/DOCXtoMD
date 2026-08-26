@@ -142,17 +142,42 @@ static cui64 DocUpperOne(cchptr bytes, cui64 byteCount, ui8ptrc dest) {
 // space there, and a U+00AD is dropped outright, so a run made only of those adds nothing a reader can
 // see and must not settle a paragraph either way. Word gives a hyphenation point from a later editing
 // session its own w:r, and a soft-hyphen-only run breaking a fence is exactly the fragmentation
-// correctness rule 4 exists to absorb. A U+00A0 is content, per mapping row 35, and is not in the set.
-static cbool DocIsSolid(cchptr bytes, cui64 byteCount) {
-   for(ui64 index = 0; index < byteCount; ++index) {
-      cchar byte = bytes[index];
+// correctness rule 4 exists to absorb.
+//
+// Whitespace here is the tab and the Zs category, the same class RunCoalescer hoists and MdEmitter
+// flanks on, with **one exclusion**: U+00A0 is content, per mapping row 35, so a run of one settles the
+// paragraph like any visible character. That is the asymmetry CLAUDE.md records against IrEndBlock, and
+// it is deliberate here for the same reason -- a non-breaking space is a typographic act rather than
+// the incidental gap Word leaves between two runs it split at an rsid boundary.
+static cui64 DocInvisibleAt(cchptr bytes, cui64 at, cui64 byteCount) {
+   cui8 lead = ui8(bytes[at]);
 
-      if(byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n') continue;
-      if(ui8(byte) == 0xC2u && index + 1u < byteCount && ui8(bytes[index + 1u]) == 0xADu) {
-         ++index;
-         continue;
-      }
-      return true;
+   if(lead == ' ' || lead == '\t' || lead == '\r' || lead == '\n') return 1u; // U+0020, U+0009, and the
+   if(at + 1u >= byteCount) return 0;                                         //   line ends that fold
+
+   cui8 second = ui8(bytes[at + 1u]);
+
+   if(lead == 0xC2u && second == 0xADu) return 2u; // U+00AD, dropped outright
+   if(at + 2u >= byteCount) return 0;
+
+   cui8 third = ui8(bytes[at + 2u]);
+
+   if(lead == 0xE1u && second == 0x9Au && third == 0x80u) return 3u; // U+1680
+   if(lead == 0xE3u && second == 0x80u && third == 0x80u) return 3u; // U+3000
+   if(lead == 0xE2u && second == 0x81u && third == 0x9Fu) return 3u; // U+205F
+   if(lead != 0xE2u || second != 0x80u) return 0;
+   if(third == 0xAFu) return 3u;                       // U+202F
+   return (third >= 0x80u && third <= 0x8Au ? 3u : 0); // U+2000..U+200A
+}
+
+static cbool DocIsSolid(cchptr bytes, cui64 byteCount) {
+   ui64 index = 0;
+
+   while(index < byteCount) {
+      cui64 width = DocInvisibleAt(bytes, index, byteCount);
+
+      if(!width) return true;
+      index += width;
    }
    return false;
 }

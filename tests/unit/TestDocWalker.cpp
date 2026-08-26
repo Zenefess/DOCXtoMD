@@ -500,7 +500,37 @@ void TestDocWalker(void) {
                   "<w:r><w:t>&#xAD;</w:t></w:r>"
                   "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t> = 2;</w:t></w:r></w:p>",
                   "C{c[let b][]c[ = 2;]}"));
-   // A non-breaking space is content, per mapping row 35, so a run of one is not in that set.
+   // A carriage return and a tab abstain for the same reason, and each needs its own case: none of the
+   // others reaches the byte, so deleting either from the set leaves every suite green.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>let c</w:t></w:r>"
+                  "<w:r><w:t xml:space=\"preserve\">&#13;</w:t></w:r>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>= 3;</w:t></w:r></w:p>",
+                  "C{c[let c][ ]c[= 3;]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>let d</w:t></w:r>"
+                  "<w:r><w:t xml:space=\"preserve\">&#9;</w:t></w:r>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>= 4;</w:t></w:r></w:p>",
+                  "C{c[let d][\t]c[= 4;]}"));
+   // The set is the tab and the Zs category, the same class RunCoalescer hoists -- a body-font U+2002 or
+   // U+3000 between two code runs is the fragmentation rule 4 absorbs, not a vote against the fence.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>int</w:t></w:r>"
+                  "<w:r><w:t xml:space=\"preserve\">&#8194;</w:t></w:r>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>x;</w:t></w:r></w:p>",
+                  "C{c[int][\xE2\x80\x82]c[x;]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>int</w:t></w:r>"
+                  "<w:r><w:t xml:space=\"preserve\">&#12288;</w:t></w:r>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>y;</w:t></w:r></w:p>",
+                  "C{c[int][\xE3\x80\x80]c[y;]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>int</w:t></w:r>"
+                  "<w:r><w:t xml:space=\"preserve\">&#8239;</w:t></w:r>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>z;</w:t></w:r></w:p>",
+                  "C{c[int][\xE2\x80\xAF]c[z;]}"));
+   // A non-breaking space is content, per mapping row 35, so a run of one is not in that set. That is a
+   // deliberate exclusion from the Zs class above, and the one place the two questions differ.
    CHECK(TracedAs(nullptr,
                   "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a</w:t></w:r>"
                   "<w:r><w:t>\xC2\xA0</w:t></w:r></w:p>",

@@ -421,6 +421,63 @@ void TestStyleModel(void) {
    CHECK(StyleResolveRun(&model, StyleFind(&model, "Body"), &direct).monospace);
    StyleClose(&model);
 
+   // The baseline is read off the default style's *folded* record, so a Normal that inherits the family
+   // rather than naming it is still a monospace baseline. Reading the unfolded property instead leaves
+   // every suite green and restores the whole-document fence, so this is the case that pins the fold.
+   CHECK(LoadStyles(&model, "<w:style w:type=\"paragraph\" w:styleId=\"Base\"><w:name w:val=\"Base\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:basedOn w:val=\"Base\"/></w:style>") == STYLE_OK);
+   CHECK(!ResolveUnder(&model, "Normal").monospace);
+   CHECK(!ResolveUnder(&model, "Base").monospace);
+   StyleClose(&model);
+
+   // And the reverse, where the fold is what turns the heuristic back *on*: a default style that
+   // inherits Courier and then names a proportional family of its own is a proportional baseline.
+   CHECK(LoadStyles(&model, "<w:style w:type=\"paragraph\" w:styleId=\"Base\"><w:name w:val=\"Base\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:basedOn w:val=\"Base\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Calibri\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"Fixed\"><w:name w:val=\"Fixed\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>") == STYLE_OK);
+   CHECK(ResolveUnder(&model, "Fixed").monospace);
+   StyleClose(&model);
+
+   CheckGroup("StyleModel: a basedOn across two style types is ignored");
+   // ISO/IEC 29500-1 17.7.4.3: a character style's parent shall be a character style. Beyond
+   // conformance it is a hole through the monospace guard -- a character style based on a monospace
+   // default *paragraph* style inherits its family, and the character layer is taken before the guard
+   // is read, so italic prose converts to a fenced code block.
+   CHECK(LoadStyles(&model, "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"Emph\"><w:name w:val=\"Emphasis Char\"/>"
+                            "<w:basedOn w:val=\"Normal\"/><w:rPr><w:i/></w:rPr></w:style>") == STYLE_OK);
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "Emph");
+   CHECK(!StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClose(&model);
+
+   // The role leaks the same way in the other direction, and needs no monospace font at all.
+   CHECK(LoadStyles(&model, "<w:style w:type=\"character\" w:styleId=\"CodeChar\">"
+                            "<w:name w:val=\"HTML Code\"/></w:style>"
+                            "<w:style w:type=\"paragraph\" w:styleId=\"Body\"><w:name w:val=\"Body\"/>"
+                            "<w:basedOn w:val=\"CodeChar\"/></w:style>") == STYLE_OK);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Body"), -1).role != STYLE_ROLE_CODE);
+
+   // But w:type is optional, and an absent one is a *default* rather than a statement -- so a typeless
+   // style keeps its link to a real character style. Comparing the stored types alone would drop it and
+   // silently lose the code span it carries.
+   StyleClose(&model);
+   CHECK(LoadStyles(&model, "<w:style w:type=\"character\" w:styleId=\"MonoBase\"><w:name w:val=\"Mono Base\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"VerbatimChar\"><w:name w:val=\"Verbatim Char\"/>"
+                            "<w:basedOn w:val=\"MonoBase\"/></w:style>") == STYLE_OK);
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "VerbatimChar");
+   CHECK(StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClose(&model);
+
    CheckGroup("StyleModel: a proportional default style beats a monospace docDefaults");
    // Nearest-wins runs the other way too, and the answer is the same rule rather than an exception: an
    // unstyled paragraph is proportional here, so a monospace run really does stand out and the

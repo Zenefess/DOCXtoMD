@@ -293,7 +293,7 @@ static constexpr MD_RANGE MD_PUNCTUATION[] = {
 // Whether a code point is one CommonMark counts as whitespace for flanking: the Unicode Zs category,
 // plus the tab. It is spelled out rather than looked up in MD_PUNCTUATION because Zs is neither P nor S,
 // so a space left in the word class would make a delimiter beside it look like one beside a letter --
-// and the class is seventeen code points in five contiguous groups, which is smaller than a table.
+// and Zs is seventeen code points in seven contiguous groups, which with the tab is smaller than a table.
 // U+200B is deliberately absent: it is Cf, not Zs, and CommonMark does not count it.
 static cbool MdIsSpacePoint(cui32 point) {
    if(point == ' ' || point == '\t' || point == 0x00A0u) return true;

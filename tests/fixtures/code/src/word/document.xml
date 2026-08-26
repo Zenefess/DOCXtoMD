@@ -34,6 +34,7 @@
     <w:p/>
     <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>second sample</w:t></w:r></w:p>
     <w:p><w:r><w:t xml:space="preserve">Bold code merges with plain code: </w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:b/></w:rPr><w:t>co</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr><w:t>de</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr><w:t>int</w:t></w:r><w:r><w:t xml:space="preserve">&#8194;</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr><w:t>x;</w:t></w:r></w:p>
     <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
   </w:body>
 </w:document>
