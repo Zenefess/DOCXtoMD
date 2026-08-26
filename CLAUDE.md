@@ -1259,6 +1259,9 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   `tests\x64\Release\DOCXtoMD.Tests.exe` passes all **839**. That discharges the milestone's own
   definition of done -- `run_golden.py` is what byte-compares the goldens -- and the global one, so the
   marker is `[done]` with nothing outstanding.
+  **The three tallies above are M5's, not the tree's**: D12 landed on 2026-08-26, after this
+  verification, and moved them to 863, 49 and 101 by adding a rule, its unit cases and the `dollars`
+  fixture. They are left as the owner ran them, because a verification record is of what was run.
   - **The three suites return exactly what the shim returned on Linux**: 99, 47 and 839, the same
     numbers in the same order. That is the third milestone running where a Linux session's harness
     predicted the real MSVC binary rather than only itself, which is what makes the shim worth
