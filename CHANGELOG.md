@@ -97,7 +97,13 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   cleared in the walker for the same reason the complex-script twins share one: the intermediate
   representation is the output model, and what renders identically has to coalesce.
   All three were found by a differential test against an independent CommonMark implementation, not by
-  a fixture, and none of them was reachable from the suites as they stood. `docs/CONVERSION_REFERENCE.md`
+  a fixture, and none of them was reachable from the suites as they stood. The punctuation the flanking
+  test rests on is CommonMark's own definition -- the Unicode P and S categories, as a 338-range table
+  generated from the character database and binary-searched; a first cut carried a hand-picked subset
+  and an audit found it wrong both ways, calling 326 letters and numbers punctuation and missing 854
+  punctuation characters below U+3100 alone, the Arabic full stop and the Hebrew maqaf among them. The
+  generated table agrees with Python's `unicodedata` on all 1,112,064 code points.
+  `docs/CONVERSION_REFERENCE.md`
   gains an eleventh pitfall in 4.2 for the flanking rules, and mapping rows 6 and 11 gain the two
   caveats it implies, so the two documents do not disagree about what a delimiter may do.
 

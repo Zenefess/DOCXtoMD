@@ -898,7 +898,7 @@ implementation session must respect:
 | Superscript / subscript | `<sup>` / `<sub>` |
 | Underline, highlight, color, size | **Dropped** (no Markdown equivalent; hyperlink styling suppressed) |
 | A strikethrough that wraps another delimiter | `<del>` — session-derived at M6. `word~~**x**~~` emits four literal tildes and no strikethrough: a `~~` in front of a `**` is followed by punctuation, so it may only open where the character before it is whitespace or punctuation too, and mid-sentence it is a letter. Two `~~` runs that meet fail as completely — `~~a~~~~b~~` is a run of four tildes, which GFM does not recognise at all. Raw HTML has no flanking rule |
-| Emphasis or a strikethrough whose content touches punctuation at the edge, hard against a word character outside | `<strong>` / `<em>` / `<del>` — session-derived at M6, and the same rule as the row above generalised. `word**(a)**after` loses its emphasis entirely. Two delimiter runs that meet are one run to a parser, so the test steps back over an adjacent run before looking at what precedes it. "Punctuation" is CommonMark's ASCII list plus the non-ASCII ranges a converted document actually holds, since row 36 keeps smart quotes, dashes and the ellipsis verbatim |
+| Emphasis or a strikethrough whose content touches punctuation at the edge, hard against a word character outside | `<strong>` / `<em>` / `<del>` — session-derived at M6, and the same rule as the row above generalised. `word**(a)**after` loses its emphasis entirely. Two delimiter runs that meet are one run to a parser, so the test steps back over an adjacent run before looking at what precedes it. "Punctuation" is CommonMark's own definition exactly — the Unicode P and S categories, as a generated range table `MdEmitter.cpp` binary-searches — so an Arabic full stop and a Devanagari danda are punctuation while a Roman numeral and a CJK ideograph are not |
 | A code span, wherever it stands | `` ` `` always. A code span has no flanking rule of its own, so it never needs the fallback |
 | Inline code | `` ` `` — via code-named character styles or monospace `rFonts`. Code wins over bold and italic, and the bits are cleared in the **walker** so that two runs coming out as the same code span coalesce; left set, their backtick delimiters would meet and a renderer would read the pair as one span |
 | Code block | Fenced ``` — consecutive all-monospace paragraphs merge into one fence, whose length is one more than the longest backtick run inside it and never fewer than three. No info string: the language is not recoverable. An empty code paragraph is a blank line of the fence, and is trimmed only where it falls at either end of one |
@@ -1500,14 +1500,16 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     table does not name. It is recorded as three rows in that table rather than as a decision because
     the alternative is not a policy but a defect: the delimiter it replaces does not render at all.
     An owner who wants it spelled differently — always HTML for strike, say, or never — should say so.
-  - **One residual, measured rather than assumed**: the punctuation test uses CommonMark's ASCII list
-    plus a table of the non-ASCII ranges a converted document actually holds, since mapping row 36 keeps
-    smart quotes, dashes and the ellipsis verbatim. It is deliberately generous — calling a letter
-    punctuation costs one HTML element where a delimiter would have done, while the reverse emits a
-    delimiter that does not parse — but it is a table and not the Unicode categories, so a code point
-    outside it standing at the very edge of a formatted span is still a delimiter that may not parse.
-    Ellipsis, em dash, both smart quote pairs, guillemets, the bullet and CJK punctuation are covered
-    and checked; accented letters and CJK ideographs correctly keep the Markdown spelling.
+  - **The punctuation the test rests on is CommonMark's own definition, not an approximation of it**:
+    the Unicode P and S categories, as a 338-range table generated from the character database and
+    binary-searched. A first cut carried a hand-written subset, and auditing it against the database
+    found it wrong in *both* directions — 326 code points it called punctuation are letters or numbers,
+    and 854 below U+3100 alone that are punctuation it called letters, among them the Arabic full stop,
+    the Hebrew maqaf and the Greek question mark. The generated table was then checked exhaustively:
+    all **1,112,064** code points agree with Python's `unicodedata`, so an Arabic full stop and a
+    Devanagari danda take the fallback while a Roman numeral, a letterlike symbol, an accented letter
+    and a CJK ideograph correctly keep the Markdown spelling. Regenerating and diffing the table is how
+    a reader who doubts a row checks it.
   - **What a Linux session could not reach**: `/W3` and its zero-warnings requirement, `/sdl`,
     `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the structures this commit
     touches behaves — the shim asserts the alignment `mzero`'s 256-bit path needs rather than faulting

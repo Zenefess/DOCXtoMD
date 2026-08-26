@@ -49,3 +49,7 @@ a<del>#hash</del>b
 word<strong>“quoted”</strong>after
 
 word**été**after
+
+word<strong>।a।</strong>after
+
+word**ⅦaⅦ**after
