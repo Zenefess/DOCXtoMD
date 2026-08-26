@@ -49,19 +49,6 @@ static cbool MdIsDigit(cchar byte) { return byte >= '0' && byte <= '9'; }
 // Whether a byte is an ASCII hexadecimal digit.
 static cbool MdIsHex(cchar byte) { return MdIsDigit(byte) || (byte >= 'a' && byte <= 'f') || (byte >= 'A' && byte <= 'F'); }
 
-// Whether a run holds two or more dollar signs, which is the condition D12 escapes on: an inline math
-// span needs two delimiters, so a run carrying one cannot open one and is left alone. Counted in a
-// pass of its own rather than scanned forward from each dollar, which would be quadratic on a line
-// made of them.
-static cbool MdHasDollarPair(cchptr text, cui64 byteCount) {
-   ui64 found = 0;
-
-   for(ui64 index = 0; index < byteCount; ++index) {
-      if(text[index] == '$' && ++found >= 2u) return true;
-   }
-   return false;
-}
-
 // Whether the inline rules backslash-escape a byte wherever it stands.
 static cbool MdAlwaysEscaped(cchar byte) {
    for(cchptr walk = MD_INLINE_ESCAPED; *walk; ++walk) {
@@ -127,7 +114,7 @@ static void MdPut(chptr dest, cui64 destBytes, ui64ptrc used, cchar byte) {
 }
 
 // Escapes one run of text into dest, or measures it when dest is null.
-static cui64 MdEscapeCore(chptr dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context) {
+static cui64 MdEscapeCore(chptr dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars) {
    ui64 used = 0;
 
    if(!text) return 0;
@@ -152,13 +139,13 @@ static cui64 MdEscapeCore(chptr dest, cui64 destBytes, cchptr text, cui64 byteCo
    // A raw-HTML fallback still has its inner text parsed as inline content, so it takes the whole inline
    // set; what it adds is that the two bytes that could open markup become entities without a guess.
    cbool html = (context == MD_CONTEXT_HTML);
-   // D12: escape every dollar when the run holds two, and none when it holds one. Counting is the whole
+
+   // D12: every dollar is escaped when the line holds two and none when it holds one, and the caller
+   // says which -- a run cannot answer a question about the line it is part of. Counting is the whole
    // rule because a span needs two delimiters, and it is the only criterion safe under every renderer:
    // GitHub, Pandoc and the KaTeX previews disagree about whether a space may follow the opener or a
    // digit the closer, and a count needs none of that. The five contexts that reach this loop are
    // exactly the five where the text is parsed as inline content, so no per-context test is needed.
-   cbool dollars = MdHasDollarPair(text, byteCount);
-
    for(ui64 index = 0; index < byteCount; ++index) {
       cchar byte = text[index];
 
@@ -187,10 +174,22 @@ static cui64 MdEscapeCore(chptr dest, cui64 destBytes, cchptr text, cui64 byteCo
 
 //== Entry points
 
-cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context) { return MdEscapeCore(nullptr, 0, text, byteCount, context); }
+cui64 MdEscapeCountDollars(cchptr text, cui64 byteCount) {
+   ui64 found = 0;
 
-cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context) {
-   cui64 wanted = MdEscapeCore(dest, destBytes, text, byteCount, context);
+   if(!text) return 0;
+   for(ui64 index = 0; index < byteCount; ++index) {
+      if(text[index] == '$') ++found;
+   }
+   return found;
+}
+
+cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars) { // Measuring is writing
+   return MdEscapeCore(nullptr, 0, text, byteCount, context, dollars);
+}
+
+cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars) {
+   cui64 wanted = MdEscapeCore(dest, destBytes, text, byteCount, context, dollars);
 
    return (wanted > destBytes ? destBytes : wanted);
 }

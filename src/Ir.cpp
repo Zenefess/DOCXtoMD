@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-26
  * Description: The intermediate representation's arena: growth, span appends and empty-block trimming.
  * To Do: 1) Size the first allocation from the part's own byte count, once the walker knows it.
  *        2) Release the arena back to the allocator between documents when M13 reuses a worker.
@@ -96,6 +96,16 @@ cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark) {
    while(first < last && document->spans[first].kind == IR_SPAN_BREAK) ++first;
    while(last > first && document->spans[last - 1u].kind == IR_SPAN_BREAK) --last;
 
+   // A horizontal rule is an empty paragraph by construction (CONVERSION_REFERENCE row 25), so the
+   // emptiness test below would throw away every one. It keeps no spans either: a rule emits none.
+   if(block->kind == IR_BLOCK_RULE) {
+      block->spanAt       = mark.spanAt;
+      block->spanCount    = 0;
+      document->spanCount = mark.spanAt;
+      document->heapUsed  = mark.heapAt;
+      return true;
+   }
+
    bool content = false;
 
    for(ui32 index = first; index < last && !content; ++index) {
@@ -106,6 +116,10 @@ cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark) {
          if(!IrIsBlank(document->heap[span->textAt + at])) content = true;
       }
    }
+   // An empty code paragraph is a blank line inside a fence, which is content of a kind an ordinary
+   // paragraph has no equivalent for -- so it is kept here and the emitter trims one only where it
+   // falls at the edge of a fence, which is where it would be a blank line before or after the code.
+   if(!content && block->kind == IR_BLOCK_CODE) content = true;
    if(!content) {
       // Nothing worth emitting: unwind the block completely, arena and all, so that the next block's
       // text starts where this one's would have and an empty paragraph costs nothing at all.
@@ -178,6 +192,17 @@ cIR_BLOCKptr IrBlockAt(cIR_DOCUMENTptr document, cui32 index) { return (index < 
 
 cIR_SPANptr IrSpanAt(cIR_DOCUMENTptr document, cui32 index) { return (index < document->spanCount ? document->spans + index : nullptr); }
 
+IR_BLOCKptr IrBlockMutable(IR_DOCUMENTptrc document, cui32 index) { return (index < document->blockCount ? document->blocks + index : nullptr); }
+
 cchptr IrText(cIR_DOCUMENTptr document, cui32 at) { return (document->heap ? document->heap + at : ""); }
 
 cbool IrFailed(cIR_DOCUMENTptr document) { return document->failed; }
+
+void IrFail(IR_DOCUMENTptrc document) { document->failed = true; }
+
+void IrAdoptSpans(IR_DOCUMENTptrc document, IR_SPANptr spans, cui64 capacity, cui32 count) {
+   mdealloc(document->spans);
+   document->spans        = spans;
+   document->spanCapacity = capacity;
+   document->spanCount    = count;
+}

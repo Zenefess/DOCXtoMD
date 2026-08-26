@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">bold </w:t></w:r><w:r><w:t>text</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">a </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> bold</w:t></w:r></w:p>
+    <w:p><w:r><w:t>a</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">   </w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">nbsp&#160;</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+    <w:p><w:r><w:t>before</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">&#160;nbsp</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve"> &#160;lead</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">trail&#9;</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">one </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>two</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">x </w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve"> y</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

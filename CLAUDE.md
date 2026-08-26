@@ -184,7 +184,13 @@ below.
     come from the normalized `w:name` first and the normalized `w:styleId` second, which is what lets an
     English `w:name` over a localized identifier and a LibreOffice `Heading_20_4` both resolve; the raw
     identifier is what `StyleFind` matches, because decoding escapes on the lookup path would collapse
-    `Source_20_Text` and `Source Text` into one key. That match goes through an **open-addressed index
+    `Source_20_Text` and `Source Text` into one key. Since M6 a role also depends on **what kind of
+    style declares the name**, and that is load-bearing rather than tidy: "Source Text" is LibreOffice's
+    *character* style for inline code (mapping row 11) and an ordinary paragraph style name otherwise,
+    and `tests/fixtures/headings` has carried a paragraph style called exactly that since M5. The
+    monospace verdict is a tri-state read off `w:rFonts/@ascii` at parse time, so the model stores no
+    font names; a `w:rFonts` naming only `w:asciiTheme` specifies nothing rather than specifying false,
+    because a specified false would cancel a monospace family an outer layer had established. That match goes through an **open-addressed index
     built once at load**, and the index is a correctness matter more than a speed one: the walker looks
     up a style per styled paragraph behind a one-entry cache, so a linear scan makes a spec-legal 45 KB
     `.docx` — many long-prefixed identifiers, paragraphs alternating between two of them — spin for
@@ -195,9 +201,11 @@ below.
     is seeded with the empty string, without which a style declaring no `w:basedOn` inherits whichever
     identifier happened to be stored first — a real defect the golden fixtures missed and the unit
     suite caught, because every fixture's first style is the one they would wrongly have inherited.
-  - `Ir.h`/`Ir.cpp` — the intermediate representation the walker builds and the emitter reads: blocks
-    and spans as arrays of POD records over one growable byte arena, addressed by offset so a growth
-    invalidates nothing. `IrEndBlock` trims a block's leading and trailing break spans and then unwinds
+  - `Ir.h`/`Ir.cpp` — the intermediate representation the walker builds, RunCoalescer rewrites and the
+    emitter reads: blocks and spans as arrays of POD records over one growable byte arena, addressed by
+    offset so a growth invalidates nothing. Five block kinds since M6 — paragraph, heading, quote, code
+    and rule — and two of them are exempt from the emptiness test: a rule is an empty paragraph by
+    construction, and an empty code paragraph is a blank line inside a fence. `IrEndBlock` trims a block's leading and trailing break spans and then unwinds
     the whole block — records, spans and arena — when nothing but ASCII whitespace is left, which is
     what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` exist for one caller:
     `mc:AlternateContent`, where the first `mc:Choice` is walked speculatively and rewound if an
@@ -210,7 +218,13 @@ below.
     instructions out of the output; a run whose `w:caps` is on has its text uppercased, which is
     mapping row 37 and is a transform on the bytes rather than a delimiter, so it belongs here. A
     heading's spans have their bold bit cleared, because mapping row 1 rules that heading text is never
-    additionally bolded and `IR_FMT` is the only channel M6 has. `w:t` text is taken literally —
+    additionally bolded and `IR_FMT` is the only channel the emitter has; a code run has its bold and
+    italic bits cleared for a different reason, which is that row 11 drops them and two runs that come
+    out as the same code span have to coalesce. The walker also classifies the paragraph: a quote or a
+    code style gives its own block kind, so does a paragraph whose every text-bearing run is monospace
+    (row 12's second detection, settled here because the font is a run property the IR does not carry),
+    and a lone `w:pBdr` bottom or between border on a paragraph that came to nothing gives the
+    horizontal rule of row 25. A heading beats all of them. `w:t` text is taken literally —
     `xml:space` is the producer's business — with U+00AD removed. What is skipped whole and why:
     `w:tbl` (M9), `w:drawing`/`w:pict` (M7), `w:instrText` and `w:fldChar` (M10's field state machine),
     `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
@@ -233,19 +247,47 @@ below.
     a math span needs two delimiters and a price is the common case. Two things it rests on — the
     backslash must stay unconditionally escaped, or a source `\` before a `$` would swallow the one
     this rule inserts, and the count must be taken over a whole assembled line.
-  - `MdEmitter.h`/`MdEmitter.cpp` — one growable UTF-8 output buffer and one line buffer. A line is
-    assembled **raw** and escaped in one piece rather than span by span, and that is a correctness
-    matter: the ampersand rule looks ahead for an entity pattern, and Word fragments a run wherever a
-    revision boundary falls, so escaping per span makes `A&amp;B` come out differently depending on
-    where the producer happened to split it. Blocks are separated by exactly one blank line and each
-    ends in one newline, so two paragraphs are `a\n\nb\n` and an empty document is zero bytes. Each
+  - `RunCoalescer.h`/`RunCoalescer.cpp` — the coalescing pass, and the reason a delimiter is safe. It
+    merges adjacent text spans carrying equal formatting (correctness rule 4 / reference 5.1) and then
+    hoists leading and trailing whitespace out of every formatted one (5.3), **in that order**: merged
+    first, a bold `one ` beside a bold `two` is one span reading `**one two**`; hoisted first it comes
+    apart into `**one** **two**`. Whitespace here is the ASCII space, the tab and U+00A0 — the
+    non-breaking space is in the set because CommonMark counts every Zs for flanking, so a closing
+    delimiter behind one may not parse, and that is a deliberate asymmetry with `IrEndBlock`, where
+    U+00A0 is *content*. A span left holding nothing but whitespace loses its formatting rather than
+    its bytes, which makes 5.5's "never emit delimiters around empty content" structural instead of a
+    test the emitter has to remember. Nothing is hoisted inside a fenced block, where the whitespace is
+    the indentation. The merge is a length extension over the arena and never moves a byte, which is
+    sound only because the walker appends every span's bytes in span order and leaves no gap — so the
+    pass **checks that the two ranges really meet** and declines the merge if they ever do not, rather
+    than trusting an invariant a later milestone could quietly break. Hoisting splits a span in three,
+    so the span array is rebuilt rather than rewritten in place, and every block's `spanAt` moves with
+    it; that is `IrAdoptSpans`, and it is this module's one privilege.
+  - `MdEmitter.h`/`MdEmitter.cpp` — one growable UTF-8 output buffer and one line buffer. Since M6 a
+    line is assembled span by span in its **output** form — delimiters and escaped text together —
+    rather than raw and escaped in one piece, because there is now markup between the spans and a pass
+    over the assembled line would escape that markup too. The two rules that need to see more than one
+    span are handled by looking wider rather than by escaping later: the ampersand lookahead is safe
+    within a span because the coalescer has already merged every adjacent pair with equal formatting,
+    so a split entity can only be separated by markup that stops it being one; and D12's dollar count
+    is taken over the whole line and passed into each span's escape call. Blocks are separated by
+    exactly one blank line and each ends in one newline, so two paragraphs are `a\n\nb\n` and an
+    empty document is zero bytes — with one exception, a bare `>` between two consecutive quote blocks,
+    because a blank line there would close the blockquote and open a second. Each
     line loses its leading and trailing ASCII padding — four leading spaces would be an indented code
     block, two trailing ones are Markdown's other hard break. A hard break with nothing after it is
     dropped and two with nothing between them collapse, because a Markdown line that is empty ends the
     paragraph and neither `--hard-break` spelling can carry an empty continuation line. Inside a
     heading a break becomes exactly one space.
+    Delimiters nest in one fixed order, outermost first: `<sup>`/`<sub>`, then the strikethrough, then
+    the emphasis, then a code span's backticks — whose run is one longer than the longest run inside
+    the content, padded with a space when the content begins or ends with a backtick. **Where a
+    Markdown delimiter cannot parse where it stands, an HTML element takes its place**; see the mapping
+    table's three rows on it, and `MdStrikeAsHtml`, `MdFlankingSafe` and `MdEdgeBehind` for the rules.
+    That fallback is session-derived, not ruled, and it is the one place M6 writes markup the mapping
+    table does not name.
   - `Convert.h`/`Convert.cpp` — the per-file pipeline: container, package, relationships, styles, walk,
-    emit, write. This is the function one worker runs when M13 adds the bounded pool, which is why it
+    coalesce, emit, write. This is the function one worker runs when M13 adds the bounded pool, which is why it
     is a module and not a lump of `main.cpp`. `ConvertOutputPath` is pure and allocation-free and is
     therefore what the unit suite hammers: D7d's rule is `-o` as a filename for one input and a
     directory for several, otherwise the input's own path with its extension replaced. A trailing
@@ -262,7 +304,7 @@ below.
     replaces, so it lives there until then.
   - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, option handling, the input loop and the
     exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
-  - **What the binary does at M5**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+  - **What the binary does at M6**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
     input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and which
     part broke it**, an output that cannot be written exits 4, and a sound package is **converted** and
@@ -271,14 +313,13 @@ below.
     rather than the CRT stream so that Windows cannot turn the emitter's LF endings into CRLF. A run
     that converted something and failed something exits **6**, which D7c reserves for exactly that; a
     run in which everything failed returns the highest of their verdicts.
-  - **What M5 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
-    escaping that keeps all of it from being re-read as markup. It emits **no inline delimiters at
-    all** — no `**`, `*`, `~~`, backtick, `<sup>` or `<sub>` — and that is deliberate rather than
-    unfinished: wrapping a span in delimiters is only safe once adjacent runs with equal formatting have
-    been merged and whitespace hoisted out of the span, and both are M6's `RunCoalescer`. The effective
-    formatting is resolved and carried on every span from this commit, so M6 extends the IR rather than
-    rebuilding it. Lists, tables, links, images, notes and fields arrive at M7 through M10 and are
-    skipped until then.
+  - **What M6 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
+    escaping that keeps all of it from being re-read as markup, and — new at M6 — bold, italic,
+    strikethrough, superscript, subscript, inline code, fenced code blocks, blockquotes and the
+    horizontal rule. Lists, tables, links, images, notes and fields arrive at M7 through M10 and are
+    skipped until then, which means `w:tbl`, `w:drawing`, `w:pict`, `w:instrText`, `w:fldChar`, the
+    note references, `w:sym` and `m:oMath` are all still skipped whole. Underline, highlight, colour and
+    size are dropped by policy and always will be (mapping rows 8 and 9).
 
 - `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF, tab-indented) and exposes **only** `Debug|x64`
   and `Release|x64`, matching both project files exactly. It lists **two** projects since M4: `DOCXtoMD`
@@ -296,10 +337,10 @@ below.
   and both build clean at `/W3`. No OutDir override. Both configs also define
   `WIN32_LEAN_AND_MEAN;NOMINMAX` — added at M2, when `<windows.h>` first entered the project; neither
   hides a header this project needs, because `winnls.h` (`WideCharToMultiByte`) and `wincon.h`
-  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Fifteen
-  `<ClCompile>`s, all `src\…`, and twenty-one `<ClInclude>`s: the six `include\…` headers and fifteen
+  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Sixteen
+  `<ClCompile>`s, all `src\…`, and twenty-two `<ClInclude>`s: the six `include\…` headers and sixteen
   `src\…` ones.
-- `DOCXtoMD.vcxproj.filters` — lists the fifteen `src\*.cpp` files under Source Files and all twenty-one
+- `DOCXtoMD.vcxproj.filters` — lists the sixteen `src\*.cpp` files under Source Files and all twenty-two
   headers under Header Files, in the same order as the `.vcxproj`. Every `<ClCompile Include="…">` and
   `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character; keep it that way, or
   the IDE tree stops reflecting the build. The tree is deliberately flat — there is no `src` filter
@@ -314,7 +355,8 @@ below.
   because MSBuild's default is `$(SolutionDir)`-relative: without the pin the test binary lands in
   `x64\Release\` when the solution is built and in `tests\x64\Release\` when the project is, and a
   definition-of-done command cannot name a path that moves. The main project still sets no OutDir. It
-  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the ten files in `tests\unit\`.
+  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the eleven files in
+  `tests\unit\`.
 - Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
   Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
   - `typedefs.h` v1.0.1 — r1/r2/t1/t2 aliases, the full pointer lattice, `al1`–`al64`, `$LoopMT*`,
@@ -405,9 +447,15 @@ below.
   `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
   code and the message; `run_golden.py` converts every golden and byte-compares it. All three
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
-  a POSIX host — run them as `python tests/<name>.py`. There are **eight** part trees under `fixtures/`:
-  `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`, `nostyles` and
-  `wrappers`, and `dollars`, which D12 added; each has an `expected.md` beside its `src/`.
+  a POSIX host — run them as `python tests/<name>.py`. There are **fourteen** part trees under
+  `fixtures/`: `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`,
+  `nostyles` and `wrappers`, `dollars`, which D12 added, and M6's six — `fragments` (mid-word run splits
+  across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting` (a trailing space inside
+  bold, a leading one, a whitespace-only span, U+00A0 and a tab), `inline` (every delimiter and
+  combination, and the HTML fallbacks), `code` (both code detections, backtick collisions and two
+  fences), `quotes` and `rules`. Each has an `expected.md` beside its `src/`, and each of the six was
+  written by hand from the specification before the converter was run at it; all six matched on the
+  first run.
   `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
   `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
   `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
@@ -428,12 +476,13 @@ below.
   same question as "does it exit 5" and no longer is, because a package can be a perfectly good archive
   and still not be a DOCX — without the flag every new package-level negative would silently drop out of
   the `zipfile` cross-check.
-- `tests/unit/` — **exists** as of M4 and doubled at M5: `Check.h`/`Check.cpp` (one `CHECK` macro, a
+- `tests/unit/` — **exists** as of M4, doubled at M5 and gained a ninth suite at M6:
+  `Check.h`/`Check.cpp` (one `CHECK` macro, a
   group heading and a pass/fail summary, over `typedefs.h` and `<stdio.h>` and nothing else — the header
   itself needs only `typedefs.h`, so a suite that includes it pulls in no I/O), `TestMain.cpp`, and one
   suite per module — `TestUtf.cpp`, `TestXmlPull.cpp`, `TestOpcPackage.cpp`, `TestStyleModel.cpp`,
-  `TestDocWalker.cpp`, `TestMdEscape.cpp`, `TestMdEmitter.cpp`, `TestConvert.cpp`. Every case is driven
-  from a string literal;
+  `TestDocWalker.cpp`, `TestRunCoalescer.cpp`, `TestMdEscape.cpp`, `TestMdEmitter.cpp`,
+  `TestConvert.cpp`. Every case is driven from a string literal;
   nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
   works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
   character data, `$` is the end and `!n` is refusal *n* — so one string per case reads better than ten
@@ -447,7 +496,10 @@ below.
   work over bytes rather than over a package; `TestDocWalker` renders the whole intermediate
   representation into a compact trace — `H1{…}` a heading, `P{…}` a paragraph, `[text]` a span, `|` a
   break, and the letters before a bracket its formatting — so a case is one string comparison rather
-  than ten assertions, and it is the only place the formatting bits are observable before M6 emits them.
+  than ten assertions. M6 extended that notation rather than inventing one: `c` is a code span, and the
+  block letters are `Q` for a blockquote, `C` for a line of a fenced block and `R` for a horizontal
+  rule. `TestDocWalker` and `TestRunCoalescer` share it, which is what makes the pair readable: the
+  first shows the fragmentation the walker preserves, the second shows the same document merged.
 - **Not yet created** (GCS obligations, see Roadmap): `bench/` and CI. Do not reference them as if they
   exist. Everything else this section names does exist, `tests/run_golden.py` included.
 
@@ -482,6 +534,8 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
+At M6 they return **113**, **61** and **1000** checks; those are the shim's numbers, and a Windows
+session is expected to see the same three, as it has at every milestone since M3.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -840,12 +894,15 @@ implementation session must respect:
 |---|---|
 | Heading styles / `outlineLvl` 0–8 | `#`–`######` (clamp 7–9 to `######`); heading text never additionally bolded — the walker clears the bold bit on a heading's spans, so M6 cannot re-add it |
 | `Title` / `Subtitle` styles | `#` / `##`, with no demotion of a real `heading 1` — session-derived at M5, which is what `docs/CONVERSION_REFERENCE.md` row 2 asks for by calling it policy |
-| Bold / italic / strike | `**` / `*` (never `_`) / `~~` |
+| Bold / italic / strike | `**` / `*` (never `_`) / `~~`, except where CommonMark's flanking rules will not let the delimiter parse where it stands — see the three rows below |
 | Superscript / subscript | `<sup>` / `<sub>` |
 | Underline, highlight, color, size | **Dropped** (no Markdown equivalent; hyperlink styling suppressed) |
-| Inline code | `` ` `` — via code-named character styles or monospace `rFonts` |
-| Code block | Fenced ``` — consecutive all-monospace paragraphs merge into one fence |
-| Quote styles | `> ` blockquote |
+| A strikethrough that wraps another delimiter | `<del>` — session-derived at M6. `word~~**x**~~` emits four literal tildes and no strikethrough: a `~~` in front of a `**` is followed by punctuation, so it may only open where the character before it is whitespace or punctuation too, and mid-sentence it is a letter. Two `~~` runs that meet fail as completely — `~~a~~~~b~~` is a run of four tildes, which GFM does not recognise at all. Raw HTML has no flanking rule |
+| Emphasis or a strikethrough whose content touches punctuation at the edge, hard against a word character outside | `<strong>` / `<em>` / `<del>` — session-derived at M6, and the same rule as the row above generalised. `word**(a)**after` loses its emphasis entirely. Two delimiter runs that meet are one run to a parser, so the test steps back over an adjacent run before looking at what precedes it. "Punctuation" is CommonMark's ASCII list plus the non-ASCII ranges a converted document actually holds, since row 36 keeps smart quotes, dashes and the ellipsis verbatim |
+| A code span, wherever it stands | `` ` `` always. A code span has no flanking rule of its own, so it never needs the fallback |
+| Inline code | `` ` `` — via code-named character styles or monospace `rFonts`. Code wins over bold and italic, and the bits are cleared in the **walker** so that two runs coming out as the same code span coalesce; left set, their backtick delimiters would meet and a renderer would read the pair as one span |
+| Code block | Fenced ``` — consecutive all-monospace paragraphs merge into one fence, whose length is one more than the longest backtick run inside it and never fewer than three. No info string: the language is not recoverable. An empty code paragraph is a blank line of the fence, and is trimmed only where it falls at either end of one |
+| Quote styles | `> ` blockquote — Quote, Intense Quote, Block Text and LibreOffice's Quotations, by name, never by indent. Two consecutive quote paragraphs are separated by a bare `>` rather than a blank line, so a quotation a producer broke in two stays one blockquote: session-derived at M6, and the one exception to the blank line between blocks |
 | Bullet / numbered lists | `-` / real computed numbers (`3.` honors start); nested by `ilvl` |
 | Tables | GFM pipe tables; header = first row (or `tblHeader`); cell breaks → `<br>`; merged → padded GFM cells (gridSpan: content in first cell + empty pads; vMerge continue: empty cell; HTML `<table>` under `--tables=html-on-merge`); nested → HTML `<table>` fallback |
 | Hyperlinks | `[text](url)` external, `[text](#anchor)` internal (GFM heading slugs) |
@@ -865,12 +922,13 @@ implementation session must respect:
 
 ## Planned architecture (`docs/`, `include/`, `tests/` and sixteen `src/` modules exist — build the rest by Roadmap)
 
-**Written so far (M2 + M3 + M4 + M5)**: `src/main.cpp`, `src/BuildGuards.h`, `src/CliOptions.h`/`.cpp`,
-`src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`, `src/ZipReader.h`/`.cpp`,
-`src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp`, `src/OpcPackage.h`/`.cpp`, `src/StyleModel.h`/`.cpp`,
-`src/Ir.h`/`.cpp`, `src/DocWalker.h`/`.cpp`, `src/MdEscape.h`/`.cpp`, `src/MdEmitter.h`/`.cpp` and
-`src/Convert.h`/`.cpp`, plus everything already in `docs/`, `include/` and `tests/`. Every other entry
-below is still to be written — do not reference one as if it exists.
+**Written so far (M2 + M3 + M4 + M5 + M6)**: `src/main.cpp`, `src/BuildGuards.h`,
+`src/CliOptions.h`/`.cpp`, `src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`,
+`src/ZipReader.h`/`.cpp`, `src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp`, `src/OpcPackage.h`/`.cpp`,
+`src/StyleModel.h`/`.cpp`, `src/Ir.h`/`.cpp`, `src/DocWalker.h`/`.cpp`, `src/RunCoalescer.h`/`.cpp`,
+`src/MdEscape.h`/`.cpp`, `src/MdEmitter.h`/`.cpp` and `src/Convert.h`/`.cpp`, plus everything already in
+`docs/`, `include/` and `tests/`. Every other entry below is still to be written — do not reference one
+as if it exists.
 
 Two entries below are **not** in the list `docs/CONVERSION_REFERENCE.md` 6.3 maps the stages onto, and
 both are session-derived rather than ruled. `Ir.cpp` exists because the representation needs growable
@@ -906,9 +964,13 @@ src/
                          [written at M5; the .cpp is a session addition, see above]
    DocWalker.h/.cpp      document walk → IR (tracked changes, sdt, AlternateContent) [written at M5];
                          the footnote walk and the field state machine arrive at M10
-   RunCoalescer.h/.cpp   effective-format resolution + adjacent-run merging + whitespace hoisting
+   RunCoalescer.h/.cpp   adjacent-run merging + whitespace hoisting  [written at M6]. The effective
+                         format is resolved one stage earlier, in DocWalker, which is where the run
+                         properties are — a divergence from CONVERSION_REFERENCE 6.2's [7]+[8], noted
+                         there and in the module's own header
    MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)  [written at M5]
-   MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing  [written at M5]
+   MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing  [written at M5;
+                         the delimiters, the block kinds and the flanking fallback at M6]
    Convert.h/.cpp        one file end to end: container → package → styles → walk → emit → write, and
                          D7b's output-path derivation. M13's Batch calls this per worker
                          [written at M5; a session addition, see above]
@@ -1006,7 +1068,7 @@ still accept only one input; what it must not do is assume there will only ever 
   a stored ZIP entry.
 - Three runners, with different jobs. `tests/run_container.py` (M3, extended at M4 and M5) runs the exe
   over every fixture and asserts the exit code and a substring of the message, and reads every *sound*
-  archive back with Python's `zipfile`; `tests/x64/Release/DOCXtoMD.Tests.exe` (M4, extended at M5) runs
+  archive back with Python's `zipfile`; `tests/x64/Release/DOCXtoMD.Tests.exe` (M4, extended at M5 and M6) runs
   the unit suite, which drives every case from a string literal and touches no file;
   `tests/run_golden.py` (M5) converts every golden fixture twice — once to a file beside the input and
   once through `--stdout`, which are different code paths in `Convert.cpp` — and byte-compares both
@@ -1015,7 +1077,8 @@ still accept only one input; what it must not do is assume there will only ever 
   and which built `.docx` compares against which case is declared in `make_fixtures.py`'s `GOLDENS`
   table, next to the exit-code table, so a fixture and what it must produce are named in one place. The
   mapping is many-to-one on purpose: fourteen container fixtures compare against `minimal/expected.md`,
-  which is how a byte comparison came to assert what M4 asserted with a message substring.
+  which is how a byte comparison came to assert what M4 asserted with a message substring. That is also
+  why one change to the emitter shows up fourteen times over in a golden run, as M6's `**bold**` did.
 - **Write an `expected.md` by hand, from the specification, before running the converter at it.** A
   golden generated from the implementation asserts only that the implementation is deterministic. All
   seven of M5's were derived by hand and all seven matched on the first run; when one does not, decide
@@ -1383,18 +1446,85 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     reproducing MSVC's fault, which is stricter, but it is not the same code. Two of the four defects
     M4's review fixed were reachable only on that path. All of it is now covered: both configurations
     build warning-free and every suite passes against the real binary.
-- **M6 `[todo]` Inline formatting** — `RunCoalescer` (merge + hoist), the remaining `MdEscape` callers,
-  bold/italic/strike/code/sup/sub. DoD: fragmented-run and trailing-space-in-bold fixtures pass.
-  M5 leaves three things waiting here by name: every span already carries its effective formatting, so
-  this is an extension rather than a rebuild; `MD_CONTEXT_HTML`, `MD_CONTEXT_CODE_SPAN` and the code
-  block have no caller yet; and escaping is per assembled line, which has to become per coalesced span
-  once there is markup between the spans. **That last one carries an obligation D12 added**: the dollar
-  count is only correct over a whole line, so a per-span count would read `costs $5` and `and $10` as
-  two runs of one dollar each and escape neither, silently restoring the corruption D12 was ruled to
-  fix. Count over the line and pass the verdict into each span's escape call.
-- **M7 `[todo]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs.
+- **M6 `[done-unverified]` Inline formatting** — `RunCoalescer` (merge + hoist), the remaining
+  `MdEscape` callers, bold/italic/strike/code/sup/sub. DoD: fragmented-run and trailing-space-in-bold
+  fixtures pass.
+  **Status**: the code landed from Linux on 2026-08-26. Every DoD command was run against the **shim**
+  build and passes; **none of them has been run under MSVC**, so the marker is `[done-unverified]` and
+  the next Windows session verifies rather than reimplements. The unrun commands are the five under
+  "Build & run": the two solution builds, `python tests\run_container.py`, `python tests\run_golden.py`
+  and `tests\x64\Release\DOCXtoMD.Tests.exe`.
+  - **The definition of done, and what discharges it**: `tests/fixtures/fragments` is the fragmented-run
+    case — mid-word splits across differing rsids, with a `w:proofErr`, a `bookmarkStart`/`End` pair and
+    an accepted `w:ins` between the halves, since 5.1 says merging must ignore all of them — and
+    `tests/fixtures/hoisting` is the trailing-space-in-bold case, with the leading-space, whitespace-only,
+    U+00A0 and tab variants beside it. Both convert byte-exact, and **every one of the six new
+    `expected.md` files was written by hand from the specification before the converter was run at it**;
+    all six matched on the first run.
+  - **What the milestone took beyond its own line, and why each.** The three escaping contexts M5 left
+    caller-less are named in its own roadmap entry, and giving `MD_CONTEXT_CODE_BLOCK` a caller means a
+    fenced block, which means mapping row 12; row 13's blockquote is `MdEmitter`'s To Do 2 and row 25's
+    horizontal rule is `DocWalker`'s To Do 3, which `DocWalker.h` says "the To Do names it so the
+    milestone cannot close without it". What is **not** taken early: no link, image, list or table, and
+    `MD_CONTEXT_TABLE_CELL` and the two link contexts still have no caller, because M7 and M9 own them.
+  - **Verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII only,
+    CRLF and ≤150 columns on all thirty-two `src/` files and all twelve `tests/unit/` ones;
+    `clang-format --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs
+    well-formed XML, mutually byte-identical in their `Include=` paths and every listed file on disk.
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1000**
+    checks, `tests/run_golden.py` all **61** and `tests/run_container.py` all **113**, every one of them
+    under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no diagnostic.
+  - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`,
+    M4 from expat and M5 from `markdown-it-py`'s plain text. M6's claim is about *markup* rather than
+    text, so the oracle compares the rendered inline structure: 4,000 generated documents over eight
+    seeds were converted, re-parsed with `markdown-it-py` in CommonMark mode with the strikethrough
+    extension, and the sequence of (text, formatting) spans it produces compared against an independent
+    Python model of merge, hoist and delimiter emission. All 4,000 agree. Separately, all **960**
+    ordered pairs of formatting combinations, with and without a word character on either side, round
+    trip exactly. Both harnesses are scratch and **the commit does not carry them**; what it carries is
+    the fixtures they motivated.
+  - **What that oracle found, none of it reachable from the fixtures or the unit suite as they stood.**
+    A **strikethrough that wraps another delimiter vanishes**: `word~~**x**~~` emits four literal tildes,
+    because a `~~` in front of a `**` is followed by punctuation and so may only open where the
+    character before it is whitespace or punctuation, and mid-sentence it is a letter; two `~~` runs
+    that meet fail as completely, since `~~a~~~~b~~` is a run of four tildes GFM does not recognise.
+    **Emphasis vanishes against punctuation** for the same reason — `word**(a)**after` — and so does
+    `***T*****=eq=**`, where two delimiter runs meet and a parser reads the five asterisks as one run
+    whose neighbour is the letter before them. And **two adjacent runs that render as the same code
+    span did not merge**, because code drops bold and italic only at emission, so their two backtick
+    delimiters met and a renderer read the pair as one span with backticks in it. The first two are
+    fixed by falling back to `<del>`, `<strong>` and `<em>` exactly where a Markdown delimiter cannot
+    parse where it stands; the third by clearing the bits in the walker, where the complex-script twins
+    are already folded for the same reason. All three are pinned by `tests/fixtures/inline` now.
+  - **The fallback is session-derived, not ruled**, and it is the one place M6 writes markup the mapping
+    table does not name. It is recorded as three rows in that table rather than as a decision because
+    the alternative is not a policy but a defect: the delimiter it replaces does not render at all.
+    An owner who wants it spelled differently — always HTML for strike, say, or never — should say so.
+  - **One residual, measured rather than assumed**: the punctuation test uses CommonMark's ASCII list
+    plus a table of the non-ASCII ranges a converted document actually holds, since mapping row 36 keeps
+    smart quotes, dashes and the ellipsis verbatim. It is deliberately generous — calling a letter
+    punctuation costs one HTML element where a delimiter would have done, while the reverse emits a
+    delimiter that does not parse — but it is a table and not the Unicode categories, so a code point
+    outside it standing at the very edge of a formatted span is still a delimiter that may not parse.
+    Ellipsis, em dash, both smart quote pairs, guillemets, the bullet and CJK punctuation are covered
+    and checked; accented letters and CJK ideographs correctly keep the Markdown spelling.
+  - **What a Linux session could not reach**: `/W3` and its zero-warnings requirement, `/sdl`,
+    `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the structures this commit
+    touches behaves — the shim asserts the alignment `mzero`'s 256-bit path needs rather than faulting
+    the way MSVC would, which is stricter but is not the same code. `RunCoalescer` adds no `al32`
+    structure of its own, which is the one thing that would have made that risk new.
+- **M7 `[todo]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs. M6 leaves
+  three things waiting here by name: `MD_CONTEXT_LINK_TEXT`, `MD_CONTEXT_LINK_DEST` and
+  `MD_CONTEXT_ALT_TEXT` still have no caller and are still provisional; `RunCoalescer` merges across a
+  `w:hyperlink` boundary, which 5.1 says it must not once the brackets exist; and `MdEdgeAhead` reads
+  the next span's own first byte, which is right while every neighbour is text and needs re-reading once
+  a `[` can stand between two spans.
 - **M8 `[todo]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne numPr).
 - **M9 `[todo]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.
+  `MD_CONTEXT_TABLE_CELL` is the last escaping context with no caller, and it is still provisional. Two
+  things M6 built assume no paragraph nests inside another and have to be revisited here: `DocWalker`'s
+  paragraph classification is saved and restored around a paragraph but nothing yet exercises that, and
+  `RunCoalescer` rewrites one flat span array that a cell's own blocks would have to fit into.
 - **M10 `[todo]` Fields, notes, tracked changes** — field state machine, footnotes/endnotes, sdt,
   accept-all revisions.
 - **M11 `[todo]` Hostile-input hardening** — bombs, traversal, XXE, producer-variance fixtures

@@ -48,6 +48,9 @@
     <ClCompile Include="src\OpcPackage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\RunCoalescer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\StyleModel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -111,6 +114,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\OpcPackage.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\RunCoalescer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\StyleModel.h">

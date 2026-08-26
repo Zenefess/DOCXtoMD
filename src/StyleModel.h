@@ -3,11 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-26
  * Description: styles.xml as a resolved-property cache: basedOn chains, toggle parity and style roles.
- * To Do: 1) Add the monospace rFonts set and the code and quote roles when M6 detects inline code.
+ * To Do: 1) Resolve w:asciiTheme through theme1.xml, which today leaves the monospace verdict unspecified.
  *        2) Carry w:numPr from a style's pPr when M8 gives numbering a home to be read into.
  *        3) Resolve w:link pairing once a character style has to be found from its paragraph twin.
+ *        4) Read w:shd as the second code hint CONVERSION_REFERENCE 2.3 names, once a fixture shows one.
  * Dependencies: Diag.h, OpcPackage.h, XmlPull.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -93,15 +94,19 @@ enum STYLE_VERT_ALIGN : si8 {
 /// Constant form of STYLE_VERT_ALIGN, spelled per GCS r2.
 typedef const STYLE_VERT_ALIGN cSTYLE_VERT_ALIGN;
 
-/// What a style contributes to a paragraph's shape. Roles are read from the normalized style name and the
-/// normalized style id, and the nearest specification along the basedOn chain wins.
-/// @note M6 adds the quote and code roles; declaring them here before anything acts on them would be an
-///       enumerator no code reads, which is worse than adding one later.
+/// What a style contributes to a paragraph's or a run's shape. Roles are read from the normalized style
+/// name and the normalized style id, and the nearest specification along the basedOn chain wins.
+/// @note The role a name carries depends on what kind of style declares it, which is why StyleRoleOfName
+///       takes a STYLE_TYPE. "Source Text" is LibreOffice's *character* style for inline code
+///       (CONVERSION_REFERENCE row 11) and an ordinary paragraph style name otherwise, and
+///       tests/fixtures/headings carries a paragraph style called exactly that to prove it stays one.
 enum STYLE_ROLE : si8 {
    STYLE_ROLE_NORMAL = 0, ///< Nothing special; a body paragraph
    STYLE_ROLE_HEADING,    ///< A heading, whose level is carried beside the role
    STYLE_ROLE_TITLE,      ///< The Title style
    STYLE_ROLE_SUBTITLE,   ///< The Subtitle style
+   STYLE_ROLE_QUOTE,      ///< A blockquote paragraph style
+   STYLE_ROLE_CODE,       ///< Code: a fenced block as a paragraph style, a code span as a character style
    STYLE_ROLE_COUNT       ///< Number of values above; not a role
 };
 
@@ -123,10 +128,16 @@ typedef const STYLE_TYPE cSTYLE_TYPE;
 //== Resolved views
 
 /// The run properties in force on one run, after every layer has been applied.
+/// @note monospace and codeStyle are kept apart although a code span is emitted for either, because
+///       CONVERSION_REFERENCE row 12's code-block heuristic is stated over the font alone: a paragraph
+///       whose every run is *monospace* is a fenced block, while a paragraph of runs carrying an inline
+///       code character style is an ordinary paragraph holding code spans.
 struct STYLE_RUN_PROPS {
    ui16             toggles;      ///< One bit per STYLE_TOGGLE: the effective on or off value
    bool             doubleStrike; ///< w:dstrike, nearest specification wins
    bool             webHidden;    ///< w:webHidden, nearest specification wins
+   bool             monospace;    ///< w:rFonts/@ascii names a monospace family, nearest specification wins
+   bool             codeStyle;    ///< The run's character style chain carries STYLE_ROLE_CODE
    STYLE_VERT_ALIGN vertAlign;    ///< w:vertAlign, nearest specification wins; never STYLE_VERT_UNSET here
 };
 
@@ -153,6 +164,7 @@ struct STYLE_DIRECT_RUN {
    si32             characterStyle;  ///< Index of the w:rStyle style, or -1 when there is none
    si8              doubleStrike;    ///< -1 unspecified, 0 specified false, 1 specified true
    si8              webHidden;       ///< -1 unspecified, 0 specified false, 1 specified true
+   si8              monospace;       ///< -1 unspecified, 0 specified false, 1 specified true
    STYLE_VERT_ALIGN vertAlign;       ///< STYLE_VERT_UNSET when the run does not specify it
 };
 
@@ -178,6 +190,7 @@ struct STYLE_RECORD {
    ui8              headingLevel; ///< 1 to 9 as the name said, before clamping; 0 when the role is not heading
    si8              doubleStrike; ///< -1 unspecified, 0 specified false, 1 specified true
    si8              webHidden;    ///< -1 unspecified, 0 specified false, 1 specified true
+   si8              monospace;    ///< -1 unspecified, 0 specified false, 1 specified true
    STYLE_TYPE       type;         ///< What w:type said
    STYLE_VERT_ALIGN vertAlign;    ///< w:vertAlign, or STYLE_VERT_UNSET
    bool             isDefault;    ///< Whether w:default was true
@@ -191,6 +204,7 @@ struct STYLE_RESOLVED {
    ui8              headingLevel; ///< Its heading level, before clamping
    si8              doubleStrike; ///< The nearest w:dstrike along the chain, or -1
    si8              webHidden;    ///< The nearest w:webHidden along the chain, or -1
+   si8              monospace;    ///< The nearest w:rFonts monospace verdict along the chain, or -1
    STYLE_VERT_ALIGN vertAlign;    ///< The nearest w:vertAlign along the chain, or STYLE_VERT_UNSET
 };
 
@@ -201,6 +215,7 @@ struct STYLE_DEFAULTS {
    si32             outlineLvl;   ///< w:pPrDefault/w:outlineLvl, or -1
    si8              doubleStrike; ///< -1 unspecified, 0 specified false, 1 specified true
    si8              webHidden;    ///< -1 unspecified, 0 specified false, 1 specified true
+   si8              monospace;    ///< -1 unspecified, 0 specified false, 1 specified true
    STYLE_VERT_ALIGN vertAlign;    ///< w:vertAlign, or STYLE_VERT_UNSET
 };
 
@@ -332,6 +347,9 @@ cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cS
 ///       every child of a property bag on one code path whether or not this module recognised it.
 /// @note w:rStyle is deliberately not handled here: resolving it needs the model, and the caller has one
 ///       while this function is meant to work over a bare reader.
+/// @note w:rFonts is read for its w:ascii attribute alone, which is the one CONVERSION_REFERENCE row 11
+///       names. A w:rFonts carrying only w:asciiTheme leaves the verdict unspecified rather than false:
+///       the theme part is not loaded, and a specified false would override an inherited monospace.
 void StyleReadDirectProperty(XML_READERptrc reader, STYLE_DIRECT_RUNptrc direct);
 
 /// Clears a direct run-property record to "nothing specified".
@@ -357,10 +375,20 @@ cui64 StyleNormalizeName(cchptr text, cui64 byteCount, chptrc dest, cui64 destBy
 
 /// The role a normalized style name or identifier names.
 /// @param normalized  A normalized name, NUL-terminated.
+/// @param type        What kind of style declares it, which is what decides whose table is consulted.
 /// @param level       Receives the heading level 1 to 9 when the role is a heading, otherwise 0.
 /// @return The role, or STYLE_ROLE_NORMAL when the name names none.
 /// @note Both spellings are matched: "heading 1" as w:name writes it and "heading1" as a styleId does.
-cSTYLE_ROLE StyleRoleOfName(cchptr normalized, ui8ptrc level);
+/// @note A character style takes only the inline-code names of CONVERSION_REFERENCE row 11; every other
+///       role belongs to a paragraph style. The two tables overlap on "code", which is why the type and
+///       not the name settles which of the two a style called that is.
+cSTYLE_ROLE StyleRoleOfName(cchptr normalized, cSTYLE_TYPE type, ui8ptrc level);
+
+/// Whether a font family is one of the monospace families inline code is detected by.
+/// @param normalized  A font name put through StyleNormalizeName, NUL-terminated.
+/// @return true when it is in CONVERSION_REFERENCE row 11's monospace set.
+/// @note Exposed so the table can be pinned by a test rather than only through a whole styles part.
+cbool StyleFontIsMonospace(cchptr normalized);
 
 /// The user-facing sentence for a result, ready to hand to DiagErrorText.
 /// @param package  The package the part came from; a null pointer still yields a usable sentence.

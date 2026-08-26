@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-26
  * Description: Unit tests for the body walk: wrappers, run content, and the formatting bits on a span.
  * To Do: 1) Add table and hyperlink cases as M7 and M9 give the walker something to build from them.
  *        2) Drive the field state machine's traces once M10 replaces today's skip-it-whole handling.
@@ -22,6 +22,17 @@
 #include "StyleModel.h"
 
 //-- Helpers
+
+// The three style parts the cases below reach for, named rather than repeated: a quote style, a
+// code paragraph style and a code character style, each the shortest form that carries its role.
+static constexpr cchptr STYLE_QUOTE = "<w:style w:type=\"paragraph\" w:styleId=\"Q\"><w:name w:val=\"Quote\"/></w:style>";
+static constexpr cchptr STYLE_CODE  = "<w:style w:type=\"paragraph\" w:styleId=\"SC\"><w:name w:val=\"Source Code\"/></w:style>";
+static constexpr cchptr STYLE_SPAN  = "<w:style w:type=\"character\" w:styleId=\"CC\"><w:name w:val=\"Code\"/></w:style>";
+
+// A heading style based on the quote style, for the case that has to show which of the two wins. Named
+// in halves so no line reaches the column limit once the formatter has joined what it can.
+static constexpr cchptr STYLE_QH_BASE = "<w:style w:type=\"paragraph\" w:styleId=\"QH\">"; // The opening tag
+static constexpr cchptr STYLE_QH_BODY = "<w:name w:val=\"heading 3\"/><w:basedOn w:val=\"Q\"/></w:style>";
 
 // The root element every body below is wrapped in, with the two namespaces the cases need bound on it.
 static constexpr cchptr WALK_HEAD = "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
@@ -47,7 +58,8 @@ static void WalkAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr text)
 // Renders the whole intermediate representation into one compact trace, so a case is one string
 // comparison rather than ten assertions. A heading is H<level>{...} and a paragraph is P{...}; inside
 // a block, [text] is a text span, | is a hard break, and the letters before a bracket are its
-// formatting: b bold, i italic, s strike, ^ superscript and v subscript.
+// formatting: b bold, i italic, s strike, ^ superscript, v subscript and c code. The other block
+// letters are Q for a blockquote, C for a line of a fenced block and R for a horizontal rule.
 static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
    ui64 used = 0;
 
@@ -56,16 +68,17 @@ static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
       cIR_BLOCKptr block = IrBlockAt(document, index);
       char         head[8];
 
+      ui64 at = 0;
+
       if(block->kind == IR_BLOCK_HEADING) {
-         head[0] = 'H';
-         head[1] = char('0' + block->headingLevel);
-         head[2] = '{';
-         head[3] = 0;
-      } else {
-         head[0] = 'P';
-         head[1] = '{';
-         head[2] = 0;
-      }
+         head[at++] = 'H';
+         head[at++] = char('0' + block->headingLevel);
+      } else if(block->kind == IR_BLOCK_QUOTE) head[at++] = 'Q';
+      else if(block->kind == IR_BLOCK_CODE) head[at++] = 'C';
+      else if(block->kind == IR_BLOCK_RULE) head[at++] = 'R';
+      else head[at++] = 'P';
+      head[at++] = '{';
+      head[at]   = 0;
       WalkAppend(dest, destBytes, &used, head);
       for(ui32 at = 0; at < block->spanCount; ++at) {
          cIR_SPANptr span = IrSpanAt(document, block->spanAt + at);
@@ -79,6 +92,7 @@ static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
          if(span->fmt & IR_FMT_STRIKE) WalkAppend(dest, destBytes, &used, "s");
          if(span->fmt & IR_FMT_SUPER) WalkAppend(dest, destBytes, &used, "^");
          if(span->fmt & IR_FMT_SUB) WalkAppend(dest, destBytes, &used, "v");
+         if(span->fmt & IR_FMT_CODE) WalkAppend(dest, destBytes, &used, "c");
          WalkAppend(dest, destBytes, &used, "[");
          for(ui32 byte = 0; byte < span->textBytes && used + 1u < destBytes; ++byte) {
             dest[used++] = IrText(document, span->textAt)[byte];
@@ -420,4 +434,71 @@ void TestDocWalker(void) {
    while(said[at] && said[at] == want[at]) ++at;
    CHECK(said[at] == want[at]);
    CHECK(DocWalkResultText(nullptr, none)[0] != 0);
+
+   CheckGroup("DocWalker: the block kinds it classifies");
+   // The walker never merges: the fragmentation is what RunCoalescer is measured against, so preserving
+   // it here is the property, not an omission.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hel</w:t></w:r>"
+                  "<w:r><w:rPr><w:b/></w:rPr><w:t>lo</w:t></w:r></w:p>",
+                  "P{b[Hel]b[lo]}"));
+   // A quote style and a code style each give their own block kind, and a heading beats both.
+   CHECK(TracedAs(STYLE_QUOTE, "<w:p><w:pPr><w:pStyle w:val=\"Q\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "Q{[a]}"));
+   CHECK(TracedAs(STYLE_CODE, "<w:p><w:pPr><w:pStyle w:val=\"SC\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "C{[a]}"));
+   {
+      char styled[512];
+      ui64 used = 0;
+
+      styled[0] = 0;
+      WalkAppend(styled, sizeof(styled), &used, STYLE_QUOTE);
+      WalkAppend(styled, sizeof(styled), &used, STYLE_QH_BASE);
+      WalkAppend(styled, sizeof(styled), &used, STYLE_QH_BODY);
+      CHECK(TracedAs(styled, "<w:p><w:pPr><w:pStyle w:val=\"QH\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "H3{[a]}"));
+   }
+   // A style-borne role does not let a w:outlineLvl on the paragraph turn a quotation into a heading.
+   CHECK(TracedAs(STYLE_QUOTE, "<w:p><w:pPr><w:pStyle w:val=\"Q\"/><w:outlineLvl w:val=\"0\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "Q{[a]}"));
+   // Row 12's second detection is over the font alone, so one run that is not monospace settles it.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a</w:t></w:r>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Menlo\"/></w:rPr><w:t>b</w:t></w:r></w:p>",
+                  "C{c[a]c[b]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a</w:t></w:r>"
+                  "<w:r><w:t>b</w:t></w:r></w:p>",
+                  "P{c[a][b]}"));
+   // A run that produces no text votes on nothing, so a w:br between two monospace runs is still code.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a</w:t>"
+                  "<w:br/><w:t>b</w:t></w:r></w:p>",
+                  "C{c[a]|c[b]}"));
+   // A paragraph with nothing in it is not a code block by the font heuristic: there is no run to look at.
+   CHECK(TracedAs(nullptr, "<w:p/>", ""));
+   // But an empty paragraph wearing a code *style* is a blank line of the fence, so it keeps its block.
+   CHECK(TracedAs(STYLE_CODE, "<w:p><w:pPr><w:pStyle w:val=\"SC\"/></w:pPr></w:p>", "C{}"));
+
+   CheckGroup("DocWalker: the horizontal rule of mapping row 25");
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>", "R{}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:between w:val=\"single\"/></w:pBdr></w:pPr></w:p>", "R{}"));
+   // A border element with no w:val at all is taken as present: its presence is the signal.
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:bottom/></w:pBdr></w:pPr></w:p>", "R{}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"none\"/></w:pBdr></w:pPr></w:p>", ""));
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"nil\"/></w:pBdr></w:pPr></w:p>", ""));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:pPr><w:pBdr><w:top w:val=\"single\"/><w:bottom w:val=\"single\"/>"
+                  "</w:pBdr></w:pPr></w:p>",
+                  ""));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr>"
+                  "<w:r><w:t>a</w:t></w:r></w:p>",
+                  "P{[a]}"));
+   // A paragraph that came to nothing is one whether it held no runs or only whitespace.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr>"
+                  "<w:r><w:t xml:space=\"preserve\">  </w:t></w:r></w:p>",
+                  "R{}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:t>a</w:t></w:r></w:p>"
+                  "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>"
+                  "<w:p><w:r><w:t>b</w:t></w:r></w:p>",
+                  "P{[a]}R{}P{[b]}"));
 }

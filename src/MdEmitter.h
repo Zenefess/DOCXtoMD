@@ -3,10 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
- * Description: The Markdown emitter: one growable UTF-8 buffer, blank-line discipline and line assembly.
- * To Do: 1) Emit the inline delimiters at M6, once RunCoalescer has merged spans and hoisted whitespace.
- *        2) Distribute a blockquote prefix across every line of a quoted block when M6 detects one.
+ * Last Modified: 2026-08-26
+ * Description: The Markdown emitter: one growable UTF-8 buffer, line assembly and the delimiter rules.
+ * To Do: 1) Emit the link, image and table-cell contexts at M7 and M9, which have no caller yet.
+ *        2) Keep a per-line prefix stack when list items nest at M8 and a quote comes to hold one.
  *        3) Size the buffer from the part's byte count rather than growing from a fixed first block.
  * Dependencies: CliOptions.h, Ir.h, MdEscape.h, typedefs.h
  * ISA: Scalar
@@ -39,7 +39,7 @@ typedef const MD_RESULT cMD_RESULT;
 /// it (D6), so nothing here takes a lock.
 struct al32 MD_EMITTER {
    chptr      out;          ///< The UTF-8 output, unterminated
-   chptr      line;         ///< The line being assembled, unescaped and unterminated
+   chptr      line;         ///< The line being assembled, already escaped and unterminated
    ui64       capacity;     ///< Bytes allocated at out
    ui64       lineCapacity; ///< Bytes allocated at line
    ui64       used;         ///< Bytes written to out
@@ -78,11 +78,22 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       project's source files and not the documents it writes. A caller must open its output file in
 ///       binary mode, or the C runtime will turn every LF into a CRLF on Windows.
 /// @note Blocks are separated by exactly one blank line and every block ends with one newline, so a
-///       document of two paragraphs is "a\n\nb\n" and an empty document is zero bytes.
-/// @note A line is assembled raw and escaped in one piece, not span by span. The ampersand rule looks
-///       ahead for an entity pattern, and Word fragments a run wherever a revision or spellcheck
-///       boundary falls, so escaping per span would make the output depend on where the producer
-///       happened to split its runs.
+///       document of two paragraphs is "a\n\nb\n" and an empty document is zero bytes. One separator is
+///       not blank: between two consecutive blockquote blocks it is a bare ">", which keeps a quotation
+///       a producer broke into several paragraphs inside one blockquote instead of opening a new one.
+/// @note A line is assembled span by span in its *output* form -- delimiters and escaped text together
+///       -- rather than raw and escaped in one piece, because since M6 there is markup between the
+///       spans and escaping the assembled line would escape that markup too. The two rules that depend
+///       on seeing more than one span are handled by looking wider rather than by escaping later: the
+///       ampersand lookahead is safe within a span because RunCoalescer has already merged every
+///       adjacent pair with equal formatting, so a split entity can only be separated by markup that
+///       stops it being one; and D12's dollar count is taken over the whole line and passed into each
+///       span's escape call, which is what MdEscapeWrite's dollars argument is for.
+/// @note What each block kind emits: a paragraph is its lines; a heading is one ATX line, its hashes
+///       written before the content and a break inside it folded to one space; a blockquote is its
+///       lines with "> " in front of each; a horizontal rule is "---"; and a run of consecutive code
+///       blocks is one fenced block, its fence longer than the longest backtick run inside it and its
+///       content passed through MD_CONTEXT_CODE_BLOCK, where nothing is escaped.
 /// @note Each emitted line has its leading and trailing ASCII spaces and tabs removed, and then one
 ///       backslash inserted if what is left would start a list, a quote, a heading, a setext underline
 ///       or a thematic break. Four leading spaces would otherwise be an indented code block, and a
@@ -91,9 +102,14 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       one: a Markdown line that is empty ends the paragraph, so neither spelling of a hard break can
 ///       carry an empty continuation line. Inside a heading a break becomes one space, because an ATX
 ///       heading is a single line by construction.
-/// @note No inline delimiter is emitted at M5. Wrapping a span in delimiters is only safe once adjacent
-///       runs with equal formatting have been merged and whitespace hoisted out of the span, and both
-///       of those are M6's RunCoalescer.
+/// @note Delimiters nest in one fixed order, outermost first: "<sup>" or "<sub>", then "~~", then the
+///       emphasis, then a code span's backticks. Bold and italic together are "***" (mapping row 5), and
+///       a code span drops bold and italic (row 11's own ruling on that collision) while keeping the
+///       strikethrough and the vertical alignment, which wrap it perfectly well.
+/// @note The document handed here must have been through RunCoalesce. Wrapping a span in delimiters is
+///       only safe once adjacent runs with equal formatting have been merged and whitespace hoisted out
+///       of the span -- "**Hel****lo**" and "**bold **text" are what the two omissions produce -- and
+///       this module assumes both, so it emits a delimiter pair around any formatted span it is given.
 cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document);
 
 /// The emitted bytes.

@@ -3,10 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
- * Description: Style part parsing, basedOn folding, role detection and the toggle-XOR resolution.
+ * Last Modified: 2026-08-26
+ * Description: Style part parsing, basedOn folding, role and font detection, and toggle-XOR resolution.
  * To Do: 1) Fold w:link so a character style can be reached from the paragraph style it pairs with.
- *        2) Keep the rFonts ascii name when M6 needs it to spot a monospace run.
+ *        2) Match a font family ending in "mono" as monospace, once a corpus says the fixed table misses.
  *        3) Grow the walker's one-entry style cache if a document is found alternating between many.
  * Dependencies: BuildGuards.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h, memory management.h,
  *               windows.h
@@ -53,6 +53,57 @@ static constexpr STYLE_TOGGLE_ROW STYLE_TOGGLE_NAMES[] = {
 
 static_assert(sizeof(STYLE_TOGGLE_NAMES) / sizeof(STYLE_TOGGLE_NAMES[0]) == ui64(STYLE_TOGGLE_COUNT),
               "StyleModel: the toggle name table and the STYLE_TOGGLE enumeration have drifted apart.");
+
+// The normalized names that make a paragraph style a blockquote (CONVERSION_REFERENCE row 13) and the
+// ones that make it a fenced code block (row 12). Row 13's w:ind >= 720 twips heuristic is deliberately
+// not implemented: the reference itself has it off by default, because an indent is ambiguous.
+static constexpr cchptr STYLE_QUOTE_NAMES[] = {
+    "quote",         // Word's built-in Quote
+    "intense quote", // Word's built-in Intense Quote
+    "block text",    // Word's built-in Block Text
+    "quotations"     // LibreOffice's own name for the same thing
+};
+
+static constexpr cchptr STYLE_CODE_BLOCK_NAMES[] = {
+    "html preformatted", // Word's built-in, and what a paste from a browser lands in
+    "preformatted text", // LibreOffice
+    "source code",       // Pandoc
+    "code"               // The bare name, which a hand-made template usually spells
+};
+
+// The normalized names that make a *character* style an inline code span (row 11 (a)). "code" is in both
+// tables on purpose: the same word names a block when a paragraph style carries it and a span when a
+// character style does, which is why StyleRoleOfName is told the type.
+static constexpr cchptr STYLE_CODE_SPAN_NAMES[] = {
+    "code",          // The bare name
+    "html code",     // Word's built-in HTML Code
+    "verbatim char", // Pandoc
+    "source text",   // LibreOffice
+    "macro text"     // LibreOffice's other monospace character style
+};
+
+// The monospace families of CONVERSION_REFERENCE row 11, normalized. A run whose effective w:rFonts
+// w:ascii names one of these is code even with no style saying so, which is how a hand-formatted
+// snippet in an ordinary paragraph is recognised.
+static constexpr cchptr STYLE_MONOSPACE_FONTS[] = {
+    "consolas",         // Microsoft
+    "courier",          // The original
+    "courier new",      // Word's default monospace
+    "cascadia code",    // Microsoft, ligatures
+    "cascadia mono",    // Microsoft, no ligatures
+    "lucida console",   // Microsoft
+    "menlo",            // Apple
+    "monaco",           // Apple
+    "dejavu sans mono", // Free desktops
+    "liberation mono",  // Red Hat's metric-compatible Courier New
+    "fira code",        // Mozilla, ligatures
+    "fira mono",        // Mozilla, no ligatures
+    "jetbrains mono",   // JetBrains
+    "source code pro",  // Adobe
+    "roboto mono",      // Google
+    "ubuntu mono",      // Canonical
+    "ibm plex mono"     // IBM
+};
 
 // One sentence per STYLE_RESULT, in enumeration order.
 static constexpr cchptr STYLE_RESULT_TEXT[] = {
@@ -168,10 +219,37 @@ cui64 StyleNormalizeName(cchptr text, cui64 byteCount, chptrc dest, cui64 destBy
    return used;
 }
 
-cSTYLE_ROLE StyleRoleOfName(cchptr normalized, ui8ptrc level) {
+// Whether a normalized name appears in one of the tables above.
+static cbool StyleNameInTable(cchptr normalized, cchptr const *table, cui64 rows) {
+   for(ui64 index = 0; index < rows; ++index) {
+      if(StyleTextEqual(normalized, table[index])) return true;
+   }
+   return false;
+}
+
+cbool StyleFontIsMonospace(cchptr normalized) {
+   cui64 rows = sizeof(STYLE_MONOSPACE_FONTS) / sizeof(STYLE_MONOSPACE_FONTS[0]);
+
+   return StyleNameInTable(normalized, STYLE_MONOSPACE_FONTS, rows);
+}
+
+cSTYLE_ROLE StyleRoleOfName(cchptr normalized, cSTYLE_TYPE type, ui8ptrc level) {
    *level = 0;
+   // A character style names one role and no other: the inline code of row 11. Letting it name a heading
+   // would make Word's own "Heading 1 Char" linked style into a heading wherever a run referenced it.
+   if(type == STYLE_TYPE_CHARACTER) {
+      cui64 rows = sizeof(STYLE_CODE_SPAN_NAMES) / sizeof(STYLE_CODE_SPAN_NAMES[0]);
+
+      return (StyleNameInTable(normalized, STYLE_CODE_SPAN_NAMES, rows) ? STYLE_ROLE_CODE : STYLE_ROLE_NORMAL);
+   }
    if(StyleTextEqual(normalized, "title")) return STYLE_ROLE_TITLE;
    if(StyleTextEqual(normalized, "subtitle")) return STYLE_ROLE_SUBTITLE;
+
+   cui64 quotes = sizeof(STYLE_QUOTE_NAMES) / sizeof(STYLE_QUOTE_NAMES[0]);
+   cui64 blocks = sizeof(STYLE_CODE_BLOCK_NAMES) / sizeof(STYLE_CODE_BLOCK_NAMES[0]);
+
+   if(StyleNameInTable(normalized, STYLE_QUOTE_NAMES, quotes)) return STYLE_ROLE_QUOTE;
+   if(StyleNameInTable(normalized, STYLE_CODE_BLOCK_NAMES, blocks)) return STYLE_ROLE_CODE;
 
    cui64  length  = StyleLength(normalized);
    cchptr heading = "heading";
@@ -204,6 +282,7 @@ void StyleClearDirect(STYLE_DIRECT_RUNptrc direct) {
    direct->characterStyle  = -1;
    direct->doubleStrike    = -1;
    direct->webHidden       = -1;
+   direct->monospace       = -1;
    direct->vertAlign       = STYLE_VERT_UNSET;
 }
 
@@ -242,6 +321,20 @@ void StyleReadDirectProperty(XML_READERptrc reader, STYLE_DIRECT_RUNptrc direct)
    }
    if(XmlIsElement(reader, XML_NS_W, "webHidden")) {
       direct->webHidden = si8(StyleOnOff(XmlAttribute(reader, XML_NS_W, "val")) ? 1 : 0);
+      return;
+   }
+   if(XmlIsElement(reader, XML_NS_W, "rFonts")) {
+      cXML_TEXT ascii = XmlAttribute(reader, XML_NS_W, "ascii");
+
+      // A w:rFonts with no w:ascii says nothing this reader can use -- w:asciiTheme names a theme slot
+      // and theme1.xml is not loaded -- so it stays unspecified. A specified false would be worse than
+      // silence: it would cancel a monospace font an outer layer had already established.
+      if(ascii.bytes) {
+         char font[STYLE_MAX_NAME_BYTES];
+
+         StyleNormalizeName(ascii.bytes, ascii.length, font, sizeof(font));
+         direct->monospace = si8(StyleFontIsMonospace(font) ? 1 : 0);
+      }
       return;
    }
    if(XmlIsElement(reader, XML_NS_W, "vertAlign")) {
@@ -381,9 +474,9 @@ static cbool StyleReadStyle(STYLE_MODELptrc model, XML_READERptrc reader, boolpt
 
    // The name is the portable key -- a localized Word writes an English w:name over a localized styleId --
    // but a producer that omits w:name leaves only the identifier, so both are tried.
-   STYLE_ROLE role = StyleRoleOfName(key, &level);
+   STYLE_ROLE role = StyleRoleOfName(key, type, &level);
 
-   if(role == STYLE_ROLE_NORMAL) role = StyleRoleOfName(identifier, &level);
+   if(role == STYLE_ROLE_NORMAL) role = StyleRoleOfName(identifier, type, &level);
    if(!StyleHeapAdd(model, key, StyleLength(key), &nameAt)) return false;
    if(!StyleReserve((ptrptrc)&model->styles, &model->styleCapacity, ui64(model->styleCount) + 1u, sizeof(STYLE_RECORD))) return false;
 
@@ -399,6 +492,7 @@ static cbool StyleReadStyle(STYLE_MODELptrc model, XML_READERptrc reader, boolpt
    record->headingLevel = level;
    record->doubleStrike = runs.run.doubleStrike;
    record->webHidden    = runs.run.webHidden;
+   record->monospace    = runs.run.monospace;
    record->type         = type;
    record->vertAlign    = runs.run.vertAlign;
    record->isDefault    = marked;
@@ -453,6 +547,7 @@ static cbool StyleReadDefaults(STYLE_MODELptrc model, XML_READERptrc reader) {
    model->defaults.outlineLvl   = marks.outlineLvl;
    model->defaults.doubleStrike = runs.run.doubleStrike;
    model->defaults.webHidden    = runs.run.webHidden;
+   model->defaults.monospace    = runs.run.monospace;
    model->defaults.vertAlign    = runs.run.vertAlign;
    return true;
 }
@@ -538,6 +633,7 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
    resolved->headingLevel = 0;
    resolved->doubleStrike = -1;
    resolved->webHidden    = -1;
+   resolved->monospace    = -1;
    resolved->vertAlign    = STYLE_VERT_UNSET;
    for(ui32 step = length; step > 0; --step) {
       cSTYLE_RECORDptr record = model->styles + chain[step - 1u];
@@ -546,6 +642,7 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
       if(record->outlineLvl >= 0) resolved->outlineLvl = record->outlineLvl;
       if(record->doubleStrike >= 0) resolved->doubleStrike = record->doubleStrike;
       if(record->webHidden >= 0) resolved->webHidden = record->webHidden;
+      if(record->monospace >= 0) resolved->monospace = record->monospace;
       if(record->vertAlign != STYLE_VERT_UNSET) resolved->vertAlign = record->vertAlign;
       if(record->role != STYLE_ROLE_NORMAL) {
          resolved->role         = record->role;
@@ -561,6 +658,7 @@ void StyleOpen(STYLE_MODELptrc model) {
    model->defaults.outlineLvl   = -1;
    model->defaults.doubleStrike = -1;
    model->defaults.webHidden    = -1;
+   model->defaults.monospace    = -1;
    model->defaults.vertAlign    = STYLE_VERT_UNSET;
    model->defaultParagraph      = -1;
    model->lastXml               = XML_OK;
@@ -714,6 +812,13 @@ cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleI
       props.headingLevel = 2u;
       return props;
    }
+   // A quote or a code style returns here rather than falling through, so that a w:outlineLvl on the
+   // paragraph cannot turn a quotation into a heading. The name deciding before the outline level is
+   // CONVERSION_REFERENCE 2.8, and these two roles are named the same way a heading is.
+   if(resolved && (resolved->role == STYLE_ROLE_QUOTE || resolved->role == STYLE_ROLE_CODE)) {
+      props.role = resolved->role;
+      return props;
+   }
 
    si32 outline = directOutline;
 
@@ -729,7 +834,7 @@ cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleI
 }
 
 cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cSTYLE_DIRECT_RUNptr direct) {
-   STYLE_RUN_PROPS props = {0, false, false, STYLE_VERT_BASELINE};
+   STYLE_RUN_PROPS props = {0, false, false, false, false, STYLE_VERT_BASELINE};
 
    cbool paragraphKnown = (paragraphStyle >= 0 && ui32(paragraphStyle) < model->styleCount && model->resolved);
    cbool characterKnown = (direct->characterStyle >= 0 && ui32(direct->characterStyle) < model->styleCount && model->resolved);
@@ -765,6 +870,17 @@ cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cS
    if(webHidden < 0 && fromParagraph) webHidden = fromParagraph->webHidden;
    if(webHidden < 0) webHidden = model->defaults.webHidden;
    props.webHidden = (webHidden > 0);
+
+   si8 monospace = direct->monospace;
+
+   if(monospace < 0 && fromCharacter) monospace = fromCharacter->monospace;
+   if(monospace < 0 && fromParagraph) monospace = fromParagraph->monospace;
+   if(monospace < 0) monospace = model->defaults.monospace;
+   props.monospace = (monospace > 0);
+   // Only the *character* style chain can make a run a code span. A paragraph style carrying the code
+   // role is a fenced block, and giving each of its runs a backtick pair inside the fence would put
+   // literal backticks in code.
+   props.codeStyle = (fromCharacter && fromCharacter->role == STYLE_ROLE_CODE);
 
    STYLE_VERT_ALIGN vertAlign = direct->vertAlign;
 

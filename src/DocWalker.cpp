@@ -3,14 +3,14 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
- * Description: The body walk: transparent wrappers, paragraph properties, runs and run content.
+ * Last Modified: 2026-08-26
+ * Description: The body walk: wrappers, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
  *        2) Uppercase beyond ASCII and Latin-1 for w:caps, which needs Unicode's case tables.
- *        3) Emit the horizontal rule a lone w:pBdr bottom on an empty paragraph means (mapping row 25).
- *        4) Linearize m:oMath and map w:sym, both of which are skipped whole and so lose their text.
- *        5) Cache more than one paragraph style if a document is ever found alternating between many.
+ *        3) Linearize m:oMath and map w:sym, both of which are skipped whole and so lose their text.
+ *        4) Cache more than one paragraph style if a document is ever found alternating between many.
+ *        5) Read a paragraph's w:shd as the code hint CONVERSION_REFERENCE 2.3 names beside w:rFonts.
  * Dependencies: BuildGuards.h, DocWalker.h, Ir.h, OpcPackage.h, StyleModel.h, Utf.h, XmlPull.h,
  *               typedefs.h, memory management.h, windows.h
  * ISA: Scalar
@@ -64,6 +64,8 @@ struct DOC_CONTEXT {
    XML_READERptr   reader;                         ///< The tokenizer over the part
    si32            cachedStyle;                    ///< What cachedId resolved to, or -1
    char            cachedId[STYLE_MAX_NAME_BYTES]; ///< The last w:pStyle or w:rStyle value looked up
+   bool            sawText;                        ///< Whether the paragraph being walked produced any text
+   bool            allMono;                        ///< Whether every text-bearing run of it was monospace
    bool            memory;                         ///< Whether an allocation failed; sticky once set
 };
 
@@ -198,6 +200,14 @@ static cbool DocReadRunProperties(DOC_CONTEXTptrc context, STYLE_DIRECT_RUNptrc 
    }
 }
 
+// Records that the paragraph being walked has produced text, and whether that run was monospace.
+// CONVERSION_REFERENCE row 12's code-block heuristic is "every run is monospace", so a single run that
+// is not settles the paragraph, and a run that produces no text at all must not vote either way.
+static void DocNoteRunText(DOC_CONTEXTptrc context, cbool mono) {
+   context->sawText = true;
+   if(!mono) context->allMono = false;
+}
+
 // Turns resolved WordprocessingML run properties into the output model's formatting bits. Only what a
 // Markdown delimiter could express survives: the other eight toggles have no mapping and are dropped.
 static cui32 DocFormatBits(cSTYLE_RUN_PROPS props) {
@@ -215,6 +225,15 @@ static cui32 DocFormatBits(cSTYLE_RUN_PROPS props) {
    if((props.toggles & StyleToggleBit(STYLE_TOGGLE_STRIKE)) || props.doubleStrike) bits |= IR_FMT_STRIKE;
    if(props.vertAlign == STYLE_VERT_SUPERSCRIPT) bits |= IR_FMT_SUPER;
    if(props.vertAlign == STYLE_VERT_SUBSCRIPT) bits |= IR_FMT_SUB;
+   // Both halves of CONVERSION_REFERENCE row 11 land on one bit, because two runs that render as the
+   // same code span have to coalesce: one carrying a Code character style and one merely set in a
+   // monospace family are indistinguishable in the output, and correctness rule 4 is about the output.
+   if(props.codeStyle || props.monospace) bits |= IR_FMT_CODE;
+   // Row 11 rules that code wins over bold and italic, and the bit is cleared here rather than at
+   // emission for the same reason the complex-script twins share one: two runs that come out as the
+   // same code span must merge, and a bold one beside a plain one would not. Left set, their two
+   // backtick delimiters would meet and a renderer would read the pair as one span with backticks in it.
+   if(bits & IR_FMT_CODE) bits &= ~(IR_FMT_BOLD | IR_FMT_ITALIC);
    return bits;
 }
 
@@ -252,6 +271,7 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
    ui32             bits     = IR_FMT_NONE;
    bool             hidden   = false;
    bool             upper    = false;
+   bool             mono     = false;
 
    StyleClearDirect(&direct);
    for(;;) {
@@ -277,6 +297,10 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
          // bytes rather than a delimiter, so it happens here, where the bytes are copied.
          upper = (props.toggles & StyleToggleBit(STYLE_TOGGLE_CAPS)) != 0;
          bits  = DocFormatBits(props);
+         // Row 12's code-block heuristic is stated over the font alone, so it is props.monospace that is
+         // remembered here and not the IR_FMT_CODE bit: a paragraph of runs wearing a Code *character*
+         // style is an ordinary paragraph holding code spans, not a fenced block.
+         mono = props.monospace;
          // A heading's bold is style-borne, and CLAUDE.md's mapping row 1 rules that heading text is
          // never additionally bolded. The bit is cleared here because IR_FMT is the only channel the
          // emitter has: left set, M6 would wrap every heading in delimiters it already carries.
@@ -297,6 +321,7 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
             }
             textOpen = true;
          }
+         DocNoteRunText(context, mono);
          if(!DocReadTextElement(context, upper)) return false;
          continue;
       }
@@ -314,6 +339,7 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
             }
             textOpen = true;
          }
+         DocNoteRunText(context, mono);
          // A tab becomes one space (row 28) and a non-breaking hyphen an ordinary one (2.2); a
          // w:softHyphen becomes nothing at all, which is what the absence of a case for it does.
          if(!IrAppendText(context->document, (isTab ? " " : "-"), 1u)) {
@@ -348,8 +374,37 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
 
 //-- Paragraphs
 
+// Reads the w:pBdr the reader is on, and reports whether its borders are the pattern Word writes for an
+// autoformatted horizontal rule: a bottom or a between border and no other (CONVERSION_REFERENCE 2.4).
+// A w:val of none or nil is a border switched off, which every producer writes rather than omitting the
+// element; a border element with no w:val at all is taken as present, since its presence is the signal.
+static cbool DocReadBorders(DOC_CONTEXTptrc context, boolptrc rule) {
+   cui32 depthHere = context->reader->depth;
+   bool  under     = false;
+   bool  other     = false;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) {
+         *rule = under && !other;
+         return true;
+      }
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+
+      cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
+      cbool     drawn = !XmlTextEqual(value, "none") && !XmlTextEqual(value, "nil");
+      cbool     below = XmlIsElement(context->reader, XML_NS_W, "bottom") || XmlIsElement(context->reader, XML_NS_W, "between");
+
+      if(drawn && below) under = true;
+      else if(drawn) other = true;
+      if(!XmlSkipElement(context->reader)) return false;
+   }
+}
+
 // Reads the w:pPr the reader is on, and consumes it.
-static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style, si32ptrc outline) {
+static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style, si32ptrc outline, boolptrc rule) {
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -358,6 +413,10 @@ static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style,
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
       if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_W, "pBdr")) {
+         if(!DocReadBorders(context, rule)) return false;
+         continue;
+      }
       if(XmlIsElement(context->reader, XML_NS_W, "pStyle")) {
          csi32 found = DocFindStyle(context, XmlAttribute(context->reader, XML_NS_W, "val"));
 
@@ -380,33 +439,59 @@ static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style,
    }
 }
 
+// Turns a paragraph's resolved role into the block kind that carries it. A heading wins over a quote and
+// over a code style, because a heading is the document's structure while the other two are its voice --
+// and because an ATX heading cannot hold either construct anyway, one being a prefix on every line and
+// the other a fence around them.
+static cIR_BLOCK_KIND DocBlockKind(cSTYLE_PARAGRAPH_PROPS props) {
+   if(props.headingLevel > 0) return IR_BLOCK_HEADING;
+   if(props.role == STYLE_ROLE_QUOTE) return IR_BLOCK_QUOTE;
+   if(props.role == STYLE_ROLE_CODE) return IR_BLOCK_CODE;
+   return IR_BLOCK_PARAGRAPH;
+}
+
 // Walks one w:p into one block, which IrEndBlock throws away again when it holds nothing.
 static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
-   cui32   depthHere = context->reader->depth;
-   si32    style     = StyleDefaultParagraph(context->styles);
-   si32    outline   = -1;
-   IR_MARK mark      = {-1, 0, 0};
-   bool    begun     = false;
-   bool    head      = false;
-   bool    ok        = true;
+   cui32         depthHere = context->reader->depth;
+   si32          style     = StyleDefaultParagraph(context->styles);
+   si32          outline   = -1;
+   IR_MARK       mark      = {-1, 0, 0};
+   IR_BLOCK_KIND kind      = IR_BLOCK_PARAGRAPH;
+   ui8           level     = 0;
+   bool          rule      = false;
+   bool          settled   = false;
+   bool          begun     = false;
+   bool          head      = false;
+   bool          ok        = true;
+   // Saved and restored rather than merely cleared: a paragraph nests inside a table cell from M9, and a
+   // cell's paragraph must not settle the classification of the one the table stands in.
+   cbool outerText = context->sawText;
+   cbool outerMono = context->allMono;
 
+   context->sawText = false;
+   context->allMono = true;
    for(;;) {
       cXML_TOKEN token = XmlNext(context->reader);
 
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
       if(token != XML_TOKEN_START_ELEMENT) continue;
-      if(!begun && XmlIsElement(context->reader, XML_NS_W, "pPr")) {
-         if(!DocReadParagraphProperties(context, &style, &outline)) return false;
+      if(!settled && XmlIsElement(context->reader, XML_NS_W, "pPr")) {
+         if(!DocReadParagraphProperties(context, &style, &outline, &rule)) return false;
          continue;
       }
-      if(!begun) {
+      if(!settled) {
          // The properties are settled by the time any content is reached: w:pPr is the paragraph's first
          // child whenever it is present, so anything else means there is no more of it to come.
          cSTYLE_PARAGRAPH_PROPS props = StyleResolveParagraph(context->styles, style, outline);
 
-         head  = (props.headingLevel > 0);
-         mark  = IrBeginBlock(context->document, (head ? IR_BLOCK_HEADING : IR_BLOCK_PARAGRAPH), props.headingLevel);
+         head    = (props.headingLevel > 0);
+         level   = props.headingLevel;
+         kind    = DocBlockKind(props);
+         settled = true;
+      }
+      if(!begun) {
+         mark  = IrBeginBlock(context->document, kind, level);
          begun = true;
          if(mark.block < 0) {
             context->memory = true;
@@ -419,7 +504,52 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
          break;
       }
    }
-   if(begun) IrEndBlock(context->document, mark);
+   if(!settled) {
+      cSTYLE_PARAGRAPH_PROPS props = StyleResolveParagraph(context->styles, style, outline);
+
+      level = props.headingLevel;
+      kind  = DocBlockKind(props);
+   }
+   // A paragraph with no children at all is how every producer writes an empty line, and inside a run of
+   // code paragraphs that is a blank line of the fence rather than nothing -- so a code paragraph gets
+   // its block even when there was never any content to open one. The emitter drops such a block again
+   // wherever it falls at the edge of a fence, which is the only place it would be a blank line.
+   if(!begun && ok && !rule && kind == IR_BLOCK_CODE) {
+      mark  = IrBeginBlock(context->document, kind, level);
+      begun = true;
+      if(mark.block < 0) {
+         context->memory = true;
+         return false;
+      }
+   }
+
+   bool kept = false;
+
+   if(begun) {
+      // CONVERSION_REFERENCE row 12's second detection: a paragraph whose every text-bearing run is set
+      // in a monospace family is code even where no style says so. It is settled here rather than in
+      // RunCoalescer because the font is a run property the intermediate representation does not carry,
+      // and re-resolving it from the spans afterwards would mean carrying it only to answer this once.
+      if(kind == IR_BLOCK_PARAGRAPH && context->sawText && context->allMono) {
+         IR_BLOCKptr block = IrBlockMutable(context->document, ui32(mark.block));
+
+         if(block) block->kind = IR_BLOCK_CODE;
+      }
+      kept = IrEndBlock(context->document, mark);
+   }
+   context->sawText = outerText;
+   context->allMono = outerMono;
+   // Row 25: a lone bottom border on a paragraph that came to nothing is Word's autoformatted horizontal
+   // rule. The test is "came to nothing" and not "has no runs", so a paragraph of empty runs is one too.
+   if(ok && rule && !kept) {
+      cIR_MARK ruled = IrBeginBlock(context->document, IR_BLOCK_RULE, 0);
+
+      if(ruled.block < 0) {
+         context->memory = true;
+         return false;
+      }
+      IrEndBlock(context->document, ruled);
+   }
    return ok;
 }
 
@@ -583,6 +713,8 @@ cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cui8
    context.reader      = &reader;
    context.cachedStyle = -1;
    context.cachedId[0] = 0;
+   context.sawText     = false;
+   context.allMono     = true;
    context.memory      = false;
 
    bool sawDocument = false;

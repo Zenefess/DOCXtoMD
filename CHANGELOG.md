@@ -8,6 +8,99 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M6, inline formatting.** The converter now emits delimiters. `src/RunCoalescer.h`/`.cpp` is the new
+  module the architecture list has been holding a place for: it merges adjacent spans carrying equal
+  formatting (CONVERSION_REFERENCE 5.1) and then hoists leading and trailing whitespace out of every
+  formatted span (5.3), in that order and not the other -- merged first, `**one ** **two**` is one bold
+  span reading `**one two**`, and hoisted first it would come apart. A span left holding nothing but
+  whitespace loses its formatting rather than its bytes, which makes 5.5's "never emit delimiters around
+  empty content" structural rather than a test the emitter has to remember. The merge is a length
+  extension over the arena and never moves a byte, and it checks that the two ranges really do meet
+  rather than trusting that they always will.
+- Bold, italic, strikethrough, superscript, subscript and inline code, nested in one fixed order:
+  `<sup>`/`<sub>`, then the strikethrough, then the emphasis, then a code span. Bold and italic together
+  are `***` (mapping row 5), and code drops bold and italic (row 11's own ruling on that collision)
+  while keeping the strikethrough and the vertical alignment, which wrap a code span perfectly well.
+  A code span's backtick run is longer than the longest run inside it and pads with one space when the
+  content begins or ends with a backtick, which is the only way a literal backtick can survive.
+- **The three escaping contexts M6 owed a caller.** `MD_CONTEXT_HTML` is what a superscript, a subscript
+  and every HTML fallback below write through; `MD_CONTEXT_CODE_SPAN` is what a code span writes
+  through; and `MD_CONTEXT_CODE_BLOCK` is what a fenced block writes through, so correctness rule 6's
+  "walker code never concatenates raw strings into output" holds for the literal contexts too.
+- Blockquotes (mapping row 13): a paragraph whose style chain is named Quote, Intense Quote, Block Text
+  or LibreOffice's Quotations becomes a block whose every line carries a `> ` prefix, the continuation
+  line after a hard break included. Two consecutive quote paragraphs are separated by a bare `>` rather
+  than a blank line, because a blank line closes the blockquote and opens a second one -- the single
+  exception to the one-blank-line-between-blocks rule, and it is still exactly one line. The row's
+  `w:ind >= 720` heuristic is deliberately not implemented; the reference has it off by default.
+- Fenced code blocks (row 12), by either detection: a paragraph style named HTML Preformatted,
+  Preformatted Text, Source Code or Code, or a paragraph whose every text-bearing run is set in one of
+  row 11's monospace families. Consecutive code paragraphs merge into one fence, whose length is longer
+  than the longest backtick run anywhere inside it; there is no info string, because the language is
+  never recoverable. An empty code paragraph is a blank line of the fence and is trimmed only where it
+  falls at either end of one, which is the one place `IrEndBlock`'s emptiness test is now suspended.
+- The horizontal rule of row 25: a lone `w:pBdr` bottom or between border on a paragraph that came to
+  nothing becomes `---`. "Lone" is enforced at both ends -- a paragraph wearing a box is not a rule, and
+  neither is a bordered paragraph that has text in it -- and "came to nothing" covers a paragraph of
+  whitespace as well as one with no runs at all.
+- `StyleModel` gains the quote and code roles and the monospace verdict. A role now depends on what kind
+  of style declares the name, which is load-bearing rather than tidy: "Source Text" is LibreOffice's
+  *character* style for inline code (row 11) and an ordinary paragraph style name otherwise, and
+  `tests/fixtures/headings` has carried a paragraph style called exactly that since M5. `w:rFonts` is
+  read for its `w:ascii` alone and reduced to a tri-state at parse time, so the model stores no font
+  names; a `w:rFonts` naming only a theme slot specifies nothing rather than specifying false.
+- Six golden fixture cases, each pinning a decision that would otherwise be unpinned: `fragments`
+  (mid-word run splits across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting`
+  (a trailing space inside bold, a leading one, a whitespace-only span, U+00A0 and a tab), `inline`
+  (every delimiter and combination, and the fallbacks below), `code` (both code detections, backtick
+  collisions, and two fences), `quotes` and `rules`. The two the milestone names by name are the first
+  two. Every `expected.md` was written by hand from the specification before the converter was run at
+  it, and every one matched on the first run.
+- `tests/unit/TestRunCoalescer.cpp`, and the trace notation the other suites already use extended with
+  `c` for a code span and `Q`, `C` and `R` for the three new block kinds.
+
+### Changed
+- `MdEscapeMeasure` and `MdEscapeWrite` take the D12 dollar verdict as an argument rather than counting
+  it themselves, and `MdEscapeCountDollars` is what a caller counts with. This is the obligation D12
+  left for M6 in writing: a line is escaped span by span now, because there is markup between the spans,
+  and a per-span count would read `costs $5` and `and $10` as two runs of one dollar each and escape
+  neither -- restoring exactly the corruption the ruling was made to fix. The emitter counts over the
+  whole assembled line and passes one verdict down to every span of it. A dollar inside a code span does
+  not count towards it: it cannot be escaped there, and 4.1 records that it is inert.
+- A line is assembled in its output form -- delimiters and escaped text together -- rather than raw and
+  escaped in one piece. The ampersand lookahead is safe within a span because the coalescer has already
+  merged every adjacent pair with equal formatting, so a split entity can only be separated by markup
+  that stops it being one; `tests/fixtures/textflow` pins that its bytes did not change.
+- Three existing goldens change, all for the same reason: `minimal` (and the fourteen container fixtures
+  that compare against it) and `relocated` gain `**bold**` and `**fails**`, and `nostyles` gains
+  `***...***`. Every other case is byte-identical, which is what says the escaping restructure and the
+  type-qualified style roles cost nothing they should not.
+
+### Fixed
+- **A strikethrough that wraps another delimiter no longer disappears.** `word~~**x**~~` emits four
+  literal tildes and no strikethrough at all: CommonMark refuses a delimiter run that is both preceded
+  by a letter and followed by punctuation, and a `~~` in front of a `**` is always followed by
+  punctuation. Two `~~` runs that meet fail differently and as completely -- `~~a~~~~b~~` is a run of
+  four tildes, which GFM does not recognise. A strikethrough that wraps anything is written `<del>`
+  instead, which has no flanking rule at all; one that wraps only text keeps the `~~` the mapping table
+  rules.
+- **Emphasis no longer disappears against punctuation.** The same flanking rules break `word**(a)**after`
+  and `***T*****=eq=**`, and the general answer is the same one: where the outermost Markdown delimiter
+  cannot open or close where it stands, an HTML element takes its place. Two delimiter runs that meet
+  are one run to a parser, so the test steps back over an adjacent run before looking at what precedes
+  it. Punctuation is CommonMark's own ASCII list plus the non-ASCII ranges a converted document actually
+  holds -- mapping row 36 keeps smart quotes, dashes and the ellipsis verbatim, so those are the
+  characters a formatted span really does end in.
+- **Two adjacent runs that render as the same code span now merge.** Code drops bold and italic, so a
+  bold monospace run and a plain one beside it come out identical -- and left unmerged their two
+  backtick delimiters met and a renderer read the pair as one span with backticks in it. The bits are
+  cleared in the walker for the same reason the complex-script twins share one: the intermediate
+  representation is the output model, and what renders identically has to coalesce.
+  All three were found by a differential test against an independent CommonMark implementation, not by
+  a fixture, and none of them was reachable from the suites as they stood. `docs/CONVERSION_REFERENCE.md`
+  gains an eleventh pitfall in 4.2 for the flanking rules, and mapping rows 6 and 11 gain the two
+  caveats it implies, so the two documents do not disagree about what a delimiter may do.
+
 - Decision **D12**, ruled 2026-08-26: a `$` is escaped as `\$`, but only where the assembled line holds
   two or more of them. GitHub has read `$...$` as inline math and `$$...$$` as display math since 2022,
   so `costs $5 and $10` rendered `5 and ` in math font and lost both signs; `docs/CONVERSION_REFERENCE.md`

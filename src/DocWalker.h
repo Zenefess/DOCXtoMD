@@ -3,11 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-26
  * Description: The document walk: WordprocessingML body content into the intermediate representation.
  * To Do: 1) Walk w:tbl into table blocks at M9, and w:hyperlink into link spans at M7.
  *        2) Run the field state machine over w:fldChar and w:instrText at M10, which today are skipped.
- *        3) Emit the horizontal rule a lone w:pBdr bottom on an empty paragraph means (mapping row 25).
+ *        3) Save and restore the paragraph classification around a nested paragraph when M9 walks a cell.
  *        4) Honour a deleted paragraph mark by joining the paragraph with the next one (M10).
  * Dependencies: Ir.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h
  * ISA: Scalar
@@ -71,10 +71,15 @@ typedef const WALK_STATUS cWALK_STATUS;
 ///       it would lose text: w:hyperlink, w:fldSimple, the bidirectional containers w:dir and w:bdo, and
 ///       a w:ruby's w:rubyBase -- its w:rt annotation is printed above the base text, which Markdown has
 ///       nowhere to put.
-/// @note A lone w:pBdr bottom on an otherwise empty paragraph is Word's autoformatted horizontal rule,
-///       and the ruled mapping row 25 turns it into "---". Nothing reads it yet, so such a paragraph
-///       converts to nothing at all; CONVERSION_REFERENCE 6.2 puts that classification in the stage M6
-///       owns, and the To Do names it so the milestone cannot close without it.
+/// @note A lone w:pBdr bottom -- or w:between -- on a paragraph that came to nothing is Word's
+///       autoformatted horizontal rule, and the ruled mapping row 25 turns it into "---". "Lone" is
+///       enforced: a paragraph wearing a box has borders on its other sides and is not a rule, and a
+///       paragraph with a bottom border *and* text is an underlined paragraph and is not one either.
+/// @note Three block kinds beyond a paragraph and a heading come out of this walk. A style chain whose
+///       role is a quote gives IR_BLOCK_QUOTE and one whose role is code gives IR_BLOCK_CODE (mapping
+///       rows 13 and 12); so does a paragraph whose every text-bearing run is set in a monospace family,
+///       which is row 12's second detection and is settled here because the font is a run property the
+///       intermediate representation does not carry. A heading beats both.
 /// @note A run whose effective w:vanish or w:webHidden is on is dropped with its text. Word hides field
 ///       instructions that way, so keeping them would put raw field codes in the output.
 /// @note A run whose effective w:caps is on has its text uppercased, which is mapping row 37 -- caps is

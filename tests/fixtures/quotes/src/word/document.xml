@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Before the quotation.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>The first quoted paragraph.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>The second, which belongs to the same quotation.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Between two quotations.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="IntenseQuote"/></w:pPr><w:r><w:t>Line one</w:t></w:r><w:r><w:br/></w:r><w:r><w:t>line two after a hard break.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Zitat"/></w:pPr><w:r><w:t xml:space="preserve">LibreOffice calls it Quotations, and </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r><w:r><w:t xml:space="preserve"> still works.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Zitat"/></w:pPr><w:r><w:t>- a line that would start a bullet</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="QuoteHeading"/></w:pPr><w:r><w:t>A heading beats a quote</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">A </w:t></w:r><w:r><w:rPr><w:rStyle w:val="QuoteChar"/></w:rPr><w:t>character</w:t></w:r><w:r><w:t xml:space="preserve"> style called Quote is not a blockquote.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

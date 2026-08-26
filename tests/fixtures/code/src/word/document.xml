@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t xml:space="preserve">A </w:t></w:r><w:r><w:rPr><w:rStyle w:val="CodeChar"/></w:rPr><w:t>printf</w:t></w:r><w:r><w:t xml:space="preserve"> call.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Use </w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr><w:t>x = 1;</w:t></w:r><w:r><w:t xml:space="preserve"> here.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Also </w:t></w:r><w:r><w:rPr><w:rStyle w:val="Source_20_Text"/></w:rPr><w:t>LibreOffice</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Ticks </w:t></w:r><w:r><w:rPr><w:rStyle w:val="CodeChar"/></w:rPr><w:t>a`b</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Edge </w:t></w:r><w:r><w:rPr><w:rStyle w:val="CodeChar"/></w:rPr><w:t>`x</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Raw </w:t></w:r><w:r><w:rPr><w:rStyle w:val="CodeChar"/></w:rPr><w:t>*not* _emphasis_ &amp; &lt;tag&gt;</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rStyle w:val="CodeChar"/></w:rPr><w:t xml:space="preserve">run </w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Merged </w:t></w:r><w:r><w:rPr><w:rStyle w:val="CodeChar"/></w:rPr><w:t>co</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Menlo"/></w:rPr><w:t>de</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/><w:rStyle w:val="CodeChar"/></w:rPr><w:t>bold code</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:strike/><w:rStyle w:val="CodeChar"/></w:rPr><w:t>struck code</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="PlainBody"/></w:pPr><w:r><w:t>A paragraph style called Source Text is not code.</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/></w:rPr><w:t>int main() {</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/></w:rPr><w:t xml:space="preserve">   return 0;</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/></w:rPr><w:t>}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Between the fences.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>first</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>second ``` third</w:t></w:r><w:r><w:br/></w:r><w:r><w:t>after a break</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr></w:p>
+    <w:p><w:r><w:t>After.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

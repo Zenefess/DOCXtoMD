@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Above the rule.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>
+    <w:p><w:r><w:t>Below the rule.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pBdr><w:between w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>
+    <w:p><w:pPr><w:pBdr><w:bottom w:val="single"/></w:pBdr></w:pPr><w:r><w:t>A bordered paragraph with text is not a rule.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pBdr><w:top w:val="single"/><w:bottom w:val="single"/><w:left w:val="single"/><w:right w:val="single"/></w:pBdr></w:pPr></w:p>
+    <w:p><w:pPr><w:pBdr><w:bottom w:val="none"/></w:pBdr></w:pPr></w:p>
+    <w:p><w:pPr><w:pBdr><w:bottom w:val="single"/></w:pBdr></w:pPr><w:r><w:t xml:space="preserve">   </w:t></w:r></w:p>
+    <w:p><w:r><w:t>The end.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

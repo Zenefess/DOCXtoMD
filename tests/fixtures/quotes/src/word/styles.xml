@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault>
+    <w:pPrDefault/>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Quote">
+    <w:name w:val="Quote"/>
+    <w:basedOn w:val="Normal"/>
+    <w:rPr><w:i/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="IntenseQuote">
+    <w:name w:val="Intense Quote"/>
+    <w:basedOn w:val="Normal"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Zitat">
+    <w:name w:val="Quotations"/>
+    <w:basedOn w:val="Normal"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="QuoteHeading">
+    <w:name w:val="heading 2"/>
+    <w:basedOn w:val="Quote"/>
+  </w:style>
+  <w:style w:type="character" w:styleId="QuoteChar">
+    <w:name w:val="Quote"/>
+  </w:style>
+</w:styles>
