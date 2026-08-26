@@ -196,8 +196,9 @@ below.
     default — which legal filings do — and without the guard every run is code, every paragraph
     satisfies row 12, and the file converts to a single fence with every delimiter dead inside it. The
     font is a signal only where it tells one run from its neighbours; a code *character* style is
-    unaffected, because that is a statement about a run rather than about the document. That match goes through an **open-addressed index
-    built once at load**, and the index is a correctness matter more than a speed one: the walker looks
+    unaffected, because that is a statement about a run rather than about the document.
+    That match goes through an **open-addressed index built once at load**, and the index is a
+    correctness matter more than a speed one: the walker looks
     up a style per styled paragraph behind a one-entry cache, so a linear scan makes a spec-legal 45 KB
     `.docx` — many long-prefixed identifiers, paragraphs alternating between two of them — spin for
     seconds with no output and no refusal. An identifier is stored capped at `STYLE_MAX_NAME_BYTES`,
@@ -213,8 +214,9 @@ below.
     and rule — and two of them are exempt from the emptiness test: a rule is an empty paragraph by
     construction, and an empty code paragraph is a blank line inside a fence. `IrEndBlock` trims a
     block's leading and trailing break spans — except inside a fence, where a break *is* a newline and
-    no marker is written for it, so the reason to trim one never arises and trimming loses a line — and then unwinds
-    the whole block — records, spans and arena — when nothing but ASCII whitespace is left, which is
+    no marker is written for it, so the reason to trim one never arises and trimming loses a line — and
+    then unwinds the whole block — records, spans and arena — when nothing but ASCII whitespace is left,
+    which is
     what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` exist for one caller:
     `mc:AlternateContent`, where the first `mc:Choice` is walked speculatively and rewound if an
     `mc:Fallback` turns out to follow it. A non-breaking space counts as content, per mapping row 35.
@@ -238,7 +240,8 @@ below.
     so ignoring it loses nothing. A lone `w:pBdr` bottom or between border on a paragraph that came to
     nothing gives the horizontal rule of row 25; both halves of `CT_PBdr` are matched **by name** from
     two tables rather than one half by exclusion, so a vendor extension or an `mc:AlternateContent`
-    inside a `w:pBdr` is ignored instead of counting as a fourth border and suppressing the rule. A heading beats all of them. `w:t` text is taken literally —
+    inside a `w:pBdr` is ignored instead of counting as a fourth border and suppressing the rule.
+    A heading beats all of them. `w:t` text is taken literally —
     `xml:space` is the producer's business — with U+00AD removed. What is skipped whole and why:
     `w:tbl` (M9), `w:drawing`/`w:pict` (M7), `w:instrText` and `w:fldChar` (M10's field state machine),
     `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
