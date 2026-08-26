@@ -228,7 +228,11 @@ below.
     over a finished line instead. `MD_CONTEXT_HTML` is the inline set **plus** unconditional `&amp;`
     and `&lt;`, not instead of it: GFM passes a raw tag through but still parses the text between the
     tags. A setext underline needs a line above it, so the `=` rule takes a `continuation` flag while a
-    thematic break does not.
+    thematic break does not. The dollar rule is D12's, and it is a count rather than a grammar: a line
+    holding two or more `$` has every one of them escaped and a line holding one keeps it bare, because
+    a math span needs two delimiters and a price is the common case. Two things it rests on — the
+    backslash must stay unconditionally escaped, or a source `\` before a `$` would swallow the one
+    this rule inserts, and the count must be taken over a whole assembled line.
   - `MdEmitter.h`/`MdEmitter.cpp` — one growable UTF-8 output buffer and one line buffer. A line is
     assembled **raw** and escaped in one piece rather than span by span, and that is a correctness
     matter: the ampersand rule looks ahead for an entity pattern, and Word fragments a run wherever a
@@ -401,9 +405,9 @@ below.
   `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
   code and the message; `run_golden.py` converts every golden and byte-compares it. All three
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
-  a POSIX host — run them as `python tests/<name>.py`. There are **seven** part trees under `fixtures/`:
-  `minimal`, `relocated`, and the five M5 golden cases `headings`, `toggles`, `textflow`, `nostyles` and
-  `wrappers`, each with an `expected.md` beside its `src/`.
+  a POSIX host — run them as `python tests/<name>.py`. There are **eight** part trees under `fixtures/`:
+  `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`, `nostyles` and
+  `wrappers`, and `dollars`, which D12 added; each has an `expected.md` beside its `src/`.
   `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
   `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
   `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
@@ -855,6 +859,7 @@ implementation session must respect:
 | Soft hyphens | Removed; NBSP and smart punctuation kept verbatim |
 | Output encoding | UTF-8, no BOM, LF line endings (tc2's CRLF governs source files, not program output) |
 | Leading/trailing ASCII space or tab on an emitted line | Removed. Four leading spaces would be an indented code block; two trailing ones are Markdown's other hard break |
+| A `$` on a line that holds two or more of them | `\$` — GitHub reads `$...$` as inline math and `$$...$$` as display math (D12). A line holding one `$` keeps it bare: a span needs two delimiters, and a price is the common case |
 | Two hard breaks with nothing between them | Collapse to one, and a hard break with nothing after it is dropped. A Markdown line that is empty ends the paragraph, so neither `--hard-break` spelling can carry an empty continuation line |
 | A hard break inside a heading | One space. An ATX heading is a single line by construction |
 
@@ -1380,7 +1385,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   M5 leaves three things waiting here by name: every span already carries its effective formatting, so
   this is an extension rather than a rebuild; `MD_CONTEXT_HTML`, `MD_CONTEXT_CODE_SPAN` and the code
   block have no caller yet; and escaping is per assembled line, which has to become per coalesced span
-  once there is markup between the spans.
+  once there is markup between the spans. **That last one carries an obligation D12 added**: the dollar
+  count is only correct over a whole line, so a per-span count would read `costs $5` and `and $10` as
+  two runs of one dollar each and escape neither, silently restoring the corruption D12 was ruled to
+  fix. Count over the line and pass the verdict into each span's escape call.
 - **M7 `[todo]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs.
 - **M8 `[todo]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne numPr).
 - **M9 `[todo]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.
@@ -1418,8 +1426,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
 ## Decisions (every row is ruled and settled — do not re-litigate)
 
 D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19, and D8–D11 on 2026-08-24, the day M4
-raised them: the owner accepted all four session recommendations as written. **D12 is open** — M5 raised it on
-2026-08-25 and it awaits the owner. Keep the
+raised them: the owner accepted all four session recommendations as written. **D12 was raised by M5 on 2026-08-25
+and ruled on 2026-08-26**, the owner again accepting the recommendation as written, so no decision is open. Keep the
 IDs stable — `docs/CONVERSION_REFERENCE.md` cites D1, D2, D8 and D10 by name — and keep a ruled row's question and
 the reasoning that was put to the owner rather than trimming it to the answer, because a ruling records what was
 asked as much as what was decided. New questions get the next free ID (D13, D14, …) with the same
@@ -1438,7 +1446,7 @@ question/recommendation/status shape, and stay `Open — owner call` until the o
 | D9 | When the `officeDocument` relationship resolves to a part whose content type is **not** one of the four WordprocessingML main-document types, does the tool convert it (trusting the relationship and reporting the disagreement) or refuse it as not a valid DOCX? "Cross-check" in correctness rule 1 is ambiguous between *verify and fail* and *fall back*, and the two readings give opposite exit codes for the same file. | **Trust the relationship and convert**, as M4 implements: the relationship is the specification's discovery mechanism and `[Content_Types].xml` is metadata, and refusing loses documents from producers that omit the Override. The content-type table stays a cross-check in the one case M4 already gives it — a relationship that resolved to a part the archive does not contain. | M4 (already implemented; `content-type-mismatch.docx` pins it, so the choice cannot change silently) |
 | D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | **Leave it as it is until M11** and decide there with the producer-variance corpus in hand. Nothing is exposed meanwhile: part names are only ever compared in memory and no path reaches disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Deferred to M11 by the ruling** — that milestone owns the decision and must not close without recording it |
 | D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | **Yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it earlier would oblige every future file to pass a session-authored checker with no CI behind it. | M12 |
-| D12 | GitHub renders `$...$` and `$$...$$` as LaTeX math, and has since 2022. `docs/CONVERSION_REFERENCE.md` 4.1 predates that and does not list `$` among the characters to escape, so today a paragraph reading `costs $5 and $10` is emitted verbatim and github.com renders `5 and ` in math font, losing both dollar signs. Should `$` join the unconditional inline escape set, join it conditionally (only where a closing `$` could pair with it), or stay unescaped? Note the cost of each: unconditional puts a backslash in front of every price in every document, conditional needs a lookahead the line-assembly pass can do but the reference does not describe, and leaving it corrupts a real and common shape on the one renderer this converter names in its own mapping table. The same question reaches `docs/CONVERSION_REFERENCE.md`, which would gain the row either way. | *Open -- owner call.* **Recommendation: escape `$` conditionally**, where a later `$` on the same line could close it, and add the row to the reference. Unconditional escaping is the safe direction but it is visible on every ordinary document, and math is not a CommonMark feature -- it is one renderer's extension, so paying for it everywhere is out of proportion. | Not started -- awaiting the ruling |
+| D12 | GitHub renders `$...$` and `$$...$$` as LaTeX math, and has since 2022. `docs/CONVERSION_REFERENCE.md` 4.1 predates that and does not list `$` among the characters to escape, so today a paragraph reading `costs $5 and $10` is emitted verbatim and github.com renders `5 and ` in math font, losing both dollar signs. Should `$` join the unconditional inline escape set, join it conditionally (only where a closing `$` could pair with it), or stay unescaped? Note the cost of each: unconditional puts a backslash in front of every price in every document, conditional needs a lookahead the line-assembly pass can do but the reference does not describe, and leaving it corrupts a real and common shape on the one renderer this converter names in its own mapping table. The same question reaches `docs/CONVERSION_REFERENCE.md`, which would gain the row either way. | **Escape `$` conditionally**, adopting the session recommendation in full; ruled 2026-08-26. Unconditional escaping is the safe direction but it is visible on every ordinary document, and math is not a CommonMark feature -- it is one renderer's extension, so paying for it everywhere is out of proportion. *(Consequence, session-derived: "conditionally" is implemented as **at most one unescaped `$` per assembled line** -- a line holding two or more has every one of them escaped, a line holding one keeps it bare. A span needs two delimiters under every renderer's reading, so a count is safe without reproducing GitHub's exact opener and closer conditions, which this project cannot verify. All-or-none was preferred over leaving one bare per line because it also narrows the one residual: a line that pairs internally contributes no live dollar to the next line.)* | **done** (the rule, the reference row and `tests/fixtures/dollars` landed 2026-08-26, after M5's verification) |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the

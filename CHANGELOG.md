@@ -8,7 +8,17 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
-
+- Decision **D12**, ruled 2026-08-26: a `$` is escaped as `\$`, but only where the assembled line holds
+  two or more of them. GitHub has read `$...$` as inline math and `$$...$$` as display math since 2022,
+  so `costs $5 and $10` rendered `5 and ` in math font and lost both signs; `docs/CONVERSION_REFERENCE.md`
+  4.1 predates the feature and now carries the row, with a tenth pitfall in 4.2. A math span needs two
+  delimiters, so the rule is a count and not a grammar -- GitHub, Pandoc and the KaTeX-based previews
+  disagree about whether a space may follow the opener or a digit the closer, and a count is safe under
+  every one of those readings without reproducing any. A line holding one `$` keeps it bare, which is
+  what the ruling chose conditional escaping for: a price is the common case and pays nothing. It applies
+  in the five contexts whose text a renderer parses as inline content and in none of the other three.
+  `tests/fixtures/dollars` is the golden pair, its `expected.md` written by hand from the specification
+  before the converter was run at it, and it matched on the first run.
 - `.clang-format` per GCS tc1 — 3-space indent, no tabs, 180-column limit, attached braces,
   short function bodies on one line, and aligned declarations, assignments and trailing
   comments, over a `BasedOnStyle: LLVM` base — so every option tc1 does not name is LLVM's

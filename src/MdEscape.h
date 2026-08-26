@@ -3,11 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-26
  * Description: The context-aware Markdown escaping writer: one rule set per place text can be emitted.
  * To Do: 1) Escape a leading pipe once tables give a line one, which is M9's business.
- *        2) Revisit the link-destination rule against real hyperlink targets when M7 emits one.
- *        3) Benchmark an AVX2 scan for the next byte needing an escape before adopting one (bd1/bd2).
+ *        2) Widen D12's dollar scope from the line to the block if a fixture ever shows GitHub's inline
+ *           math pairing across a hard break, which this build assumes it does not.
+ *        3) Revisit the link-destination rule against real hyperlink targets when M7 emits one.
+ *        4) Benchmark an AVX2 scan for the next byte needing an escape before adopting one (bd1/bd2).
  * Dependencies: typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -73,6 +75,27 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context);
 ///       ordinary inline content, so "<sup>*n*</sup>" italicises the n. The ampersand and the
 ///       less-than sign become entities unconditionally there, because inside a fallback there is no
 ///       room for the guesswork the inline rules do about which of them could start markup.
+/// @note The dollar sign is escaped only where the run holds **two or more** of them, which is D12,
+///       ruled 2026-08-26. GitHub has read `$...$` as inline math and `$$...$$` as display math since
+///       2022, so "costs $5 and $10" loses both signs; a lone dollar cannot open a span and keeps its
+///       bare form, which is what makes a price -- the common case -- cost nothing. Counting is the
+///       whole rule on purpose: GitHub, Pandoc and the KaTeX-based previews disagree about whether a
+///       space may follow the opener or a digit the closer, and a count is safe under every one of
+///       those readings. It applies in the five contexts whose text a renderer parses as inline
+///       content -- inline, table cell, link text, alt text and the HTML fallback -- and in none of
+///       the other three: a backslash inside code is literal, and a destination is percent-encoded
+///       rather than escaped, where a dollar is a legal RFC 3986 sub-delimiter that %24 may not match.
+/// @note Two things the dollar rule rests on, so that neither is changed without noticing. The
+///       backslash must stay *unconditionally* escaped, or a source backslash before a dollar would
+///       swallow the escape this rule inserts. And the run handed here must be a whole assembled
+///       line: M6 moves escaping to per coalesced span, and a per-span count would see "costs $5"
+///       and "and $10" as two runs of one dollar each and escape neither, silently restoring exactly
+///       the corruption D12 was ruled to fix. M6 must count over the line and pass the verdict down.
+/// @note What the line scope does not cover, stated rather than hidden: one dollar before a hard break
+///       and one after are two runs of one each, so both stay bare. This build assumes inline math
+///       does not cross a line end -- GitHub documents `$$` for multi-line expressions, which reads
+///       that way -- and `tests/fixtures/dollars` pins the assumption as output, so widening it later
+///       is a visible diff rather than a silent one.
 /// @note Four contexts have no caller before M7: the two link contexts, the alt text and the table
 ///       cell. They are written now because correctness rule 6 forbids an emitter concatenating raw
 ///       text and because the rules are pure and testable without one -- but they are provisional,

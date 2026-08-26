@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>costs $5</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Total: 100$</w:t></w:r></w:p>
+    <w:p><w:r><w:t>from $1.2M to $3.4M</w:t></w:r></w:p>
+    <w:p><w:r><w:t>$$x$$</w:t></w:r></w:p>
+    <w:p><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:r><w:t>Q3: $5 and $10</w:t></w:r></w:p>
+    <w:p><w:r><w:t>1. $5 $6</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">$5 $6   </w:t></w:r></w:p>
+    <w:p><w:r><w:t>$5</w:t><w:br/><w:t>$6</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">a $5</w:t><w:br/><w:t>$6 $7 b</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>
