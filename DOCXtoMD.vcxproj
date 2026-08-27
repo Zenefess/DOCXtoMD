@@ -85,7 +85,9 @@
     <ClCompile Include="src\DocWalker.cpp" />
     <ClCompile Include="src\Inflate.cpp" />
     <ClCompile Include="src\Ir.cpp" />
+    <ClCompile Include="src\LinkResolver.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\MediaExtractor.cpp" />
     <ClCompile Include="src\MdEmitter.cpp" />
     <ClCompile Include="src\MdEscape.cpp" />
     <ClCompile Include="src\OpcPackage.cpp" />
@@ -110,6 +112,8 @@
     <ClInclude Include="src\DocWalker.h" />
     <ClInclude Include="src\Inflate.h" />
     <ClInclude Include="src\Ir.h" />
+    <ClInclude Include="src\LinkResolver.h" />
+    <ClInclude Include="src\MediaExtractor.h" />
     <ClInclude Include="src\MdEmitter.h" />
     <ClInclude Include="src\MdEscape.h" />
     <ClInclude Include="src\OpcPackage.h" />

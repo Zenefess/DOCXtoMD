@@ -93,6 +93,8 @@
     <ClCompile Include="..\src\DocWalker.cpp" />
     <ClCompile Include="..\src\Inflate.cpp" />
     <ClCompile Include="..\src\Ir.cpp" />
+    <ClCompile Include="..\src\LinkResolver.cpp" />
+    <ClCompile Include="..\src\MediaExtractor.cpp" />
     <ClCompile Include="..\src\MdEmitter.cpp" />
     <ClCompile Include="..\src\MdEscape.cpp" />
     <ClCompile Include="..\src\OpcPackage.cpp" />
@@ -103,9 +105,11 @@
     <ClCompile Include="..\src\ZipReader.cpp" />
     <ClCompile Include="unit\Check.cpp" />
     <ClCompile Include="unit\TestConvert.cpp" />
+    <ClCompile Include="unit\TestLinkResolver.cpp" />
     <ClCompile Include="unit\TestDocWalker.cpp" />
     <ClCompile Include="unit\TestMain.cpp" />
     <ClCompile Include="unit\TestMdEmitter.cpp" />
+    <ClCompile Include="unit\TestMediaExtractor.cpp" />
     <ClCompile Include="unit\TestMdEscape.cpp" />
     <ClCompile Include="unit\TestOpcPackage.cpp" />
     <ClCompile Include="unit\TestRunCoalescer.cpp" />
@@ -122,6 +126,8 @@
     <ClInclude Include="..\src\DocWalker.h" />
     <ClInclude Include="..\src\Inflate.h" />
     <ClInclude Include="..\src\Ir.h" />
+    <ClInclude Include="..\src\LinkResolver.h" />
+    <ClInclude Include="..\src\MediaExtractor.h" />
     <ClInclude Include="..\src\MdEmitter.h" />
     <ClInclude Include="..\src\MdEscape.h" />
     <ClInclude Include="..\src\OpcPackage.h" />

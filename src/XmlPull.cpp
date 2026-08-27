@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-08-27
  * Description: XML pull tokenizer: scanning, reference decoding, namespace scoping and the depth caps.
  * To Do: 1) Expose a prefix lookup once mc:Choice's Requires attribute has to be resolved at M7.
  *        2) Benchmark an AVX2 scan for the next '<' against the byte loop before adopting one (bd1/bd2).
@@ -95,6 +95,7 @@ static constexpr XML_NS_ENTRY XML_NS_URIS[] = {
     {"http://schemas.openxmlformats.org/officeDocument/2006/math", XML_NS_M},    // transitional
     {"http://purl.oclc.org/ooxml/officeDocument/math", XML_NS_M},                // strict
     {"urn:schemas-microsoft-com:vml", XML_NS_V},                                 // no strict form
+    {"urn:schemas-microsoft-com:office:office", XML_NS_O},                       // no strict form
     {"http://schemas.openxmlformats.org/markup-compatibility/2006", XML_NS_MC},  // not versioned
     {"http://schemas.openxmlformats.org/package/2006/content-types", XML_NS_CT}, // not versioned
     {"http://schemas.openxmlformats.org/package/2006/relationships", XML_NS_PR}  // not versioned

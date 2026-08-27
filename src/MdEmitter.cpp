@@ -399,11 +399,17 @@ static cbool MdEmphasisAsHtml(cui32 fmt, cbool safe) {
 // Which escaping context a span's own formatting puts its text in. Code wins over everything, because
 // nothing inside a code span is escaped at all; a raw-HTML wrapper takes MD_CONTEXT_HTML, because
 // GitHub-Flavored Markdown still parses the text between the tags as inline content.
-static cMD_CONTEXT MdSpanContext(cui32 fmt, cbool safe) {
+//
+// Text between a link's brackets takes MD_CONTEXT_LINK_TEXT, which is the inline set and one more
+// obligation -- the closing bracket may not appear unescaped -- and the inline set already escapes
+// that bracket unconditionally, so the two produce identical bytes today. Naming it anyway is the
+// point: M7 is where the context gets its first caller, and a later change to the link rules must
+// reach the text inside a link without having to find every place that meant it.
+static cMD_CONTEXT MdSpanContext(cui32 fmt, cbool safe, cbool inLink) {
    if(fmt & IR_FMT_CODE) return MD_CONTEXT_CODE_SPAN;
    if(fmt & (IR_FMT_SUPER | IR_FMT_SUB)) return MD_CONTEXT_HTML;
    if(MdStrikeAsHtml(fmt, safe) || MdEmphasisAsHtml(fmt, safe)) return MD_CONTEXT_HTML;
-   return MD_CONTEXT_INLINE;
+   return (inLink ? MD_CONTEXT_LINK_TEXT : MD_CONTEXT_INLINE);
 }
 
 //-- Spans
@@ -418,7 +424,8 @@ static cMD_CONTEXT MdSpanContext(cui32 fmt, cbool safe) {
 // strikethrough or the vertical alignment, because those wrap a code span perfectly well in GFM and
 // dropping them would lose formatting the reference never asked to lose. The strikethrough changes
 // spelling when it wraps anything at all -- see MdStrikeAsHtml for why "~~" cannot survive there.
-static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cui32 fmt, cbool dollars, cMD_EDGE ahead, cui32 nextFmt) {
+static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cui32 fmt, // The span itself
+                         cbool dollars, cMD_EDGE ahead, cui32 nextFmt, cbool inLink) {     // What stands around it
    if(!byteCount) return true;
 
    // A superscript or a subscript is an HTML element, and an element shields everything inside it from
@@ -447,7 +454,7 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
    cbool strikeHtml = MdStrikeAsHtml(fmt, safe);
    cbool emphHtml   = MdEmphasisAsHtml(fmt, safe);
 
-   cMD_CONTEXT context = MdSpanContext(fmt, safe);
+   cMD_CONTEXT context = MdSpanContext(fmt, safe, inLink);
 
    if(fmt == IR_FMT_NONE) return MdLineEscaped(emitter, bytes, byteCount, context, dollars);
    if(fmt & IR_FMT_SUPER) {
@@ -490,6 +497,60 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
    return true;
 }
 
+//-- Links, images and anchors
+
+// What an open link carries while the line it began on is still being assembled. A link may run over
+// a hard break, and Markdown has no way to spell one that does, so the emitter closes it at the end
+// of the line and opens it again on the next -- two links to one destination, which is what the
+// document showed and what a reader can click.
+struct MD_LINK {
+   ui32 destAt;    ///< Destination-arena offset of the link's destination
+   ui32 destBytes; ///< How many bytes it is
+   bool open;      ///< Whether a '[' has been written and not yet closed
+};
+
+typedef MD_LINK *const MD_LINKptrc;
+
+// Writes the closing half of a link: the bracket, and the destination in parentheses.
+//
+// The destination is percent-encoded rather than backslash-escaped, which is MD_CONTEXT_LINK_DEST and
+// CONVERSION_REFERENCE 4.1's rule for it: a backslash inside a destination is a literal byte of the
+// URL, so the only escape a destination has is the one the URL syntax already provides.
+static cbool MdCloseLink(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, MD_LINKptrc link) {
+   if(!link->open) return true;
+   link->open = false;
+   if(!MdLineText(emitter, "](")) return false;
+   if(!MdLineEscaped(emitter, IrDest(document, link->destAt), link->destBytes, MD_CONTEXT_LINK_DEST, false)) return false;
+   return MdLineText(emitter, ")");
+}
+
+// Writes one of M7's marker spans, and reports whether the buffer survived.
+//
+// An image is one piece: the exclamation mark, the alt text between brackets and the source between
+// parentheses. An anchor is the raw HTML element mapping row 22 asks for where a bookmark does not
+// sit at a heading; its name has already been sanitised to the bytes an attribute and a fragment can
+// both carry, so there is nothing left here to escape.
+static cbool MdWriteMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_SPANptr span, MD_LINKptrc link, cbool dollars) {
+   if(span->kind == IR_SPAN_LINK_START) {
+      if(!MdCloseLink(emitter, document, link)) return false;
+      link->destAt    = span->destAt;
+      link->destBytes = span->destBytes;
+      link->open      = true;
+      return MdLineText(emitter, "[");
+   }
+   if(span->kind == IR_SPAN_LINK_END) return MdCloseLink(emitter, document, link);
+   if(span->kind == IR_SPAN_ANCHOR) {
+      if(!MdLineText(emitter, "<a id=\"")) return false;
+      if(!MdLineAppend(emitter, IrDest(document, span->destAt), span->destBytes)) return false;
+      return MdLineText(emitter, "\"></a>");
+   }
+   if(!MdLineText(emitter, "![")) return false;
+   if(!MdLineEscaped(emitter, IrText(document, span->textAt), span->textBytes, MD_CONTEXT_ALT_TEXT, dollars)) return false;
+   if(!MdLineText(emitter, "](")) return false;
+   if(!MdLineEscaped(emitter, IrDest(document, span->destAt), span->destBytes, MD_CONTEXT_LINK_DEST, false)) return false;
+   return MdLineText(emitter, ")");
+}
+
 //-- Line groups
 
 // Where one line of a block ends: at the next hard break, or at the block's last span.
@@ -522,28 +583,46 @@ static cbool MdDollarPair(cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 fr
    return found >= 2u;
 }
 
+// Whether a span writes nothing at all, so that a lookahead must read straight past it.
+//
+// A muted span is one LinkResolve settled: a link with no destination or no content, an anchor
+// nothing points at. An empty text span is a run that carried properties and no text.
+static cbool MdSpanIsSilent(cIR_SPANptr span) {
+   if(span->flags & IR_SPAN_FLAG_MUTE) return true;
+   return span->kind == IR_SPAN_TEXT && !span->textBytes;
+}
+
 // The class of the character that will follow a span, which its closing delimiter has to flank against.
-// The next span's own first byte of *text*, whatever formatting stands in front of it. Where that
-// formatting is a delimiter of the same character the two runs merge, exactly as they do behind, and
-// the text really is what follows; where it is anything else the true neighbour is a delimiter or a
-// tag, which is punctuation, and reading the text instead can only make the verdict stricter. Nothing
-// after it at all is the end of the line, which CommonMark counts as whitespace.
+//
+// Where the next span is text, its own first byte, whatever formatting stands in front of it: where
+// that formatting is a delimiter of the same character the two runs merge, exactly as they do behind,
+// and the text really is what follows; where it is anything else the true neighbour is a delimiter or
+// a tag, which is punctuation, and reading the text instead can only make the verdict stricter.
+// Where the next span is one of M7's markers the answer is not a guess at all: a link start writes
+// '[', a link end ']', an image '!' and an anchor '<', and every one of those is punctuation. That is
+// why this had to be re-cut at M7 -- before it, every neighbour was text, and reading past a bracket
+// to the text behind it would report a letter where a bracket stands.
+// Nothing after it at all is the end of the line, which CommonMark counts as whitespace.
 static cMD_EDGE MdEdgeAhead(cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 from, cui32 to) {
    for(ui32 index = from; index < to; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
-      if(!span || span->kind != IR_SPAN_TEXT || !span->textBytes) continue;
+      if(!span || MdSpanIsSilent(span)) continue;
+      if(span->kind != IR_SPAN_TEXT) return MD_EDGE_PUNCT;
       return MdEdgeAt(IrText(document, span->textAt), span->textBytes);
    }
    return MD_EDGE_SPACE;
 }
 
 // The formatting the next text span carries, which is what says whether it will open with an asterisk.
+// Markup between the two ends the question: a delimiter run cannot merge with one on the far side of a
+// bracket, so anything but text ahead is reported as no formatting at all.
 static cui32 MdFormatAhead(cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 from, cui32 to) {
    for(ui32 index = from; index < to; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
-      if(!span || span->kind != IR_SPAN_TEXT || !span->textBytes) continue;
+      if(!span || MdSpanIsSilent(span)) continue;
+      if(span->kind != IR_SPAN_TEXT) return IR_FMT_NONE;
       return span->fmt;
    }
    return IR_FMT_NONE;
@@ -552,15 +631,27 @@ static cui32 MdFormatAhead(cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 f
 // Assembles one line out of a range of spans, trimming the padding at both of its ends. A line's own
 // leading padding goes because four leading spaces would be an indented code block, and its trailing
 // padding because two trailing spaces are Markdown's other spelling of a hard line break.
-static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 from, cui32 to) {
+static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 from, cui32 to, MD_LINKptrc link) {
    cbool dollars = MdDollarPair(document, block, from, to);
    bool  started = false;
 
    emitter->lineUsed = 0;
+   // A link the previous line left open is opened again here, so that a hyperlink broken by a hard
+   // break reaches the reader as two clickable halves rather than as one bracket with no partner.
+   if(link->open) {
+      if(!MdLineText(emitter, "[")) return false;
+      started = true;
+   }
    for(ui32 index = from; index < to; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
-      if(!span || span->kind != IR_SPAN_TEXT) continue;
+      if(!span || MdSpanIsSilent(span)) continue;
+      if(span->kind != IR_SPAN_TEXT) {
+         if(span->kind == IR_SPAN_BREAK) continue;
+         if(!MdWriteMarker(emitter, document, span, link, dollars)) return false;
+         started = true;
+         continue;
+      }
 
       cchptr bytes = IrText(document, span->textAt);
       ui64   start = 0;
@@ -573,9 +664,16 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
       cMD_EDGE ahead   = MdEdgeAhead(document, block, index + 1u, to);
       cui32    nextFmt = MdFormatAhead(document, block, index + 1u, to);
 
-      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt)) return false;
+      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt, link->open)) return false;
       started = true;
    }
+   // The line ends, so anything still open has to be closed on it. The trailing padding goes after
+   // that, because a destination never ends in one and closing first would leave the brackets behind
+   // a space the trim would then have to reach past.
+   cbool carried = link->open;
+
+   if(!MdCloseLink(emitter, document, link)) return false;
+   link->open = carried;
    while(emitter->lineUsed && MdIsPad(emitter->line[emitter->lineUsed - 1u])) emitter->lineUsed -= 1u;
    return true;
 }
@@ -584,17 +682,30 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
 // a hard break inside one becomes exactly one space rather than continuing anywhere -- which also makes
 // the whole block one scope for D12's dollar count, and tests/fixtures/dollars pins that it is.
 static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block) {
-   cbool dollars = MdDollarPair(document, block, 0, block->spanCount);
-   bool  started = false;
-   bool  pending = false;
+   cbool   dollars = MdDollarPair(document, block, 0, block->spanCount);
+   MD_LINK link    = {0, 0, false};
+   bool    started = false;
+   bool    pending = false;
 
    emitter->lineUsed = 0;
    for(ui32 index = 0; index < block->spanCount; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
-      if(!span) continue;
+      if(!span || MdSpanIsSilent(span)) continue;
       if(span->kind == IR_SPAN_BREAK) {
          if(started) pending = true;
+         continue;
+      }
+      if(span->kind != IR_SPAN_TEXT) {
+         // A heading is one line by construction, so a break inside it never separates a link from
+         // its own end: the marker is written where it stands and the space stands in for the break.
+         if(pending) {
+            while(emitter->lineUsed && MdIsPad(emitter->line[emitter->lineUsed - 1u])) emitter->lineUsed -= 1u;
+            if(!MdLineText(emitter, " ")) return false;
+            pending = false;
+         }
+         if(!MdWriteMarker(emitter, document, span, &link, dollars)) return false;
+         started = true;
          continue;
       }
 
@@ -618,9 +729,10 @@ static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document,
       cMD_EDGE ahead   = MdEdgeAhead(document, block, index + 1u, block->spanCount);
       cui32    nextFmt = MdFormatAhead(document, block, index + 1u, block->spanCount);
 
-      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt)) return false;
+      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt, link.open)) return false;
       started = true;
    }
+   if(!MdCloseLink(emitter, document, &link)) return false;
    while(emitter->lineUsed && MdIsPad(emitter->line[emitter->lineUsed - 1u])) emitter->lineUsed -= 1u;
    return true;
 }
@@ -642,13 +754,14 @@ static cbool MdBreakLine(MD_EMITTERptrc emitter) {
 // Emits a paragraph or a blockquote: one line per range of spans between hard breaks, each carrying the
 // block's prefix, and each put through the line-start pass so it cannot open a block it should not.
 static cbool MdEmitLines(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block, cchptr prefix) {
-   ui32 index = 0;
-   bool wrote = false;
+   MD_LINK link  = {0, 0, false};
+   ui32    index = 0;
+   bool    wrote = false;
 
    while(index < block->spanCount) {
       cui32 stop = MdLineEnd(document, block, index);
 
-      if(!MdAssembleLine(emitter, document, block, index, stop)) return false;
+      if(!MdAssembleLine(emitter, document, block, index, stop, &link)) return false;
       // A line that came to nothing is dropped along with the break that would have continued it: an
       // empty Markdown line ends the paragraph, so neither spelling of a hard break can carry one.
       if(emitter->lineUsed) {
@@ -774,6 +887,10 @@ static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32
             if(!MdAppendByte(emitter, '\n')) return false;
             continue;
          }
+         // Nothing but text reaches a fence. A link inside one has no brackets to write -- the
+         // content is literal -- and a picture has nothing a fence could show, so both are dropped
+         // and only the text a code paragraph is made of is written out.
+         if(span->kind != IR_SPAN_TEXT) continue;
          if(!MdAppendEscaped(emitter, IrText(document, span->textAt), span->textBytes, MD_CONTEXT_CODE_BLOCK)) return false;
       }
       if(!MdAppendByte(emitter, '\n')) return false;

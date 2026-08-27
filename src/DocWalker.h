@@ -3,12 +3,14 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: The document walk: WordprocessingML body content into the intermediate representation.
- * To Do: 1) Walk w:tbl into table blocks at M9, and w:hyperlink into link spans at M7.
+ * To Do: 1) Walk w:tbl into table blocks at M9.
  *        2) Run the field state machine over w:fldChar and w:instrText at M10, which today are skipped.
  *        3) Save and restore the paragraph classification around a nested paragraph when M9 walks a cell.
  *        4) Honour a deleted paragraph mark by joining the paragraph with the next one (M10).
+ *        5) Extract a text box's w:txbxContent in place (row 38), which today is inside a picture
+ *           container and so is scanned for a blip and otherwise dropped.
  * Dependencies: Ir.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -61,16 +63,26 @@ typedef const WALK_STATUS cWALK_STATUS;
 ///       policy of correctness rule 8; w:sdt, w:smartTag and w:customXml are transparent at every level;
 ///       mc:AlternateContent takes its mc:Fallback when it has one, because this build understands no
 ///       extension namespace and so understands no mc:Choice.
-/// @note What M6 does not walk yet, and skips whole rather than descending into: w:tbl, w:drawing,
-///       w:pict, the field elements, the note and comment references, w:sym and m:oMath. Each arrives
-///       with the milestone that can emit it, except m:oMath and w:sym, which have none yet and are the
-///       two places text is lost rather than merely unformatted -- both are DocWalker.cpp's To Do item
-///       3. An element this build has never heard of is skipped the same way, which is the OOXML
-///       compatibility model.
+/// @note What M7 does not walk yet, and skips whole rather than descending into: w:tbl, the field
+///       elements, the note and comment references, w:sym and m:oMath. Each arrives with the milestone
+///       that can emit it, except m:oMath and w:sym, which have none yet and are the two places text is
+///       lost rather than merely unformatted -- both are DocWalker.cpp's To Do item 3. An element this
+///       build has never heard of is skipped the same way, which is the OOXML compatibility model.
+/// @note What M7 adds. A w:hyperlink becomes a link span pair around its content, carrying the reference
+///       as written -- an r:id, a '#' and a w:anchor, or both joined by the '#' that will separate them
+///       in the output -- because ids are scoped per part and the lookup belongs where the part is known.
+///       A w:drawing, a w:pict, a w:object and an mc:AlternateContent standing in for one become a single
+///       image span: the markers inside identify the picture, so both markup families are looked for at
+///       once and the first alt text and the first relationship win, which is what emits a picture with
+///       two vocabularies exactly once. A container holding no picture reference -- a chart, a diagram,
+///       a drawn shape -- comes to nothing, because none of them has a bitmap the document could show.
+///       A w:bookmarkStart becomes an anchor span where it stood, or is held for the next block when it
+///       stood between two; LinkResolve mutes every anchor nothing points at, which is what keeps
+///       Word's own _GoBack out of the output without this having to know its name.
 /// @note What is descended into although its own meaning waits for a later milestone, because dropping
-///       it would lose text: w:hyperlink, w:fldSimple, the bidirectional containers w:dir and w:bdo, and
-///       a w:ruby's w:rubyBase -- its w:rt annotation is printed above the base text, which Markdown has
-///       nowhere to put.
+///       it would lose text: w:fldSimple, the bidirectional containers w:dir and w:bdo, and a w:ruby's
+///       w:rubyBase -- its w:rt annotation is printed above the base text, which Markdown has nowhere
+///       to put.
 /// @note A lone w:pBdr bottom -- or w:between -- on a paragraph that came to nothing is Word's
 ///       autoformatted horizontal rule, and the ruled mapping row 25 turns it into "---". "Lone" is
 ///       enforced: a paragraph wearing a box has borders on its other sides and is not a rule, and a

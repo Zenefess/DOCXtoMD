@@ -10,7 +10,7 @@ Inside an inline content control.
 
 A smart tag is transparent. So is custom XML.
 
-A link to somewhere keeps its text.
+A link to [somewhere](https://example.invalid/somewhere) keeps its text.
 
 7 is a cached field result.
 

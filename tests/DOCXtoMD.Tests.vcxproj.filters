@@ -32,6 +32,12 @@
     <ClCompile Include="..\src\Ir.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\LinkResolver.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\MediaExtractor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\MdEmitter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -62,6 +68,9 @@
     <ClCompile Include="unit\TestConvert.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="unit\TestLinkResolver.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="unit\TestDocWalker.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -69,6 +78,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="unit\TestMdEmitter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="unit\TestMediaExtractor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="unit\TestMdEscape.cpp">
@@ -113,6 +125,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Ir.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\LinkResolver.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\MediaExtractor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\src\MdEmitter.h">

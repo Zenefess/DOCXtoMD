@@ -3,10 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: The merge pass, the whitespace classes it hoists, and the span array it rebuilds.
  * To Do: 1) Reuse the replacement span array between documents once M13 gives a worker several.
  *        2) Fold a zero-width space into the hoisted set if a producer is found putting one in a run.
+ *        3) Stop merging across a field-result boundary when M10 introduces one, the way M7's link
+ *           markers already stop one crossing a hyperlink's brackets.
  * Dependencies: BuildGuards.h, Ir.h, RunCoalescer.h, typedefs.h, memory management.h, windows.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -112,6 +114,22 @@ static cbool RunJoinable(cIR_SPANptr first, cIR_SPANptr next) {
    return first->textAt + first->textBytes == next->textAt;
 }
 
+// Which of the spans already kept a new one may merge into: the last of them, stepping back over any
+// anchors that stand between.
+//
+// An anchor is the one span kind a merge sees straight through, and CONVERSION_REFERENCE 5.1 is why:
+// Word writes a bookmark -- _GoBack in every saved document, a _Toc target in every heading -- in the
+// middle of a paragraph, between two fragments of one word, and a merge that stopped there would emit
+// "**Hel****lo**" exactly as the run fragmentation itself does. A link's brackets and an image are the
+// opposite case and must stop one: text on either side of them is not adjacent in the output, and
+// joining it would carry bytes across a boundary the reader can see.
+static IR_SPANptr RunMergeInto(IR_SPANptr spans, cui32 first, cui32 used) {
+   ui32 at = used;
+
+   while(at > first && spans[at - 1u].kind == IR_SPAN_ANCHOR) --at;
+   return (at > first ? spans + at - 1u : nullptr);
+}
+
 // Merges each block's adjacent equal-formatting spans in place. Merging only ever shrinks a block, so it
 // stays inside the block's own range and no other block's spanAt moves.
 static void RunMergeBlocks(IR_DOCUMENTptrc document) {
@@ -127,7 +145,7 @@ static void RunMergeBlocks(IR_DOCUMENTptrc document) {
          // otherwise merge, which is the same defect wearing a different hat.
          if(span->kind == IR_SPAN_TEXT && !span->textBytes) continue;
 
-         IR_SPANptr previous = (kept ? document->spans + block->spanAt + kept - 1u : nullptr);
+         IR_SPANptr previous = RunMergeInto(document->spans + block->spanAt, 0, kept);
 
          if(previous && RunJoinable(previous, span)) {
             previous->textBytes += span->textBytes;
@@ -154,28 +172,36 @@ typedef RUN_REBUILD *const RUN_REBUILDptrc;
 // Appends one span to the replacement array, merging it into the one before it where that is sound. The
 // merge is what makes hoisting idempotent: the space taken off the end of a bold run and the plain run
 // that follows it are one span again, so nothing downstream sees a seam the source never had.
-static void RunEmit(RUN_REBUILDptrc rebuild, cIR_SPAN_KIND kind, cui32 textAt, cui32 textBytes, cui32 fmt) {
-   if(kind == IR_SPAN_TEXT && !textBytes) return;
+static void RunEmit(RUN_REBUILDptrc rebuild, cIR_SPANptr span) {
+   if(span->kind == IR_SPAN_TEXT && !span->textBytes) return;
 
-   IR_SPAN span = {textAt, textBytes, fmt, kind};
+   IR_SPANptr previous = RunMergeInto(rebuild->spans, rebuild->blockAt, rebuild->used);
 
-   if(rebuild->used > rebuild->blockAt) {
-      IR_SPANptr previous = rebuild->spans + rebuild->used - 1u;
-
-      if(RunJoinable(previous, &span)) {
-         previous->textBytes += textBytes;
-         return;
-      }
+   if(previous && RunJoinable(previous, span)) {
+      previous->textBytes += span->textBytes;
+      return;
    }
-   rebuild->spans[rebuild->used] = span;
+   rebuild->spans[rebuild->used] = *span;
    ++rebuild->used;
+}
+
+// Appends one piece of a span that hoisting has split, keeping everything but the two fields the split
+// changes. A piece of a text span carries no destination and no flags, but copying the whole record
+// rather than naming the fields is what stops a field added later being silently dropped here.
+static void RunEmitPiece(RUN_REBUILDptrc rebuild, cIR_SPANptr span, cui32 textAt, cui32 textBytes, cui32 fmt) {
+   IR_SPAN piece = *span;
+
+   piece.textAt    = textAt;
+   piece.textBytes = textBytes;
+   piece.fmt       = fmt;
+   RunEmit(rebuild, &piece);
 }
 
 // Rewrites one span into the replacement array, hoisting the whitespace at its ends out of its
 // formatting. A span with no formatting, and every span of a fenced block, is copied straight across.
 static void RunHoistSpan(RUN_REBUILDptrc rebuild, cIR_DOCUMENTptr document, cIR_SPANptr span, cbool literal) {
    if(span->kind != IR_SPAN_TEXT || span->fmt == IR_FMT_NONE || literal) {
-      RunEmit(rebuild, span->kind, span->textAt, span->textBytes, span->fmt);
+      RunEmit(rebuild, span);
       return;
    }
 
@@ -185,16 +211,16 @@ static void RunHoistSpan(RUN_REBUILDptrc rebuild, cIR_DOCUMENTptr document, cIR_
    // Nothing but whitespace: the bytes stay, the formatting goes. Delimiters around them would be an
    // empty emphasis span, which CONVERSION_REFERENCE 5.5 forbids and no renderer parses.
    if(lead >= span->textBytes) {
-      RunEmit(rebuild, IR_SPAN_TEXT, span->textAt, span->textBytes, IR_FMT_NONE);
+      RunEmitPiece(rebuild, span, span->textAt, span->textBytes, IR_FMT_NONE);
       return;
    }
 
    cui64 trail = RunTrailingSpace(bytes, span->textBytes, lead);
    cui32 core  = ui32(span->textBytes - lead - trail);
 
-   RunEmit(rebuild, IR_SPAN_TEXT, span->textAt, ui32(lead), IR_FMT_NONE);
-   RunEmit(rebuild, IR_SPAN_TEXT, ui32(span->textAt + lead), core, span->fmt);
-   RunEmit(rebuild, IR_SPAN_TEXT, ui32(span->textAt + lead + core), ui32(trail), IR_FMT_NONE);
+   RunEmitPiece(rebuild, span, span->textAt, ui32(lead), IR_FMT_NONE);
+   RunEmitPiece(rebuild, span, ui32(span->textAt + lead), core, span->fmt);
+   RunEmitPiece(rebuild, span, ui32(span->textAt + lead + core), ui32(trail), IR_FMT_NONE);
 }
 
 //== Entry points

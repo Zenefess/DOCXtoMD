@@ -3,13 +3,14 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-27
  * Description: The per-file conversion pipeline and the output-path derivation D7b's operand grammar needs.
- * To Do: 1) Extract referenced media beside the document when M7 adds MediaExtractor.
- *        2) Load numbering, footnotes and endnotes here as M8 and M10 give them models to go into.
- *        3) Hand this whole function to a worker when M13 adds the bounded pool (D6/D7a).
- *        4) Say so when -o named an existing directory and one input made it a file name, which today
+ * To Do: 1) Load numbering, footnotes and endnotes here as M8 and M10 give them models to go into.
+ *        2) Hand this whole function to a worker when M13 adds the bounded pool (D6/D7a).
+ *        3) Say so when -o named an existing directory and one input made it a file name, which today
  *           reports only that the file could not be created.
+ *        4) Pre-flight a --media-dir shared by several inputs, the way ConvertTargetTaken pre-flights
+ *           a shared output name; the architecture note gives both to Batch at M13.
  * Dependencies: CliOptions.h, Diag.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -87,3 +88,20 @@ cCONVERT_TARGET ConvertTargetTaken(cCLI_OPTIONSptr options, cui32 index);
 /// @note Pure: it touches no file and allocates nothing, which is what makes it the piece the unit tests
 ///       can hammer directly.
 cbool ConvertOutputPath(cwchptr inputPath, cwchptr outputPath, cbool outputIsDirectory, wchptrc dest, cui64 destChars);
+
+/// Derives the directory a document's pictures go in, and the path that reaches them from the document.
+/// @param documentPath  The document's own path: the .md, or the input when --stdout means there is no .md.
+/// @param named         The --media-dir value, or null when there was none.
+/// @param dir           Receives the directory, NUL-terminated, as a path Win32 will accept.
+/// @param dirChars      Characters available at dir, terminator included.
+/// @param prefix        Receives the UTF-8 path that stands in front of a file name in the document,
+///                      with the Windows separator folded to the one a URL uses, NUL-terminated.
+/// @param prefixChars   Bytes available at prefix, terminator included.
+/// @return true when both were derived, false when neither will fit or there is nothing to derive from.
+/// @note With no --media-dir the directory is the document's own stem with "_media" on it, sitting
+///       beside the document, so the path a reader follows is a single leaf and keeps working wherever
+///       the pair is moved to. With --media-dir the directory is exactly what was asked for and the
+///       path is the same string, which is relative to the working directory rather than to the
+///       document: the user chose it, and second-guessing a path they typed would be worse.
+/// @note Pure: it touches no file and allocates nothing.
+cbool ConvertMediaDir(cwchptr documentPath, cwchptr named, wchptrc dir, cui64 dirChars, chptrc prefix, cui64 prefixChars);

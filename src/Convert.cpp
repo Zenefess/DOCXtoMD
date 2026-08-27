@@ -3,13 +3,15 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
- * Description: One document end to end: container, package, styles, walk, coalesce, emit and write.
+ * Last Modified: 2026-08-27
+ * Description: One document end to end: container, package, styles, walk, resolve, emit and write.
  * To Do: 1) Report the offset UtfValidate found, which the package records and nothing prints yet.
  *        2) Write through a temporary file and rename over the target, once a partial write costs more.
- * Dependencies: BuildGuards.h, CliOptions.h, Convert.h, Diag.h, DocWalker.h, Ir.h, MdEmitter.h,
- *               OpcPackage.h, RunCoalescer.h, StyleModel.h, ZipReader.h, typedefs.h,
- *               memory management.h, stdio.h, windows.h
+ *        3) Derive a media directory that is relative to the document rather than to the working
+ *           directory when --media-dir names one, which today is the user's own business.
+ * Dependencies: BuildGuards.h, CliOptions.h, Convert.h, Diag.h, DocWalker.h, Ir.h, LinkResolver.h,
+ *               MdEmitter.h, MediaExtractor.h, OpcPackage.h, RunCoalescer.h, StyleModel.h, Utf.h,
+ *               ZipReader.h, typedefs.h, memory management.h, stdio.h, windows.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -27,10 +29,13 @@
 #include "Diag.h"
 #include "DocWalker.h"
 #include "Ir.h"
+#include "LinkResolver.h"
 #include "MdEmitter.h"
+#include "MediaExtractor.h"
 #include "OpcPackage.h"
 #include "RunCoalescer.h"
 #include "StyleModel.h"
+#include "Utf.h"
 #include "ZipReader.h"
 #include "Convert.h"
 
@@ -72,6 +77,27 @@ static cbool ConvertPutRun(wchptrc dest, cui64 destChars, ui64ptrc used, cwchptr
    return true;
 }
 
+// Where one path's own leaf begins and where its stem ends, which is what both a derived .md name and
+// a derived media directory are built from. One function rather than two, because the two names
+// have to agree: a document written as "report.md" must find its pictures in "report_media".
+//
+// The dot has to stand after the first character of the leaf, so a name that is nothing but an
+// extension -- ".docx" -- keeps its whole name and gains ".md" rather than becoming ".md".
+static void ConvertSplitPath(cwchptr path, ui64ptrc leafAt, ui64ptrc stemEnd) {
+   cui64 length = ConvertLength(path);
+   ui64  leaf   = 0;
+   ui64  stem   = length;
+
+   for(ui64 index = 0; index < length; ++index) {
+      if(ConvertIsSeparator(path[index])) leaf = index + 1u;
+   }
+   for(ui64 index = leaf + 1u; index < length; ++index) {
+      if(path[index] == L'.') stem = index;
+   }
+   *leafAt  = leaf;
+   *stemEnd = (stem > leaf ? stem : length);
+}
+
 cbool ConvertOutputPath(cwchptr inputPath, cwchptr outputPath, cbool outputIsDirectory, wchptrc dest, cui64 destChars) {
    ui64 used = 0;
 
@@ -93,21 +119,10 @@ cbool ConvertOutputPath(cwchptr inputPath, cwchptr outputPath, cbool outputIsDir
    }
    if(!inputPath || !inputPath[0]) return false;
 
-   cui64 length = ConvertLength(inputPath);
-   ui64  leafAt = 0;
+   ui64 leafAt  = 0;
+   ui64 stemEnd = 0;
 
-   for(ui64 index = 0; index < length; ++index) {
-      if(ConvertIsSeparator(inputPath[index])) leafAt = index + 1u;
-   }
-
-   ui64 stemEnd = length;
-
-   // The dot has to stand after the first character of the leaf, so a name that is nothing but an
-   // extension -- ".docx" -- keeps its whole name and gains ".md" rather than becoming ".md".
-   for(ui64 index = leafAt + 1u; index < length; ++index) {
-      if(inputPath[index] == L'.') stemEnd = index;
-   }
-   if(stemEnd <= leafAt) stemEnd = length;
+   ConvertSplitPath(inputPath, &leafAt, &stemEnd);
    if(outputPath) {
       if(!ConvertPutRun(dest, destChars, &used, outputPath, named)) return false;
       // A separator is added only when the directory does not already end in one. A trailing colon is
@@ -137,6 +152,49 @@ static cbool ConvertSamePath(cwchptr a, cwchptr b) {
       if(!left) return true;
       ++index;
    }
+}
+
+//-- The media directory
+
+// What is appended to a document's own stem to make the directory its pictures go in.
+static constexpr cwchptr CONVERT_MEDIA_SUFFIX = L"_media";
+
+// Transcodes a wide path into the UTF-8 form a Markdown destination is written in, folding the
+// Windows separator to the one a URL uses. A path that will not fit yields nothing, and the caller
+// then keeps the pictures out of the document rather than writing half a path into it.
+static cbool ConvertPathToUtf8(cwchptr path, chptrc dest, cui64 destBytes) {
+   ui64 produced = 0;
+
+   dest[0] = 0;
+   if(UtfFromWide(path, (ui8ptr)dest, destBytes - 1u, &produced) != UTF8_OK) return false;
+   dest[produced] = 0;
+   for(ui64 index = 0; index < produced; ++index) {
+      if(dest[index] == '\\') dest[index] = '/';
+   }
+   return true;
+}
+
+cbool ConvertMediaDir(cwchptr documentPath, cwchptr named, wchptrc dir, cui64 dirChars, chptrc prefix, cui64 prefixChars) {
+   ui64 used = 0;
+
+   dir[0]    = 0;
+   prefix[0] = 0;
+   if(named) {
+      if(!ConvertPutRun(dir, dirChars, &used, named, ConvertLength(named))) return false;
+      dir[used] = 0;
+      return used > 0 && ConvertPathToUtf8(dir, prefix, prefixChars);
+   }
+
+   ui64 leafAt  = 0;
+   ui64 stemEnd = 0;
+
+   ConvertSplitPath(documentPath, &leafAt, &stemEnd);
+   if(stemEnd <= leafAt) return false;
+   if(!ConvertPutRun(dir, dirChars, &used, documentPath, stemEnd)) return false;
+   if(!ConvertPutRun(dir, dirChars, &used, CONVERT_MEDIA_SUFFIX, ConvertLength(CONVERT_MEDIA_SUFFIX))) return false;
+   dir[used] = 0;
+   // The path written into the document is the leaf alone, because the directory sits beside the .md.
+   return ConvertPathToUtf8(dir + leafAt, prefix, prefixChars);
 }
 
 //-- Output
@@ -190,9 +248,11 @@ static csi32 ConvertStylesPart(OPC_PACKAGEptrc package, csi32 mainPart) {
    return OpcFindPart(package, record.part);
 }
 
-// Turns one opened package into Markdown. The package and the emitter are the caller's; this is only the
-// middle of the pipeline, so that every allocation has exactly one owner and one release path.
-static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_EMITTERptrc emitter) {
+// Turns one opened package into Markdown, and plans the media that goes beside it. The package, the
+// emitter and the plan are the caller's; this is only the middle of the pipeline, so that every
+// allocation has exactly one owner and one release path.
+static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_EMITTERptrc emitter, // The document
+                                 MEDIA_SETptrc media, cchptr mediaPrefix, cbool emitImages) {        // Its pictures
    csi32 mainPart = OpcMainPart(package);
 
    // The main part's relationships are read before anything else needs them, so that a malformed
@@ -241,8 +301,20 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
    // the emitter, and not inside either: the walker must not merge, because the fragmentation is what M6
    // is measured against, and the emitter must be able to assume a delimiter is safe around every
    // formatted span it is handed rather than testing each one.
-   cbool      coalesced = RunCoalesce(&document);
-   cMD_RESULT emitted   = (coalesced ? MdEmitDocument(emitter, &document) : MD_ERROR_MEMORY);
+   //
+   // Then the four M7 passes, in the one order that works. References resolve against the part they
+   // were read in; anchors resolve once every reference is a destination, because a heading's slug is
+   // numbered over the whole document; the media plan turns a part name into a path and can turn a
+   // picture back into its alt text; and dropping the emptied blocks last is what restores the
+   // invariant the emitter rests on, that every block it is handed produces at least one byte.
+   bool ready = RunCoalesce(&document);
+
+   if(ready) ready = LinkResolveRefs(&document, package, mainPart);
+   if(ready) ready = LinkResolveAnchors(&document);
+   if(ready) ready = MediaPlan(media, &document, package, mediaPrefix, emitImages);
+   if(ready) IrDropEmptyBlocks(&document);
+
+   cMD_RESULT emitted = (ready ? MdEmitDocument(emitter, &document) : MD_ERROR_MEMORY);
 
    IrClose(&document);
    if(emitted != MD_OK) {
@@ -313,10 +385,23 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
 
    OPC_PACKAGE package;
    MD_EMITTER  emitter;
+   MEDIA_SET   media;
+   wchar       mediaDir[CONVERT_MAX_PATH];
+   char        mediaPrefix[CONVERT_MAX_PATH];
    EXIT_CODE   verdict = EXIT_ALL_CONVERTED;
 
    MdOpen(&emitter, options->hardBreak);
+   MediaOpen(&media);
 
+   // Decision D13, recommended and not yet ruled: --stdout extracts its pictures too, beside the input,
+   // where the document itself would have gone. The alternative -- writing nothing to disk, which is
+   // the promise --stdout otherwise makes -- would make the two output paths produce *different*
+   // documents, and that they produce the same one is a property this converter is measured on.
+   // A user who does not want the files has --no-images; a note says where they went, on stderr, so
+   // that it cannot reach the pipe.
+   cwchptr beside = (options->toStdout ? inputPath : outputPath); // What the pictures sit next to
+   cbool   sited  = options->emitImages &&                        // The one long call: named arguments keep it inside e2
+                 ConvertMediaDir(beside, options->mediaDir, mediaDir, CONVERT_MAX_PATH, mediaPrefix, CONVERT_MAX_PATH);
    // The package borrows the reader, so both are released together on one path: a per-branch close would
    // turn the next branch anyone adds here into a use-after-free.
    cOPC_RESULT built = OpcOpen(&package, &reader);
@@ -325,11 +410,12 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
       DiagErrorText(OpcResultText(&package, built), inputPath);
       verdict = OpcExitCode(&package, built);
    } else {
-      verdict = ConvertPackage(&package, inputPath, &emitter);
+      verdict = ConvertPackage(&package, inputPath, &emitter, &media, mediaPrefix, sited);
    }
-   OpcClose(&package);
-   ZipClose(&reader);
    if(verdict != EXIT_ALL_CONVERTED) {
+      OpcClose(&package);
+      ZipClose(&reader);
+      MediaClose(&media);
       MdClose(&emitter);
       return verdict;
    }
@@ -349,6 +435,18 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
          DiagNoteText(note, outputPath);
       }
    }
+   // The pictures go out after the document, so a conversion that failed leaves nothing behind at all.
+   // They need the package still open, which is why it is closed here rather than above.
+   if(verdict == EXIT_ALL_CONVERTED) verdict = MediaWrite(&media, &package, mediaDir);
+   if(verdict == EXIT_ALL_CONVERTED && media.count && !options->quiet) {
+      char note[64];
+
+      snprintf(note, sizeof(note), "extracted %u image%s into", media.count, (media.count == 1u ? "" : "s"));
+      DiagNoteText(note, mediaDir);
+   }
+   OpcClose(&package);
+   ZipClose(&reader);
+   MediaClose(&media);
    MdClose(&emitter);
    return verdict;
 }

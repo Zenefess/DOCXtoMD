@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: Unit tests for the body walk: wrappers, run content, and the formatting bits on a span.
  * To Do: 1) Add table and hyperlink cases as M7 and M9 give the walker something to build from them.
  *        2) Drive the field state machine's traces once M10 replaces today's skip-it-whole handling.
@@ -36,7 +36,19 @@ static constexpr cchptr STYLE_QH_BODY = "<w:name w:val=\"heading 3\"/><w:basedOn
 
 // The root element every body below is wrapped in, with the two namespaces the cases need bound on it.
 static constexpr cchptr WALK_HEAD = "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
-                                    " xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><w:body>";
+                                    " xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\""
+                                    " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+                                    " xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\""
+                                    " xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\""
+                                    " xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\""
+                                    " xmlns:v=\"urn:schemas-microsoft-com:vml\""
+                                    " xmlns:o=\"urn:schemas-microsoft-com:office:office\"><w:body>";
+
+// The shortest DrawingML picture that carries an alt text and a relationship, and its VML twin.
+// Spelled in halves so no line reaches the column limit once the formatter has joined what it can.
+#define DRAWING_OPEN "<w:r><w:drawing><wp:inline><wp:docPr id=\"1\" "
+#define DRAWING_BLIP "/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip "
+#define DRAWING_SHUT "/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"
 static constexpr cchptr WALK_TAIL = "</w:body></w:document>";
 
 // Bytes before the terminator.
@@ -60,6 +72,8 @@ static void WalkAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr text)
 // a block, [text] is a text span, | is a hard break, and the letters before a bracket are its
 // formatting: b bold, i italic, s strike, ^ superscript, v subscript and c code. The other block
 // letters are Q for a blockquote, C for a line of a fenced block and R for a horizontal rule.
+// M7's three span kinds are L(dest) for a link start and L) for its end, I(source)[alt] for an
+// image, and N(name) for a bookmark anchor; a muted anchor -- one nothing links to -- is N-(name).
 static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
    ui64 used = 0;
 
@@ -86,6 +100,21 @@ static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
          if(span->kind == IR_SPAN_BREAK) {
             WalkAppend(dest, destBytes, &used, "|");
             continue;
+         }
+         if(span->kind == IR_SPAN_LINK_END) {
+            WalkAppend(dest, destBytes, &used, "L)");
+            continue;
+         }
+         if(span->kind == IR_SPAN_LINK_START || span->kind == IR_SPAN_IMAGE || span->kind == IR_SPAN_ANCHOR) {
+            WalkAppend(dest, destBytes, &used, (span->kind == IR_SPAN_IMAGE ? "I" : (span->kind == IR_SPAN_ANCHOR ? "N" : "L")));
+            if(span->flags & IR_SPAN_FLAG_MUTE) WalkAppend(dest, destBytes, &used, "-");
+            WalkAppend(dest, destBytes, &used, "(");
+            for(ui32 byte = 0; byte < span->destBytes && used + 1u < destBytes; ++byte) {
+               dest[used++] = IrDest(document, span->destAt)[byte];
+            }
+            dest[used] = 0;
+            WalkAppend(dest, destBytes, &used, ")");
+            if(span->kind != IR_SPAN_IMAGE) continue;
          }
          if(span->fmt & IR_FMT_BOLD) WalkAppend(dest, destBytes, &used, "b");
          if(span->fmt & IR_FMT_ITALIC) WalkAppend(dest, destBytes, &used, "i");
@@ -278,10 +307,12 @@ void TestDocWalker(void) {
    CHECK(TracedAs(nullptr, "<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>x</w:t></w:r></w:p></w:sdtContent></w:sdt>", "P{[x]}"));
    CHECK(TracedAs(nullptr, "<w:p><w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>x</w:t></w:r></w:sdtContent></w:sdt></w:p>", "P{[x]}"));
    CHECK(TracedAs(nullptr, "<w:sdt><w:sdtPr><w:alias w:val=\"a\"/></w:sdtPr></w:sdt>", ""));
+   // A bookmark is an anchor a link may target (mapping row 22), and its end marker is nothing at all:
+   // the start is where a link lands, and the range it covers has no Markdown equivalent.
    CHECK(TracedAs(nullptr,
                   "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"n\"/><w:r><w:t>x</w:t></w:r>"
                   "<w:bookmarkEnd w:id=\"0\"/></w:p>",
-                  "P{[x]}"));
+                  "P{N(n)[x]}"));
    CHECK(TracedAs(nullptr, "<w:p><w:proofErr w:type=\"spellStart\"/><w:r><w:t>x</w:t></w:r></w:p>", "P{[x]}"));
    CHECK(TracedAs(nullptr, "<w:p><w:hyperlink><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>", "P{[x]}"));
    CHECK(TracedAs(nullptr, "<w:p><w:fldSimple w:instr=\" PAGE \"><w:r><w:t>7</w:t></w:r></w:fldSimple></w:p>", "P{[7]}"));
@@ -539,6 +570,87 @@ void TestDocWalker(void) {
    CHECK(TracedAs(nullptr, "<w:p/>", ""));
    // But an empty paragraph wearing a code *style* is a blank line of the fence, so it keeps its block.
    CHECK(TracedAs(STYLE_CODE, "<w:p><w:pPr><w:pStyle w:val=\"SC\"/></w:pPr></w:p>", "C{}"));
+
+   CheckGroup("DocWalker: a hyperlink becomes a link span pair");
+   // CLAUDE.md's mapping rows 21 and 22. The walk records the reference as written and nothing more:
+   // ids are scoped to the part they were read in, so LinkResolve does the lookup where the part is
+   // known, and a w:anchor is a bookmark name that the same pass turns into a slug or an anchor.
+   CHECK(TracedAs(nullptr, "<w:p><w:hyperlink r:id=\"rId5\"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>", "P{L(rId5)[x]L)}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:hyperlink w:anchor=\"top\"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>", "P{L(#top)[x]L)}"));
+   // Both at once is a link into another document, so the relationship decides and the anchor becomes
+   // the fragment of whatever it resolves to. A relationship id cannot hold a '#', so the seam is safe.
+   CHECK(TracedAs(nullptr, "<w:p><w:hyperlink r:id=\"rId5\" w:anchor=\"top\"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>", "P{L(rId5#top)[x]L)}"));
+   // A hyperlink naming nothing is a container and nothing else -- its text is still content.
+   CHECK(TracedAs(nullptr, "<w:p><w:hyperlink><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>", "P{[x]}"));
+   // Links do not nest in Markdown, so the outer one is the one a reader was given.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:hyperlink r:id=\"rId5\"><w:hyperlink r:id=\"rId6\">"
+                  "<w:r><w:t>x</w:t></w:r></w:hyperlink></w:hyperlink></w:p>",
+                  "P{L(rId5)[x]L)}"));
+   // Formatting inside a hyperlink is content of the link, which is CONVERSION_REFERENCE 5.6.
+   CHECK(TracedAs(nullptr, "<w:p><w:hyperlink r:id=\"rId5\"><w:r><w:rPr><w:b/></w:rPr><w:t>x</w:t></w:r></w:hyperlink></w:p>", "P{L(rId5)b[x]L)}"));
+
+   CheckGroup("DocWalker: a picture becomes an image span");
+   // CONVERSION_REFERENCE 2.6: the alt text is the description first, the title behind it and the
+   // object's own name last, and the source is r:embed before r:link.
+   CHECK(TracedAs(nullptr, "<w:p>" DRAWING_OPEN "descr=\"A cat\"" DRAWING_BLIP "r:embed=\"rId2\"" DRAWING_SHUT "</w:p>", "P{I(rId2)[A cat]}"));
+   CHECK(TracedAs(nullptr, "<w:p>" DRAWING_OPEN "name=\"Picture 1\"" DRAWING_BLIP "r:embed=\"rId2\"" DRAWING_SHUT "</w:p>", "P{I(rId2)[Picture 1]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p>" DRAWING_OPEN "descr=\"A cat\" title=\"T\" name=\"N\"" // Every one at once
+                  DRAWING_BLIP "r:embed=\"rId2\"" DRAWING_SHUT "</w:p>",
+                  "P{I(rId2)[A cat]}"));
+   CHECK(TracedAs(nullptr, "<w:p>" DRAWING_OPEN "descr=\"A cat\"" DRAWING_BLIP "r:link=\"rId3\"" DRAWING_SHUT "</w:p>", "P{I(rId3)[A cat]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p>" DRAWING_OPEN "descr=\"A cat\"" DRAWING_BLIP // Both references at once
+                  "r:embed=\"rId2\" r:link=\"rId3\"" DRAWING_SHUT "</w:p>",
+                  "P{I(rId2)[A cat]}"));
+   // A line end in an attribute cannot survive into a link label, so it folds to one space.
+   CHECK(TracedAs(nullptr, "<w:p>" DRAWING_OPEN "descr=\"a&#10;b\"" DRAWING_BLIP "r:embed=\"rId2\"" DRAWING_SHUT "</w:p>", "P{I(rId2)[a b]}"));
+   // Legacy VML, which is what an older file and every mc:Fallback carries.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:pict><v:shape alt=\"A logo\">" // The shape carries the alt
+                  "<v:imagedata r:id=\"rId4\"/></v:shape></w:pict></w:r></w:p>",
+                  "P{I(rId4)[A logo]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:pict><v:shape>" // The image data carries it instead
+                  "<v:imagedata r:id=\"rId4\" o:title=\"A logo\"/></v:shape></w:pict></w:r></w:p>",
+                  "P{I(rId4)[A logo]}"));
+   // A container holding no picture reference at all -- a chart, a diagram, a drawn shape -- has no
+   // bitmap the document could show, so it is rewound to nothing and the text either side rejoins.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:t>a</w:t></w:r>" DRAWING_OPEN "descr=\"A chart\"/></wp:inline></w:drawing></w:r>"
+                  "<w:r><w:t>b</w:t></w:r></w:p>",
+                  "P{[a][b]}"));
+   // CONVERSION_REFERENCE 5.8's double-emit: both branches of an mc:AlternateContent describe the same
+   // picture, so reading both and keeping the first reference emits it exactly once.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><mc:AlternateContent><mc:Choice Requires=\"wps\"><w:drawing><wp:inline>"
+                  "<wp:docPr id=\"1\" descr=\"S\"/><a:graphic><a:graphicData><pic:pic><pic:blipFill>"
+                  "<a:blip r:embed=\"rId2\"/></pic:blipFill></pic:pic></a:graphicData></a:graphic>"
+                  "</wp:inline></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape alt=\"F\">"
+                  "<v:imagedata r:id=\"rId4\"/></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>",
+                  "P{I(rId2)[S]}"));
+
+   CheckGroup("DocWalker: a bookmark becomes an anchor");
+   // A bookmark inside a paragraph marks the point it stood at; one between paragraphs, which is legal
+   // and what a producer writes when a bookmark wraps whole blocks, attaches to the block that follows.
+   CHECK(TracedAs(nullptr, "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"a\"/><w:r><w:t>x</w:t></w:r></w:p>", "P{N(a)[x]}"));
+   CHECK(TracedAs(nullptr, "<w:bookmarkStart w:id=\"0\" w:name=\"a\"/><w:p><w:r><w:t>x</w:t></w:r></w:p>", "P{N(a)[x]}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:bookmarkStart w:id=\"0\" w:name=\"a\"/><w:bookmarkStart w:id=\"1\" w:name=\"b\"/>"
+                  "<w:p><w:r><w:t>x</w:t></w:r></w:p>",
+                  "P{N(a)N(b)[x]}"));
+   // A bookmark keeps a block alive, because it is a link target and something has to carry it. The
+   // resolution pass mutes the ones nothing points at, and the emptied blocks go then.
+   CHECK(TracedAs(nullptr, "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"a\"/></w:p>", "P{N(a)}"));
+   // A bookmark with no name at all is a range marker and nothing else.
+   CHECK(TracedAs(nullptr, "<w:p><w:bookmarkStart w:id=\"0\"/><w:r><w:t>x</w:t></w:r></w:p>", "P{[x]}"));
+   // A bookmark keeps a block alive without putting anything on the page, so mapping row 25's rule --
+   // a lone bottom border on a paragraph that "came to nothing" -- still sees a rule here.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr>"
+                  "<w:bookmarkStart w:id=\"0\" w:name=\"a\"/></w:p>",
+                  "P{N(a)}R{}"));
 
    CheckGroup("DocWalker: the horizontal rule of mapping row 25");
    CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>", "R{}"));

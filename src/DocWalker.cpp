@@ -3,14 +3,16 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: The body walk: wrappers, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
  *        2) Uppercase beyond ASCII and Latin-1 for w:caps, which needs Unicode's case tables.
  *        3) Linearize m:oMath and map w:sym, both of which are skipped whole and so lose their text.
- *        4) Cache more than one paragraph style if a document is ever found alternating between many.
- *        5) Read a paragraph's w:shd as the code hint CONVERSION_REFERENCE 2.3 names beside w:rFonts.
+ *        4) Read an mc:AlternateContent inside a run as a branch rather than as a picture, for the rare
+ *           one that carries text: today it is scanned for a picture reference and otherwise dropped.
+ *        5) Cache more than one paragraph style if a document is ever found alternating between many.
+ *        6) Read a paragraph's w:shd as the code hint CONVERSION_REFERENCE 2.3 names beside w:rFonts.
  * Dependencies: BuildGuards.h, DocWalker.h, Ir.h, OpcPackage.h, StyleModel.h, Utf.h, XmlPull.h,
  *               typedefs.h, memory management.h, windows.h
  * ISA: Scalar
@@ -57,22 +59,38 @@ enum DOC_LEVEL : si32 {
 
 typedef const DOC_LEVEL cDOC_LEVEL;
 
+// How many bytes of one bookmark name are kept when it has to be held across the start of a block. Word
+// caps a bookmark at forty characters and generates its own -- _GoBack, _Toc0000 -- well inside that.
+constexpr cui64 DOC_ANCHOR_BYTES = 128u;
+
+// How many bookmarks standing between blocks are held for the block that follows them. A bookmark is
+// almost always written inside the paragraph it marks; this is the legal-but-rare other placement, and
+// the ceiling is what stops a part making the walker's own stack frame a function of its content.
+constexpr cui32 DOC_PENDING_ANCHORS = 8u;
+
 // Everything one walk carries. One worker owns one of these on its own stack and never shares it (D6).
 struct DOC_CONTEXT {
-   IR_DOCUMENTptr  document;                       ///< Where blocks and spans are being built
-   cSTYLE_MODELptr styles;                         ///< The resolved style cache
-   XML_READERptr   reader;                         ///< The tokenizer over the part
-   si32            cachedStyle;                    ///< What cachedId resolved to, or -1
-   char            cachedId[STYLE_MAX_NAME_BYTES]; ///< The last w:pStyle or w:rStyle value looked up
-   bool            sawText;                        ///< Whether the paragraph being walked produced any text
-   bool            allMono;                        ///< Whether every text-bearing run of it was monospace
-   bool            memory;                         ///< Whether an allocation failed; sticky once set
+   IR_DOCUMENTptr  document;                                       ///< Where blocks and spans are being built
+   cSTYLE_MODELptr styles;                                         ///< The resolved style cache
+   XML_READERptr   reader;                                         ///< The tokenizer over the part
+   si32            cachedStyle;                                    ///< What cachedId resolved to, or -1
+   char            cachedId[STYLE_MAX_NAME_BYTES];                 ///< The last w:pStyle or w:rStyle value looked up
+   char            pending[DOC_PENDING_ANCHORS][DOC_ANCHOR_BYTES]; ///< Bookmarks awaiting the next block
+   ui64            pendingLength[DOC_PENDING_ANCHORS];             ///< How long each of them is
+   ui32            pendingCount;                                   ///< How many are waiting
+   bool            inLink;                                         ///< Whether a hyperlink is open around the content
+   bool            sawText;                                        ///< Whether the paragraph being walked produced any text
+   bool            allMono;                                        ///< Whether every text-bearing run of it was monospace
+   bool            memory;                                         ///< Whether an allocation failed; sticky once set
 };
 
 typedef DOC_CONTEXT *const DOC_CONTEXTptrc;
 
 static cbool DocWalkChildren(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 paragraphStyle, cbool heading);
 static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 paragraphStyle, cbool heading);
+// A picture is run content, so DocWalkRun reaches it; it is declared beside the link and bookmark
+// helpers it belongs with, further down, rather than being lifted above the run walk it serves.
+static cbool DocWalkImage(DOC_CONTEXTptrc context);
 
 //-- Small helpers
 
@@ -91,6 +109,15 @@ static cui64 DocCopyView(cXML_TEXT text, chptrc dest, cui64 destBytes) {
    }
    dest[used] = 0;
    return used;
+}
+
+// Whether the element the reader is on is one of a nullptr-terminated table of names, in one namespace.
+// Matching by name is what keeps an element this build has never heard of from voting on anything.
+static cbool DocIsNamed(XML_READERptrc reader, cXML_NS space, cchptrcptr names) {
+   for(ui64 index = 0; names[index]; ++index) {
+      if(XmlIsElement(reader, space, names[index])) return true;
+   }
+   return false;
 }
 
 // Resolves a style identifier, remembering the last one. Documents reuse a handful of styles over
@@ -318,6 +345,11 @@ static cbool DocReadTextElement(DOC_CONTEXTptrc context, cbool upper, boolptrc s
 }
 
 // Walks one w:r, emitting spans for whatever content it carries.
+// The four shapes a picture arrives in. mc:AlternateContent belongs on the list because inside a run
+// it is what Word writes around a drawing that has a VML fallback -- but it is matched separately,
+// because it is the one of the four that is not in the WordprocessingML namespace.
+static constexpr cchptr DOC_PICTURES[] = {"drawing", "pict", "object", nullptr};
+
 static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool heading) {
    cui32            depthHere = context->reader->depth;
    STYLE_DIRECT_RUN direct;
@@ -426,11 +458,255 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
          if(!XmlSkipElement(context->reader)) return false;
          continue;
       }
-      // Everything else a run can hold belongs to a later milestone: w:drawing and w:pict to M7, the
-      // field and note elements to M10, w:sym to a symbol table. w:instrText in particular must never
-      // be emitted as text, and skipping it whole is how that is kept true.
+      // A picture, in any of the four shapes one arrives in. Skipping an mc:AlternateContent whole --
+      // which is what happened before M7 -- lost the picture in both of its branches at once.
+      cbool picture = DocIsNamed(context->reader, XML_NS_W, DOC_PICTURES) || XmlIsElement(context->reader, XML_NS_MC, "AlternateContent");
+
+      if(picture) {
+         // A picture ends the text span beside it, and votes on nothing: row 12 asks whether every
+         // text-bearing run is monospace, and a run bearing a picture bears no text at all.
+         textOpen = false;
+         if(!DocWalkImage(context)) return false;
+         continue;
+      }
+      // Everything else a run can hold belongs to a later milestone: the field and note elements to
+      // M10, w:sym to a symbol table. w:instrText in particular must never be emitted as text, and
+      // skipping it whole is how that is kept true.
       if(!XmlSkipElement(context->reader)) return false;
    }
+}
+
+//-- Links, images and bookmarks
+
+// Where a drawing object's alt text is looked for, in the order CONVERSION_REFERENCE 2.6 prefers: the
+// description first, the title behind it, and the object's own name last. All three are unprefixed.
+static constexpr cchptr DOC_DRAWING_ALT[] = {"descr", "title", "name", nullptr};
+
+// The same for VML, whose shape carries its description in an unprefixed alt or title...
+static constexpr cchptr DOC_VML_ALT[] = {"alt", "title", nullptr};
+
+// ...and whose image data carries it in the Office extension namespace instead.
+static constexpr cchptr DOC_VML_TITLE[] = {"title", nullptr};
+
+// Which relationship a DrawingML blip is drawn from. r:embed names a part inside the package and r:link
+// an external one; a blip may carry both, in which case the embedded copy is the one to prefer.
+static constexpr cchptr DOC_BLIP_REF[] = {"embed", "link", nullptr};
+
+// The same for VML, where the one attribute serves both and r:href is the external form.
+static constexpr cchptr DOC_IMAGEDATA_REF[] = {"id", "href", nullptr};
+
+// The run containers whose own meaning waits for a later milestone but whose text is content now.
+static constexpr cchptr DOC_CONTAINERS[] = {"fldSimple", "dir", "bdo", nullptr};
+
+// The VML shapes that can carry a picture, and so an alt text worth reading.
+static constexpr cchptr DOC_VML_SHAPES[] = {"shape", "rect", "roundrect", "oval", "shapetype", nullptr};
+
+// Appends an attribute value to the span being built, folding every line end and tab to one space.
+//
+// Alt text becomes a Markdown link label and a label cannot hold a line end, which is the whole of
+// CONVERSION_REFERENCE 2.6's "sanitize ] and newlines" that is not MdEscape's business: the bracket is
+// escaped by MD_CONTEXT_ALT_TEXT, and this is the other half.
+static cbool DocAppendFlat(DOC_CONTEXTptrc context, cXML_TEXT value) {
+   ui64 at = 0;
+
+   while(at < value.length) {
+      ui64 run = at;
+
+      while(run < value.length && value.bytes[run] != '\r' && value.bytes[run] != '\n' && value.bytes[run] != '\t') ++run;
+      if(run > at && !IrAppendText(context->document, value.bytes + at, run - at)) return false;
+      at = run;
+      if(at >= value.length) break;
+      while(at < value.length && (value.bytes[at] == '\r' || value.bytes[at] == '\n' || value.bytes[at] == '\t')) ++at;
+      if(!IrAppendText(context->document, " ", 1u)) return false;
+   }
+   return true;
+}
+
+// Takes the first of a set of attributes the element carries as the image's alt text, once only.
+static cbool DocTakeAlt(DOC_CONTEXTptrc context, cXML_NS space, cchptrcptr names, boolptrc taken) {
+   if(*taken) return true;
+   for(ui64 index = 0; names[index]; ++index) {
+      cXML_TEXT value = XmlAttribute(context->reader, space, names[index]);
+
+      if(!value.bytes || !value.length) continue;
+      if(!DocAppendFlat(context, value)) return false;
+      *taken = true;
+      return true;
+   }
+   return true;
+}
+
+// Takes the first of a set of relationship attributes as the image's source, once only.
+static cbool DocTakeRef(DOC_CONTEXTptrc context, cchptrcptr names, boolptrc taken) {
+   if(*taken) return true;
+   for(ui64 index = 0; names[index]; ++index) {
+      cXML_TEXT value = XmlAttribute(context->reader, XML_NS_R, names[index]);
+
+      if(!value.bytes || !value.length) continue;
+      if(!IrAppendDest(context->document, value.bytes, value.length)) return false;
+      *taken = true;
+      return true;
+   }
+   return true;
+}
+
+// Walks a picture container -- w:drawing, w:pict, w:object, or an mc:AlternateContent standing in for
+// one -- into a single image span, or into nothing at all.
+//
+// One scan serves all four because a picture is identified by the markers inside it rather than by the
+// element it arrived in, and both markup families are looked for at once. The first alt text found wins
+// and so does the first relationship, which is what makes mc:AlternateContent right here without a
+// branch selector: its mc:Choice and its mc:Fallback describe the *same* picture in two vocabularies, so
+// reading both and keeping the first reference emits it exactly once -- the double-emit
+// CONVERSION_REFERENCE 5.8 warns about, closed by arithmetic rather than by understanding the branches.
+// A container holding no picture reference at all -- a chart, a SmartArt diagram, a drawn shape -- is
+// rewound to nothing, because none of them has a bitmap the document could show.
+static cbool DocWalkImage(DOC_CONTEXTptrc context) {
+   cui32    depthHere = context->reader->depth;
+   cIR_MARK mark      = IrMark(context->document);
+   bool     altTaken  = false;
+   bool     refTaken  = false;
+
+   // An image carries no formatting of its own: bold around a picture renders nothing, and a delimiter
+   // pair with an image between it is one more thing for the flanking rules to fail on.
+   if(!IrAddSpan(context->document, IR_SPAN_IMAGE, IR_FMT_NONE)) {
+      context->memory = true;
+      return false;
+   }
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_WP, "docPr")) {
+         if(!DocTakeAlt(context, XML_NS_NONE, DOC_DRAWING_ALT, &altTaken)) return false;
+         continue;
+      }
+      if(XmlIsElement(context->reader, XML_NS_A, "blip")) {
+         if(!DocTakeRef(context, DOC_BLIP_REF, &refTaken)) return false;
+         continue;
+      }
+      if(XmlIsElement(context->reader, XML_NS_V, "imagedata")) {
+         if(!DocTakeAlt(context, XML_NS_O, DOC_VML_TITLE, &altTaken)) return false;
+         if(!DocTakeRef(context, DOC_IMAGEDATA_REF, &refTaken)) return false;
+         continue;
+      }
+      if(!DocIsNamed(context->reader, XML_NS_V, DOC_VML_SHAPES)) continue;
+      if(!DocTakeAlt(context, XML_NS_NONE, DOC_VML_ALT, &altTaken)) return false;
+   }
+   if(!refTaken) {
+      IrRewind(context->document, mark);
+      return true;
+   }
+
+   IR_SPANptr span = IrSpanMutable(context->document, mark.spanAt);
+
+   // The reference is a relationship id and nothing more until LinkResolve has looked it up, which is
+   // where correctness rule 1 is kept for content: ids are scoped to the part they were found in, so
+   // the walk records what it read and the resolution happens where the part is known.
+   if(span) span->flags = IR_SPAN_FLAG_REL;
+   return true;
+}
+
+// Walks a w:hyperlink into a link span pair wrapped around its content.
+//
+// The destination recorded here is the reference as written, not a URL: an r:id is a relationship id
+// that LinkResolve turns into one, and a w:anchor is a bookmark name that the same pass turns into a
+// heading slug or an explicit anchor. Where both are present the relationship decides and the anchor
+// becomes the fragment of whatever it resolves to, which is what a link into another document means;
+// the two are joined with the '#' that will separate them in the output, and a relationship id cannot
+// hold one, so splitting them again is unambiguous.
+static cbool DocWalkHyperlink(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool heading) {
+   cXML_TEXT reference = XmlAttribute(context->reader, XML_NS_R, "id");
+   cXML_TEXT anchor    = XmlAttribute(context->reader, XML_NS_W, "anchor");
+   cbool     related   = (reference.bytes != nullptr && reference.length != 0);
+   cbool     internal  = (anchor.bytes != nullptr && anchor.length != 0);
+
+   // A hyperlink naming nothing is a container and nothing else, and so is one inside another: links do
+   // not nest in Markdown, and the outer one is the one a reader was given.
+   if((!related && !internal) || context->inLink) return DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
+   if(!IrAddSpan(context->document, IR_SPAN_LINK_START, IR_FMT_NONE)) {
+      context->memory = true;
+      return false;
+   }
+   if(related && !IrAppendDest(context->document, reference.bytes, reference.length)) {
+      context->memory = true;
+      return false;
+   }
+   if(internal) {
+      if(!IrAppendDest(context->document, "#", 1u) || !IrAppendDest(context->document, anchor.bytes, anchor.length)) {
+         context->memory = true;
+         return false;
+      }
+   }
+
+   IR_SPANptr span = IrSpanMutable(context->document, IrSpanCount(context->document) - 1u);
+
+   if(span && related) span->flags = IR_SPAN_FLAG_REL;
+   context->inLink = true;
+
+   cbool walked = DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
+
+   context->inLink = false;
+   if(!walked) return false;
+   if(!IrAddSpan(context->document, IR_SPAN_LINK_END, IR_FMT_NONE)) {
+      context->memory = true;
+      return false;
+   }
+   return true;
+}
+
+// Records a w:bookmarkStart as an anchor a link may target.
+//
+// Inside a paragraph the anchor is a span at the point the bookmark stood. Between paragraphs -- legal,
+// and what a producer writes when a bookmark wraps whole blocks -- there is no block to put one in, so
+// the name is held and attached to the next block that opens. Nothing is filtered out here, _GoBack
+// included: LinkResolve mutes every anchor nothing points at, which covers the generated ones without
+// this having to know their names.
+static cbool DocReadBookmark(DOC_CONTEXTptrc context, cDOC_LEVEL level) {
+   cXML_TEXT name = XmlAttribute(context->reader, XML_NS_W, "name");
+
+   if(name.bytes && name.length) {
+      if(level == DOC_LEVEL_RUN) {
+         if(!IrAddSpan(context->document, IR_SPAN_ANCHOR, IR_FMT_NONE) || !IrAppendDest(context->document, name.bytes, name.length)) {
+            context->memory = true;
+            return false;
+         }
+      } else if(context->pendingCount < DOC_PENDING_ANCHORS) {
+         context->pendingLength[context->pendingCount] = DocCopyView(name, context->pending[context->pendingCount], DOC_ANCHOR_BYTES);
+         ++context->pendingCount;
+      }
+   }
+   return XmlSkipElement(context->reader);
+}
+
+// Attaches every bookmark that stood between blocks to the block that has just been opened.
+static cbool DocFlushBookmarks(DOC_CONTEXTptrc context) {
+   for(ui32 index = 0; index < context->pendingCount; ++index) {
+      cchptr name = context->pending[index];
+
+      if(!IrAddSpan(context->document, IR_SPAN_ANCHOR, IR_FMT_NONE) || !IrAppendDest(context->document, name, context->pendingLength[index])) {
+         context->pendingCount = 0;
+         context->memory       = true;
+         return false;
+      }
+   }
+   context->pendingCount = 0;
+   return true;
+}
+
+// Whether a block holds anything a reader would see, rather than an anchor and nothing else.
+//
+// A bookmark keeps a block alive, because it is a link target and something has to carry it. Mapping
+// row 25's horizontal rule asks a different question -- whether the paragraph "came to nothing" -- and
+// a paragraph holding one bookmark did.
+// The span range is the mark's rather than the block's, because a block's own spanAt and spanCount are
+// not written until IrEndBlock: while a paragraph is still being walked, its spans are simply every
+// span added since it began.
+static cbool DocBlockIsInk(cIR_DOCUMENTptr document, cIR_MARK mark) {
+   if(mark.block < 0) return false; // Nothing was ever begun
+   return IrHasInk(document, mark.spanAt, IrSpanCount(document));
 }
 
 //-- Paragraphs
@@ -442,13 +718,8 @@ static constexpr cchptr DOC_BORDERS_UNDER[]  = {"bottom", "between", nullptr};
 static constexpr cchptr DOC_BORDERS_BESIDE[] = {"top", "left", "right", "bar", nullptr};
 
 // Whether the element the reader is on is one of a paragraph's border names, in the WordprocessingML
-// namespace. Matching by name is what keeps an element this build has never heard of from voting.
-static cbool DocIsBorder(XML_READERptrc reader, cchptrcptr names) {
-   for(ui64 index = 0; names[index]; ++index) {
-      if(XmlIsElement(reader, XML_NS_W, names[index])) return true;
-   }
-   return false;
-}
+// namespace, which is the one namespace a border may be spelled in.
+static cbool DocIsBorder(XML_READERptrc reader, cchptrcptr names) { return DocIsNamed(reader, XML_NS_W, names); }
 
 // Reads the w:pBdr the reader is on, and reports whether its borders are the pattern Word writes for an
 // autoformatted horizontal rule: a bottom or a between border and no other (CONVERSION_REFERENCE 2.4).
@@ -535,7 +806,7 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    cui32         depthHere = context->reader->depth;
    si32          style     = StyleDefaultParagraph(context->styles);
    si32          outline   = -1;
-   IR_MARK       mark      = {-1, 0, 0};
+   IR_MARK       mark      = {-1, 0, 0, 0};
    IR_BLOCK_KIND kind      = IR_BLOCK_PARAGRAPH;
    ui8           level     = 0;
    bool          rule      = false;
@@ -577,6 +848,7 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
             context->memory = true;
             return false;
          }
+         if(!DocFlushBookmarks(context)) return false;
       }
       // A paragraph's children are run-level content, and every transparent wrapper is handled there.
       if(!DocDispatchChild(context, DOC_LEVEL_RUN, style, head)) {
@@ -601,9 +873,11 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
          context->memory = true;
          return false;
       }
+      if(!DocFlushBookmarks(context)) return false;
    }
 
    bool kept = false;
+   bool ink  = false;
 
    if(begun) {
       // CONVERSION_REFERENCE row 12's second detection: a paragraph whose every text-bearing run is set
@@ -615,13 +889,16 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
 
          if(block) block->kind = IR_BLOCK_CODE;
       }
+      ink  = DocBlockIsInk(context->document, mark);
       kept = IrEndBlock(context->document, mark);
    }
    context->sawText = outerText;
    context->allMono = outerMono;
    // Row 25: a lone bottom border on a paragraph that came to nothing is Word's autoformatted horizontal
    // rule. The test is "came to nothing" and not "has no runs", so a paragraph of empty runs is one too.
-   if(ok && rule && !kept) {
+   // A bookmark keeps a block alive without putting anything on the page, so the rule's test is what
+   // the block would have *shown* rather than whether it survived being ended.
+   if(ok && rule && (!kept || !ink)) {
       cIR_MARK ruled = IrBeginBlock(context->document, IR_BLOCK_RULE, 0);
 
       if(ruled.block < 0) {
@@ -733,6 +1010,9 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
 
    if(deleted) return XmlSkipElement(context->reader);
    if(inserted || tagged) return DocWalkChildren(context, level, paragraphStyle, heading);
+   // A bookmark is a range marker rather than content, and it appears at both levels for the same
+   // reason every wrapper does: a bookmark may wrap whole paragraphs or part of one.
+   if(XmlIsElement(context->reader, XML_NS_W, "bookmarkStart")) return DocReadBookmark(context, level);
    if(XmlIsElement(context->reader, XML_NS_W, "sdt")) return DocWalkStructuredTag(context, level, paragraphStyle, heading);
    if(XmlIsElement(context->reader, XML_NS_MC, "AlternateContent")) return DocWalkAlternate(context, level, paragraphStyle, heading);
    if(level == DOC_LEVEL_BLOCK) {
@@ -742,12 +1022,10 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
       return XmlSkipElement(context->reader);
    }
    if(XmlIsElement(context->reader, XML_NS_W, "r")) return DocWalkRun(context, paragraphStyle, heading);
-   // A hyperlink and a simple field are run containers: their brackets and their field semantics arrive
-   // at M7 and M10, but their text is content now and dropping it would lose part of the document.
-   // w:dir and w:bdo are bidirectional run containers and nothing else; w:hyperlink and w:fldSimple get
-   // their brackets and their field semantics at M7 and M10, but all four hold text that is content now.
-   cbool container = XmlIsElement(context->reader, XML_NS_W, "hyperlink") || XmlIsElement(context->reader, XML_NS_W, "fldSimple") ||
-                     XmlIsElement(context->reader, XML_NS_W, "dir") || XmlIsElement(context->reader, XML_NS_W, "bdo");
+   if(XmlIsElement(context->reader, XML_NS_W, "hyperlink")) return DocWalkHyperlink(context, paragraphStyle, heading);
+   // w:dir and w:bdo are bidirectional run containers and nothing else; w:fldSimple gets its field
+   // semantics at M10. All three hold text that is content now, so all three are descended into.
+   cbool container = DocIsNamed(context->reader, XML_NS_W, DOC_CONTAINERS);
 
    if(container) return DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
    if(XmlIsElement(context->reader, XML_NS_W, "ruby")) return DocWalkRuby(context, paragraphStyle, heading);
@@ -797,14 +1075,16 @@ cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cui8
 
    DOC_CONTEXT context;
 
-   context.document    = document;
-   context.styles      = styles;
-   context.reader      = &reader;
-   context.cachedStyle = -1;
-   context.cachedId[0] = 0;
-   context.sawText     = false;
-   context.allMono     = true;
-   context.memory      = false;
+   context.document     = document;
+   context.styles       = styles;
+   context.reader       = &reader;
+   context.cachedStyle  = -1;
+   context.cachedId[0]  = 0;
+   context.pendingCount = 0;
+   context.inLink       = false;
+   context.sawText      = false;
+   context.allMono      = true;
+   context.memory       = false;
 
    bool sawDocument = false;
    bool sawBody     = false;

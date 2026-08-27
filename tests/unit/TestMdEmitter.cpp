@@ -3,12 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: Unit tests for the arena, the blank-line discipline, delimiters and every block kind.
- * To Do: 1) Add the link and image cases when M7 gives the emitter a destination to write.
- *        2) Add the pipe-table cases when M9 gives a cell a line of its own.
- * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, MdEmitter.h, RunCoalescer.h,
- *               StyleModel.h, typedefs.h
+ * To Do: 1) Add the pipe-table cases when M9 gives a cell a line of its own.
+ *        2) Drive an image with a real destination once a package can be built without an archive;
+ *           with no package a reference resolves to nothing, so only the anchor half is reachable here.
+ * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, LinkResolver.h, MdEmitter.h,
+ *               RunCoalescer.h, StyleModel.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -20,6 +21,7 @@
 #include "Check.h"
 #include "DocWalker.h"
 #include "Ir.h"
+#include "LinkResolver.h"
 #include "MdEmitter.h"
 #include "RunCoalescer.h"
 #include "StyleModel.h"
@@ -38,6 +40,9 @@ static constexpr cchptr STYLE_CODE  = "<w:style w:type=\"paragraph\" w:styleId=\
 #define IN_CODE    "<w:pPr><w:pStyle w:val=\"SC\"/></w:pPr>"
 
 static constexpr cchptr STYLE_SPAN = "<w:style w:type=\"character\" w:styleId=\"CC\"><w:name w:val=\"Code\"/></w:style>";
+
+// A heading style, for the cases that have to show a slug the renderer will generate for itself.
+static constexpr cchptr STYLE_H1 = "<w:style w:type=\"paragraph\" w:styleId=\"H1\"><w:name w:val=\"heading 1\"/></w:style>";
 
 // The root element every body below is wrapped in, kept out of the helper so no line reaches the
 // column limit once the formatter has joined what it can.
@@ -111,11 +116,19 @@ static cbool ConvertsWith(cchptr styleBody, cchptr body, cchptr wanted, cHARD_BR
    cWALK_STATUS status  = DocWalkBytes(&document, &styles, (cui8ptr)part, used);
    bool         matched = false;
 
-   // The coalescing pass stands between the walk and the emitter in Convert.cpp, so it stands there
-   // here too: the emitter's contract since M6 is that every formatted span it is handed is already
-   // merged and already trimmed, and testing it against an unmerged document would test a shape the
-   // program never produces.
-   if(status.result == WALK_OK && RunCoalesce(&document) && MdEmitDocument(&emitter, &document) == MD_OK) {
+   // Every pass Convert.cpp runs between the walk and the emitter runs here too, in the same order:
+   // the emitter's contract since M6 is that every formatted span it is handed is already merged and
+   // already trimmed, and since M7 that every link it is handed has a destination and every block it
+   // is handed produces a byte. Testing it against a document no pass had been over would test a
+   // shape the program never produces. There is no package here, so a relationship resolves to
+   // nothing and only a w:anchor link reaches the emitter with a destination -- which is the half
+   // that needs no archive to be worth testing.
+   bool ready = status.result == WALK_OK && RunCoalesce(&document);
+
+   if(ready) ready = LinkResolveRefs(&document, nullptr, -1);
+   if(ready) ready = LinkResolveAnchors(&document);
+   if(ready) IrDropEmptyBlocks(&document);
+   if(ready && MdEmitDocument(&emitter, &document) == MD_OK) {
       matched = EmittedIs(&emitter, wanted);
    }
    MdClose(&emitter);
@@ -537,4 +550,57 @@ void TestMdEmitter(void) {
    CHECK(Converts("<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr>"
                   "<w:r><w:t xml:space=\"preserve\">   </w:t></w:r></w:p>",
                   "---\n"));
+
+   CheckGroup("MdEmitter: links, anchors and the slugs they reach");
+   // Mapping row 22's two halves. A bookmark that sits in a heading resolves to that heading's own GFM
+   // slug, so the link needs no markup at all; one that sits anywhere else becomes an <a id> element.
+   CHECK(Styled(STYLE_H1,
+                "<w:p><w:pPr><w:pStyle w:val=\"H1\"/></w:pPr><w:bookmarkStart w:id=\"1\" w:name=\"t\"/>"
+                "<w:r><w:t>Getting Started</w:t></w:r></w:p>"
+                "<w:p><w:hyperlink w:anchor=\"t\"><w:r><w:t>go</w:t></w:r></w:hyperlink></w:p>",
+                "# Getting Started\n\n[go](#getting-started)\n"));
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>here</w:t></w:r></w:p>"
+                  "<w:p><w:hyperlink w:anchor=\"m\"><w:r><w:t>go</w:t></w:r></w:hyperlink></w:p>",
+                  "<a id=\"m\"></a>here\n\n[go](#m)\n"));
+   // Two headings with one name are numbered the way the renderer numbers them, or the second link
+   // would reach the first heading.
+   CHECK(Styled(STYLE_H1,
+                "<w:p><w:pPr><w:pStyle w:val=\"H1\"/></w:pPr><w:r><w:t>Notes</w:t></w:r></w:p>"
+                "<w:p><w:pPr><w:pStyle w:val=\"H1\"/></w:pPr><w:bookmarkStart w:id=\"1\" w:name=\"t\"/>"
+                "<w:r><w:t>Notes</w:t></w:r></w:p>"
+                "<w:p><w:hyperlink w:anchor=\"t\"><w:r><w:t>go</w:t></w:r></w:hyperlink></w:p>",
+                "# Notes\n\n# Notes\n\n[go](#notes-1)\n"));
+   // An anchor nothing points at emits nothing, which is what keeps Word's generated bookmarks out of
+   // the output; a paragraph that held nothing else goes with it.
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"_GoBack\"/><w:r><w:t>a</w:t></w:r></w:p>", "a\n"));
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"_GoBack\"/></w:p><w:p><w:r><w:t>a</w:t></w:r></w:p>", "a\n"));
+   // A link naming a bookmark the document does not define keeps its text and loses its brackets, the
+   // same degradation a dangling relationship gets.
+   CHECK(Converts("<w:p><w:hyperlink w:anchor=\"gone\"><w:r><w:t>go</w:t></w:r></w:hyperlink></w:p>", "go\n"));
+   // CONVERSION_REFERENCE 5.6: a hyperlink with no text is skipped rather than emitted empty.
+   CHECK(Converts("<w:p><w:r><w:t>a</w:t></w:r><w:hyperlink w:anchor=\"m\"><w:r><w:t></w:t></w:r></w:hyperlink>"
+                  "<w:r><w:t>b</w:t></w:r></w:p><w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>c</w:t></w:r></w:p>",
+                  "ab\n\nc\n"));
+   // Formatting goes inside the brackets, and the delimiter beside a bracket still has to parse: the
+   // opening "**" stands after a '[', which is punctuation, and the closing one before a ']'.
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>t</w:t></w:r></w:p>"
+                  "<w:p><w:hyperlink w:anchor=\"m\"><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r></w:hyperlink></w:p>",
+                  "<a id=\"m\"></a>t\n\n[**bold**](#m)\n"));
+   // A link may run over a hard break, and Markdown has no way to spell one that does -- so it is
+   // closed at the end of the line and opened again on the next.
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>t</w:t></w:r></w:p>"
+                  "<w:p><w:hyperlink w:anchor=\"m\"><w:r><w:t>one</w:t><w:br/><w:t>two</w:t></w:r></w:hyperlink></w:p>",
+                  "<a id=\"m\"></a>t\n\n[one](#m)\\\n[two](#m)\n"));
+   // A heading is one line by construction, so a break inside a link inside one is a space.
+   CHECK(Styled(STYLE_H1,
+                "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>t</w:t></w:r></w:p>"
+                "<w:p><w:pPr><w:pStyle w:val=\"H1\"/></w:pPr>"
+                "<w:hyperlink w:anchor=\"m\"><w:r><w:t>one</w:t><w:br/><w:t>two</w:t></w:r></w:hyperlink></w:p>",
+                "<a id=\"m\"></a>t\n\n# [one two](#m)\n"));
+   // Nothing but text reaches a fence: a link inside one has no brackets to write, because the content
+   // of a code block is literal.
+   CHECK(Styled(STYLE_CODE,
+                "<w:p>" IN_CODE "<w:bookmarkStart w:id=\"1\" w:name=\"m\"/>"
+                "<w:hyperlink w:anchor=\"m\"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>",
+                "```\nx\n```\n"));
 }

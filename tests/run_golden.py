@@ -27,9 +27,9 @@ REPO = os.path.dirname(ROOT)
 DEFAULT_EXE = os.path.join(REPO, "x64", "Release", "DOCXtoMD.exe")
 
 
-def run(exe, args):
+def run(exe, args, cwd=None):
     try:
-        done = subprocess.run([exe] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+        done = subprocess.run([exe] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, cwd=cwd)
     except FileNotFoundError:
         raise SystemExit("cannot run %s -- pass --exe, and remember MSVC output only exists on Windows" % exe)
     except subprocess.TimeoutExpired:
@@ -71,6 +71,7 @@ def check_case(exe, row, failures):
         wanted = handle.read()
     if os.path.exists(written):
         os.remove(written)
+    clear_dir(media_dir_of(name))
 
     code, out, err = run(exe, [source])
     checks += 1
@@ -104,6 +105,97 @@ def check_case(exe, row, failures):
         show("stdout", out, wanted)
     else:
         print("ok    %-28s --stdout produces the same %d bytes" % (name, len(out)))
+    return checks
+
+
+def media_dir_of(name):
+    """Where a fixture converted with no -o puts its pictures: <stem>_media beside the .md."""
+    return os.path.join(make_fixtures.BUILD, name[:-5] + "_media")
+
+
+def clear_dir(path):
+    if not os.path.isdir(path):
+        return
+    for leaf in os.listdir(path):
+        os.remove(os.path.join(path, leaf))
+    os.rmdir(path)
+
+
+def check_media(exe, row, failures):
+    """Converts one extracting fixture and compares every file it wrote, byte for byte."""
+    name = row["name"]
+    source = os.path.join(make_fixtures.BUILD, name)
+    folder = media_dir_of(name)
+    checks = 0
+
+    clear_dir(folder)
+    code, out, err = run(exe, [source])
+    checks += 1
+    if code != 0:
+        failures.append((name, "exit %s, expected 0" % code, "media"))
+        print("FAIL  %-28s exit %s, expected 0" % (name, code))
+        return checks
+    if not os.path.isdir(folder):
+        failures.append((name, "no media directory", "media"))
+        print("FAIL  %-28s wrote no %s" % (name, os.path.basename(folder)))
+        return checks
+
+    wanted = dict(row["files"])
+    found = sorted(os.listdir(folder))
+    if found != sorted(wanted):
+        failures.append((name, "media directory holds %s" % found, "media"))
+        print("FAIL  %-28s expected %s, found %s" % (name, sorted(wanted), found))
+        return checks
+    for leaf in sorted(wanted):
+        with open(os.path.join(folder, leaf), "rb") as handle:
+            produced = handle.read()
+        checks += 1
+        if produced != wanted[leaf]:
+            failures.append((name, "%s differs" % leaf, "media"))
+            print("FAIL  %-28s %s: %d bytes extracted, %d expected" % (name, leaf, len(produced), len(wanted[leaf])))
+        else:
+            print("ok    %-28s %s is the %d bytes the part holds" % (name, leaf, len(produced)))
+    return checks
+
+
+def check_media_options(exe, failures):
+    """--no-images keeps the alt text and writes nothing; --media-dir puts the files where it says."""
+    checks = 0
+    source = os.path.join(make_fixtures.BUILD, "images.docx")
+
+    named = os.path.join(make_fixtures.BUILD, "no-images.md")
+    folder = os.path.join(make_fixtures.BUILD, "no-images_media")
+    clear_dir(folder)
+    if os.path.exists(named):
+        os.remove(named)
+    code, out, err = run(exe, ["--no-images", "-o", named, source])
+    checks += 1
+    produced = open(named, "rb").read() if os.path.exists(named) else b""
+    # The document still holds a hyperlink, so "](" alone proves nothing: what --no-images promises
+    # is that no image marker and no media path survive, and that the alt text does.
+    if code != 0 or os.path.isdir(folder) or b"![" in produced or b"images_media/" in produced or b"A cat" not in produced:
+        failures.append(("--no-images", "exit %s" % code, "images off"))
+        print("FAIL  %-28s --no-images wrote a picture, a media path, or no alt text" % "--no-images")
+    else:
+        print("ok    %-28s --no-images keeps the alt text and writes no files" % "--no-images")
+
+    # --media-dir is a path as the user typed it, so the run has to happen where they would have
+    # typed it: the emitted path is that same string, and only a matching working directory makes
+    # the document and the files agree.
+    pics = os.path.join(make_fixtures.BUILD, "pics")
+    into = os.path.join(make_fixtures.BUILD, "named-media.md")
+    clear_dir(pics)
+    if os.path.exists(into):
+        os.remove(into)
+    code, out, err = run(exe, ["--media-dir", "pics", "-o", "named-media.md", "images.docx"], cwd=make_fixtures.BUILD)
+    checks += 1
+    produced = open(into, "rb").read() if os.path.exists(into) else b""
+    if code != 0 or not os.path.exists(os.path.join(pics, "image1.png")) or b"](pics/image1.png)" not in produced:
+        failures.append(("--media-dir", "exit %s" % code, "named directory"))
+        print("FAIL  %-28s --media-dir did not fill the directory it named" % "--media-dir")
+        print("      %s" % err.strip().replace("\n", "\n      "))
+    else:
+        print("ok    %-28s --media-dir puts the files where it says and links them there" % "--media-dir")
     return checks
 
 
@@ -211,8 +303,14 @@ def main(argv):
         total += check_case(exe, row, failures)
 
     print()
+    print("extracted media")
+    for row in make_fixtures.MEDIA:
+        total += check_media(exe, row, failures)
+
+    print()
     print("the output options")
     total += check_output_option(exe, failures)
+    total += check_media_options(exe, failures)
 
     print()
     if failures:

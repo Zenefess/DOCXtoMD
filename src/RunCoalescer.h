@@ -3,9 +3,9 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: The coalescing pass: adjacent runs merged on equal formatting, whitespace hoisted out.
- * To Do: 1) Stop merging across a hyperlink or a field-result boundary when M7 and M10 introduce one.
+ * To Do: 1) Stop merging across a field-result boundary when M10 introduces one.
  *        2) Coalesce a table cell's own blocks once M9 gives a block children.
  *        3) Benchmark an AVX2 scan for the first and last non-space byte of a span before adopting one.
  * Dependencies: Ir.h, typedefs.h
@@ -49,6 +49,11 @@
 ///       emitter needs no test of its own.
 /// @note Nothing is hoisted inside a fenced code block. Its content is literal, no delimiter is written
 ///       around it, and its leading whitespace is the indentation of the code.
+/// @note A merge never crosses a link's brackets, and no rule here says so. CONVERSION_REFERENCE 5.1
+///       asks that runs be coalesced *within* a hyperlink, and M7's link markers are spans, so the two
+///       text spans on either side of one are not adjacent to each other -- the only thing this pass
+///       ever merges is a text span with the text span immediately before it. An image and an anchor
+///       separate two runs for the same reason, which is right for the same reason.
 /// @note The arena is never rewritten. A merge extends the first span over the second, which is sound
 ///       only because the walker appends every span's bytes in span order and never leaves a gap -- so
 ///       the pass checks the two ranges really do meet and declines to merge if they ever do not, rather

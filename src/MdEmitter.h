@@ -3,11 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: The Markdown emitter: one growable UTF-8 buffer, line assembly and the delimiter rules.
- * To Do: 1) Emit the link, image and table-cell contexts at M7 and M9, which have no caller yet.
+ * To Do: 1) Emit the table-cell context at M9, which is the one escaping context with no caller left.
  *        2) Keep a per-line prefix stack when list items nest at M8 and a quote comes to hold one.
  *        3) Size the buffer from the part's byte count rather than growing from a fixed first block.
+ *        4) Emit an image's wp:extent size as an HTML img element where a document depends on it (row 23).
  * Dependencies: CliOptions.h, Ir.h, MdEscape.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -116,6 +117,17 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       only safe once adjacent runs with equal formatting have been merged and whitespace hoisted out
 ///       of the span -- "**Hel****lo**" and "**bold **text" are what the two omissions produce -- and
 ///       this module assumes both, so it emits a delimiter pair around any formatted span it is given.
+/// @note It must also have been through LinkResolve and MediaPlan, and then IrDropEmptyBlocks. This
+///       module writes a link's destination exactly as it finds it and never looks a reference up, so a
+///       document that skipped those passes emits a relationship id where a URL belongs; and every block
+///       it is handed is assumed to produce at least one byte, which is what lets the blank line between
+///       two blocks be written before the second rather than unwound after it.
+/// @note What M7's four span kinds emit: a link is its content between brackets and its destination in
+///       parentheses, percent-encoded rather than backslash-escaped; an image is that with a '!' in
+///       front and its alt text between the brackets; an anchor is the raw "<a id>" element mapping row
+///       22 asks for. A span LinkResolve muted emits nothing at all -- a link with no destination or no
+///       content, an anchor nothing points at -- and a link that runs over a hard break is closed at the
+///       end of its line and opened again on the next, because Markdown cannot spell one that does.
 cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document);
 
 /// The emitted bytes.

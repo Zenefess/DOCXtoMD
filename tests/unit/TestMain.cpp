@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: Entry point of the unit-test binary: runs every group and returns the summary's verdict.
  * To Do: 1) Take a group name on the command line so one area can be run alone.
  *        2) Register groups from a table now that there are nine of them.
@@ -29,6 +29,8 @@ void TestOpcPackage(void);
 void TestStyleModel(void);
 void TestDocWalker(void);
 void TestRunCoalescer(void);
+void TestLinkResolver(void);
+void TestMediaExtractor(void);
 void TestMdEscape(void);
 void TestMdEmitter(void);
 void TestConvert(void);
@@ -44,6 +46,8 @@ si32 main(void) {
    TestStyleModel();
    TestDocWalker();
    TestRunCoalescer();
+   TestLinkResolver();
+   TestMediaExtractor();
    TestMdEscape();
    TestMdEmitter();
    TestConvert();
