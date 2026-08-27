@@ -5,7 +5,8 @@
  * Created: 2026-08-25
  * Last Modified: 2026-08-27
  * Description: Unit tests for the body walk: wrappers, run content, and the formatting bits on a span.
- * To Do: 1) Add table and hyperlink cases as M7 and M9 give the walker something to build from them.
+ * To Do: 1) Add table cases as M9 gives the walker something to build from one; M7's hyperlinks,
+ *           pictures and bookmarks are driven below.
  *        2) Drive the field state machine's traces once M10 replaces today's skip-it-whole handling.
  * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, StyleModel.h, typedefs.h
  * ISA: Scalar
@@ -621,6 +622,15 @@ void TestDocWalker(void) {
                   "<w:p><w:r><w:t>a</w:t></w:r>" DRAWING_OPEN "descr=\"A chart\"/></wp:inline></w:drawing></w:r>"
                   "<w:r><w:t>b</w:t></w:r></w:p>",
                   "P{[a][b]}"));
+   // A picture ends the text span beside it. Both halves of a run that draws a picture mid-way are
+   // ordinary w:t, and IrAppendText always appends to the *last* span -- so without the split the text
+   // after the picture lands inside its alt text and comes out between the image's own brackets.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:t>a</w:t><w:drawing><wp:inline><wp:docPr id=\"1\" descr=\"A cat\"/>"
+                  "<a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed=\"rId2\"/>"
+                  "</pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"
+                  "<w:t>b</w:t></w:r></w:p>",
+                  "P{[a]I(rId2)[A cat][b]}"));
    // A blip counts only under a pic:blipFill, which is the DrawingML *picture* vocabulary. The same
    // element under an a:blipFill is the bitmap a drawn shape is painted with, and taking it would emit
    // a shape's wallpaper as the figure the paragraph shows -- and contradict the rule above, since a

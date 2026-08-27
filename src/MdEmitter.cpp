@@ -7,8 +7,7 @@
  * Description: Line assembly, inline delimiters, the blank-line discipline and every block kind's shape.
  * To Do: 1) Keep a per-line prefix stack when list items nest at M8 and a quote holds one at M8 or M9.
  *        2) Emit a table's pipe rows through MD_CONTEXT_TABLE_CELL at M9, which has no caller yet.
- *        3) Emit the link and image contexts at M7, which have no caller yet either.
- *        4) Size the buffer from the part's byte count rather than growing from a fixed first block.
+ *        3) Size the buffer from the part's byte count rather than growing from a fixed first block.
  * Dependencies: BuildGuards.h, CliOptions.h, Ir.h, MdEmitter.h, MdEscape.h, Utf.h, typedefs.h,
  *               memory management.h, windows.h
  * ISA: Scalar

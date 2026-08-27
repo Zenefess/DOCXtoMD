@@ -28,6 +28,16 @@
 /// bookmark at forty characters; a heading long enough to reach this has a slug no reader would type.
 constexpr cui64 LINK_MAX_NAME_BYTES = 512u;
 
+/// The longest decimal a duplicate slug's counter can reach, terminator excluded. A ui32 is ten digits.
+constexpr cui64 LINK_MAX_NUMBER_BYTES = 16u;
+
+/// The longest base slug, which is the name buffer less the room a numbered form of it needs.
+/// @note Reserving that room up front is what makes "<slug>-<n>" fit for every slug this module will
+///       accept, rather than leaving the two facts -- how long a slug may be, and how long its numbered
+///       form may be -- to agree by accident. A heading longer than this is truncated, which it already
+///       was at the buffer's own size.
+constexpr cui64 LINK_MAX_SLUG_BYTES = LINK_MAX_NAME_BYTES - LINK_MAX_NUMBER_BYTES;
+
 //== Entry points
 
 /// Turns every relationship reference the walk recorded into a destination.

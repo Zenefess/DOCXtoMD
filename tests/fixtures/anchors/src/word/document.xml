@@ -28,5 +28,8 @@
     <w:bookmarkStart w:id="7" w:name="between"/>
     <w:p><w:r><w:t>After a bookmark that stood between paragraphs.</w:t></w:r></w:p>
     <w:p><w:hyperlink w:anchor="between"><w:r><w:t>back up</w:t></w:r></w:hyperlink></w:p>
+    <w:p><w:bookmarkStart w:id="8" w:name="twice"/><w:r><w:t>First of two with one name.</w:t></w:r></w:p>
+    <w:p><w:bookmarkStart w:id="9" w:name="twice"/><w:r><w:t>Second of two with one name.</w:t></w:r></w:p>
+    <w:p><w:hyperlink w:anchor="twice"><w:r><w:t>which one</w:t></w:r></w:hyperlink></w:p>
   </w:body>
 </w:document>

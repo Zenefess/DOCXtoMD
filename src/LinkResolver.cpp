@@ -817,11 +817,14 @@ static csi64 LinkHeadingSlug(IR_DOCUMENTptrc document, cIR_BLOCKptr block, LINK_
    LINK_SLUG_STATE state = {0, true};
    ui64            used  = 0;
 
+   // The base slug stops short of the buffer by the width of the longest "-<n>" a collision can add, so
+   // that every numbered form of a slug this function will accept is guaranteed to fit. Reserving the
+   // room here is what makes the appends below able to succeed rather than merely able to refuse.
    for(ui32 index = 0; index < block->spanCount; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
       if(!span || span->kind != IR_SPAN_TEXT) continue;
-      if(!LinkSlugAppend(IrText(document, span->textAt), span->textBytes, text, sizeof(text), &used, &state)) break;
+      if(!LinkSlugAppend(IrText(document, span->textAt), span->textBytes, text, LINK_MAX_SLUG_BYTES, &used, &state)) break;
    }
    *slugBytes = 0;
    if(!used) return -1;
@@ -841,18 +844,27 @@ static csi64 LinkHeadingSlug(IR_DOCUMENTptrc document, cIR_BLOCKptr block, LINK_
    // recorded, which is what stops two different headings arriving at the same numbered form.
    for(;;) {
       char candidate[LINK_MAX_NAME_BYTES];
-      char digits[16];
+      char decimal[LINK_MAX_NUMBER_BYTES];
       ui64 length     = 0;
       ui64 digitCount = 0;
       ui32 number     = ui32(++entry->value);
 
+      // Built backwards and then reversed, so that the append below is one bounds-checked call like the
+      // two in front of it. Writing the digits straight into candidate is what put this loop one byte
+      // past a 512-byte stack array for a heading whose slug filled it: LinkAppend permits a run that
+      // ends exactly at the end of the buffer, and nothing after it was checking anything.
       while(number) {
-         digits[digitCount++] = char('0' + (number % 10u));
+         decimal[digitCount++] = char('0' + (number % 10u));
          number /= 10u;
+      }
+      for(ui64 at = 0; at < digitCount / 2u; ++at) {
+         cchar swap                    = decimal[at];
+         decimal[at]                   = decimal[digitCount - 1u - at];
+         decimal[digitCount - 1u - at] = swap;
       }
       if(!LinkAppend(candidate, sizeof(candidate), &length, text, used)) return -1;
       if(!LinkAppend(candidate, sizeof(candidate), &length, "-", 1u)) return -1;
-      while(digitCount) candidate[length++] = digits[--digitCount];
+      if(!LinkAppend(candidate, sizeof(candidate), &length, decimal, digitCount)) return -1;
 
       csi64 place = IrStoreDest(document, candidate, length);
 

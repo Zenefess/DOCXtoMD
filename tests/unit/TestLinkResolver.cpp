@@ -7,7 +7,7 @@
  * Description: The GFM slugger and the anchor-name sanitiser, driven from string literals.
  * To Do: 1) Drive the reference lookup itself once a package can be built without an archive.
  *        2) Add the cases a multi-character lower-case mapping needs, once the fold table carries one.
- * Dependencies: BuildGuards.h, Check.h, LinkResolver.h, typedefs.h
+ * Dependencies: BuildGuards.h, Check.h, Ir.h, LinkResolver.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -17,6 +17,7 @@
 
 #include "typedefs.h"
 #include "Check.h"
+#include "Ir.h"
 #include "LinkResolver.h"
 
 //-- Helpers
@@ -43,6 +44,65 @@ static cbool SlugsTo(cchptr text, cchptr wanted) {
 
    LinkSlug(text, LinkTestLength(text), slug, sizeof(slug));
    return LinkTestSame(slug, wanted);
+}
+
+// Runs the anchor pass over a document of one heading repeated, each carrying a bookmark, and reports
+// the slug the last of them resolved to.
+//
+// The heading text is built rather than written out because its length is the whole point: a slug that
+// fills the name buffer leaves a numbered form with nowhere to go, and the counter used to be written
+// with no bounds check at all -- one byte past a 512-byte stack array for a 511-byte slug, and up to ten
+// past it once the counter reached two digits. The reserved margin is what this drives.
+static cbool NumbersLongSlugs(cui64 letters, cui32 headings, chptrc last, cui64 lastBytes) {
+   IR_DOCUMENT document;
+   char        name[32];
+
+   IrOpen(&document);
+   for(ui32 index = 0; index < headings; ++index) {
+      cIR_MARK mark = IrBeginBlock(&document, IR_BLOCK_HEADING, 1u);
+      ui64     used = 0;
+
+      name[used++] = 'b';
+      if(index >= 10u) name[used++] = char('0' + (index / 10u));
+      name[used++] = char('0' + (index % 10u));
+      IrAddSpan(&document, IR_SPAN_ANCHOR, IR_FMT_NONE);
+      IrAppendDest(&document, name, used);
+      IrAddSpan(&document, IR_SPAN_TEXT, IR_FMT_NONE);
+      for(ui64 at = 0; at < letters; ++at) IrAppendText(&document, "a", 1u);
+      IrEndBlock(&document, mark);
+   }
+   // Every anchor needs a link at it, or LinkResolveAnchors mutes the lot and never numbers anything.
+   cIR_MARK mark = IrBeginBlock(&document, IR_BLOCK_PARAGRAPH, 0);
+
+   for(ui32 index = 0; index < headings; ++index) {
+      ui64 used = 0;
+
+      name[used++] = '#';
+      name[used++] = 'b';
+      if(index >= 10u) name[used++] = char('0' + (index / 10u));
+      name[used++] = char('0' + (index % 10u));
+      IrAddSpan(&document, IR_SPAN_LINK_START, IR_FMT_NONE);
+      IrAppendDest(&document, name, used);
+      IrAddSpan(&document, IR_SPAN_TEXT, IR_FMT_NONE);
+      IrAppendText(&document, "go", 2u);
+      IrAddSpan(&document, IR_SPAN_LINK_END, IR_FMT_NONE);
+   }
+   IrEndBlock(&document, mark);
+
+   cbool resolved = LinkResolveAnchors(&document);
+   ui64  produced = 0;
+
+   last[0] = 0;
+   for(ui32 index = 0; index < IrSpanCount(&document); ++index) {
+      cIR_SPANptr span = IrSpanAt(&document, index);
+
+      if(!span || span->kind != IR_SPAN_LINK_START || !span->destBytes) continue;
+      produced = (span->destBytes < lastBytes ? span->destBytes : lastBytes - 1u);
+      for(ui64 at = 0; at < produced; ++at) last[at] = IrDest(&document, span->destAt)[at];
+   }
+   last[produced] = 0;
+   IrClose(&document);
+   return resolved;
 }
 
 // Whether one bookmark name sanitises to exactly the anchor it should.
@@ -131,6 +191,24 @@ void TestLinkResolver(void) {
    CHECK(SlugsTo("a\xE0\xA5\xA4"
                  "b",
                  "ab"));
+
+   CheckGroup("LinkResolver: a slug long enough to leave its counter nowhere to go");
+   // The dedup counter used to be written into the candidate buffer with no bounds check, so a heading
+   // whose slug filled that buffer put the digits one byte past a 512-byte stack array -- and up to ten
+   // past it once the counter reached two digits. The base slug now stops short by the width of the
+   // longest counter, so every numbered form of a slug this module accepts has somewhere to go.
+   {
+      char produced[LINK_MAX_NAME_BYTES + 64u];
+
+      // 511 is what LinkSlugAppend used to saturate at: its guard is "used + width + 1 > destBytes".
+      CHECK(NumbersLongSlugs(511u, 2u, produced, sizeof(produced)));
+      CHECK(LinkTestLength(produced) == 1u + LINK_MAX_SLUG_BYTES - 1u + 2u); // '#', the slug, "-1"
+      CHECK(produced[LinkTestLength(produced) - 2u] == '-' && produced[LinkTestLength(produced) - 1u] == '1');
+      // Twelve of them takes the counter to two digits, which is where a one-byte margin would fail.
+      CHECK(NumbersLongSlugs(511u, 12u, produced, sizeof(produced)));
+      CHECK(produced[LinkTestLength(produced) - 3u] == '-' && produced[LinkTestLength(produced) - 2u] == '1');
+      CHECK(produced[LinkTestLength(produced) - 1u] == '1');
+   }
 
    CheckGroup("LinkResolver: the anchor name an <a id> and its link share");
    // Word allows a bookmark only letters, digits and the underscore, so for every document a word

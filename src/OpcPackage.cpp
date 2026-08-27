@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-08-27
  * Description: Package model implementation: content types, relationship parsing, target resolution.
  * To Do: 1) Cache a folded copy of each part name if profiling ever shows the comparator mattering.
  *        2) Normalise a backslash in an entry name at M11, which decision D10 gave that question to.
@@ -793,6 +793,61 @@ static cOPC_RESULT OpcDiscoverMainPart(OPC_PACKAGEptrc package) {
 
 //== Entry points
 
+//-- The part-name index
+
+// The FNV-1a hash of a part name, folded exactly the way OpcNameEqual compares it. Folding here rather
+// than at the comparison is what makes "/word/Media/Cat.png" and "/word/media/cat.png" land in one slot,
+// which OPC requires of part names and of nothing else.
+static cui64 OpcNameHash(cchptr name) {
+   ui64 hash = 0xCBF29CE484222325ull;
+
+   for(ui64 index = 0; name[index]; ++index) {
+      hash ^= ui8(OpcFold(name[index]));
+      hash *= 0x100000001B3ull;
+   }
+   return hash;
+}
+
+// Builds the index over the part table, once, before anything looks a part up.
+//
+// OpcFindPart was a scan over every entry in the archive, and it is on three paths that walk a list and
+// look one up per element: OpcOpen's own content-type and relationship passes, and M7's MediaPlan, which
+// resolves one part per picture. Each of those is therefore quadratic in the archive -- an entry count
+// capped at 10,000 against a picture count capped only by the size of document.xml, which measured 4.9
+// seconds on a 1.1 MB input drawing 100,000 pictures out of a 9,000-entry package. Indexing here rather
+// than in each caller fixes all three, and M10's footnote parts inherit it.
+//
+// A slot holds the part index plus one, so a zeroed table means empty and no sentinel pass is needed. A
+// failed allocation is not a failure of the package: the scan below stands in, which is why this returns
+// nothing.
+static void OpcBuildNameIndex(OPC_PACKAGEptrc package) {
+   ui64 slots = 16u;
+
+   while(slots < ui64(package->partCount) * 2u + 2u) slots *= 2u;
+
+   cui64 bytes = slots * sizeof(si32);
+
+   package->nameIndex = (si32ptr)amalloc(bytes, 32u);
+   package->nameMask  = slots - 1u;
+   if(!package->nameIndex) return;
+   mzero(package->nameIndex, bytes);
+   for(ui32 index = 0; index < package->partCount; ++index) {
+      cchptr name = package->parts[index].name;
+      ui64   slot = OpcNameHash(name) & package->nameMask;
+
+      while(package->nameIndex[slot] && !OpcNameEqual(package->parts[package->nameIndex[slot] - 1].name, name)) {
+         slot = (slot + 1u) & package->nameMask;
+      }
+      // An archive naming one part twice is what ZipReader resolves to its first record, and the scan
+      // this replaces answered with the first match too. Keeping the first is what makes the index and
+      // the scan the same function rather than merely a faster one.
+      if(package->nameIndex[slot]) continue;
+      package->nameIndex[slot] = si32(index) + 1;
+   }
+}
+
+//-- Entry points
+
 cOPC_RESULT OpcOpen(OPC_PACKAGEptrc package, ZIP_READERptrc reader) {
    mzero(package, sizeof(OPC_PACKAGE));
    package->mainPart   = -1;
@@ -811,6 +866,7 @@ cOPC_RESULT OpcOpen(OPC_PACKAGEptrc package, ZIP_READERptrc reader) {
    mzero(package->parts, sizeof(OPC_PART) * ui64(count));
    package->partCount = reader->entryCount;
    for(ui32 index = 0; index < package->partCount; ++index) package->parts[index].name = reader->entries[index].name;
+   OpcBuildNameIndex(package);
 
    // Offset 0 is reserved as the empty string, so a zero content-type or target offset is a usable
    // value rather than a sentinel every reader has to test for.
@@ -845,6 +901,7 @@ void OpcClose(OPC_PACKAGEptrc package) {
    mdealloc(package->defaults);
    mdealloc(package->overrides);
    mdealloc(package->rels);
+   mdealloc(package->nameIndex);
    mzero(package, sizeof(OPC_PACKAGE));
    package->mainPart   = -1;
    package->failedPart = -1;
@@ -853,6 +910,18 @@ void OpcClose(OPC_PACKAGEptrc package) {
 csi32 OpcFindPart(cOPC_PACKAGEptr package, cchptr partName) {
    cchptr wanted = OpcEntryForm(partName);
 
+   if(package->nameIndex) {
+      ui64 slot = OpcNameHash(wanted) & package->nameMask;
+
+      while(package->nameIndex[slot]) {
+         csi32 part = package->nameIndex[slot] - 1;
+
+         if(OpcNameEqual(package->parts[part].name, wanted)) return part;
+         slot = (slot + 1u) & package->nameMask;
+      }
+      return -1;
+   }
+   // No index, because its one allocation failed. The scan it replaced answers exactly the same way.
    for(ui32 index = 0; index < package->partCount; ++index) {
       if(OpcNameEqual(package->parts[index].name, wanted)) return si32(index);
    }

@@ -69,8 +69,10 @@ void MediaClose(MEDIA_SETptrc set);
 /// @param package      The package the parts belong to.
 /// @param linkPrefix   What stands in front of the file name in the emitted path, with no separator of
 ///                     its own; an empty string puts the files beside the document.
-/// @param emitImages   false turns every image into its alt text instead, which is what --no-images asks
-///                     for and what --stdout falls back to when no media directory was named.
+/// @param emitImages   false turns every image into its alt text instead. Two things ask for that and no
+///                     others: --no-images, and a document whose media directory could not be derived at
+///                     all. --stdout is *not* one of them -- D13 rules that it extracts its pictures
+///                     beside the input, so that the piped document and a written one are the same bytes.
 /// @return true when the pass finished, false when it could not allocate.
 /// @note Nothing is read or written here: the extension comes from the content type the package already
 ///       knows, and the bytes are not inflated until MediaWrite. A document converted with --no-images

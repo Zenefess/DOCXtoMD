@@ -101,7 +101,7 @@ static cbool MediaAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr byt
 // holds for a path *this* module generates, where all three are ordinary bytes of a file name -- so a
 // document called "draft #2.docx" would otherwise link its pictures to a fragment of itself.
 static cbool MediaAppendPath(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr bytes, cui64 byteCount) {
-   static constexpr cchptr digits = "0123456789ABCDEF";
+   static constexpr cchptr MEDIA_HEX_DIGITS = "0123456789ABCDEF";
 
    for(ui64 index = 0; index < byteCount; ++index) {
       cchar byte = bytes[index];
@@ -112,8 +112,8 @@ static cbool MediaAppendPath(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr
       }
       if(*used + 4u > destBytes) return false;
       dest[(*used)++] = '%';
-      dest[(*used)++] = digits[(ui8(byte) >> 4) & 0x0Fu];
-      dest[(*used)++] = digits[ui8(byte) & 0x0Fu];
+      dest[(*used)++] = MEDIA_HEX_DIGITS[(ui8(byte) >> 4) & 0x0Fu];
+      dest[(*used)++] = MEDIA_HEX_DIGITS[ui8(byte) & 0x0Fu];
       dest[*used]     = 0;
    }
    return true;

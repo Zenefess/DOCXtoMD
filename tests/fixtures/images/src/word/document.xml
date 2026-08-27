@@ -101,5 +101,11 @@
           <pic:blipFill><a:blip r:embed="rId11"/></pic:blipFill>
         </pic:pic></a:graphicData></a:graphic>
       </wp:inline></w:drawing></w:r><w:r><w:t>)</w:t></w:r></w:p>
+    <w:p><w:r><w:drawing><wp:inline>
+      <wp:docPr id="15" name="Picture 15" descr="Dangling"/>
+      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>
+        <pic:blipFill><a:blip r:embed="rId99"/></pic:blipFill>
+      </pic:pic></a:graphicData></a:graphic>
+    </wp:inline></w:drawing></w:r></w:p>
   </w:body>
 </w:document>

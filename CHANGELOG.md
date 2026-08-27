@@ -191,6 +191,26 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   type-qualified style roles cost nothing they should not.
 
 ### Fixed
+- **A heading long enough to fill the slug buffer no longer overruns the stack.** `LinkHeadingSlug`
+  appends the base slug and the `-` of a duplicate's counter through a bounds-checked helper and then
+  wrote the counter's digits with a raw `candidate[length++]` and no check at all. `LinkSlugAppend`
+  saturates at 511 bytes in a 512-byte buffer, so a heading whose slug filled it put the first digit one
+  byte past the end of a stack array -- and up to ten past it once the counter reached two digits. The
+  length that then reached `IrStoreDest` was longer than the buffer too, so the out-of-bounds bytes were
+  copied into the destination arena and published in the document. The digits now go through the same
+  checked append as everything else, and the base slug reserves the room a numbered form needs, so every
+  slug this module accepts has somewhere for its counter to go. Found by an adversarial review, and
+  confirmed against the committed build with AddressSanitizer: a heading of 511 characters repeated twice
+  aborts there and is clean here.
+- **A picture-heavy document in a part-heavy package no longer takes seconds per megabyte.**
+  `OpcFindPart` was a scan over every archive entry, and it sits on three paths that walk a list and look
+  one part up per element: `OpcOpen`'s own content-type and relationship passes, and M7's `MediaPlan`,
+  which resolves one part per picture. Each was quadratic in the archive. A 1.1 MB document drawing
+  100,000 pictures out of a 9,000-entry package took **5.10 seconds**, against 0.35 for the same
+  pictures in a package with one media part -- a 15x cost for the part table alone. `OpcPackage` now
+  builds an open-addressed part-name index once, at `OpcOpen`, folded the way `OpcNameEqual` compares:
+  the same document takes **0.38 seconds** and the part count no longer registers. A first-wins probe
+  keeps the index answering exactly as the scan did, and a failed allocation falls back to it.
 - **A document with tens of thousands of hyperlinks no longer spends minutes resolving them.**
   `OpcFindRelById` is a scan, which is the right shape for the handful of lookups every milestone before
   this one made; M7 makes one per hyperlink and one per picture against a part that declares one
@@ -231,6 +251,13 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   a fragment that does not exist. The regex settles it in Latin-1 by itself, and Bengali says it twice
   over: the digits U+09E6..U+09EF are kept and the currency numerators U+09F4..U+09F9 beside them are
   not.
+- **Three rules that were live and covered by nothing now fail under mutation**, which is M6's own
+  lesson about pinning claims: a picture ends the text span beside it (without it the text after a
+  picture is appended *inside* its alt text, because `IrAppendText` always appends to the last span);
+  the first bookmark of a repeated name carries the anchor and the rest emit nothing (without it two
+  elements share one id, which is invalid HTML and an ambiguous fragment); and an image whose reference
+  resolved to nothing degrades to its alt text (without it the document carries `![alt]()`, the same
+  broken shape as the `[nowhere]()` the anchors fixture was written to catch, one span kind over).
 - **A link to a bookmark the document does not define no longer emits `[nowhere]()`.** Muting an empty
   link ran before the anchors were resolved, and resolution is itself a way for a link to lose its
   destination; it runs again afterwards, so a dangling internal reference degrades to plain text exactly

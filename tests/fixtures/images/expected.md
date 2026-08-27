@@ -27,3 +27,5 @@ A shape fill is not a picture: gone.
 ```
 draw(Fenced)
 ```
+
+Dangling

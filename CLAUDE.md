@@ -172,6 +172,15 @@ below.
     and never credits it back, so re-reading `styles.xml` per paragraph would walk an innocent document
     into the bomb caps. `OpcLoadXmlPart` is the only door to a tokenizer — it validates UTF-8, transcodes
     a UTF-16 part in place, and is what M4's definition of done means by "rather than reaching the walker".
+    `OpcFindPart` goes through an **open-addressed part-name index built once at `OpcOpen`**, folded the
+    way `OpcNameEqual` compares so that OPC's case-insensitive part names land in one slot. That is a
+    scale matter and it was found at M7: the scan it replaced sits on three paths that walk a list and
+    look one part up per element — `OpcOpen`'s own content-type and relationship passes, and `MediaPlan`'s
+    one lookup per picture — so each was quadratic in the archive. A 1.1 MB document drawing 100,000
+    pictures out of a 9,000-entry package took 5.10 seconds and now takes 0.38, with the part count no
+    longer registering at all. A first-wins probe keeps the index answering exactly as the scan did, for
+    the same reason `ZipReader` resolves a duplicate name to its first record, and a failed allocation
+    falls back to the scan rather than failing the package.
   - `StyleModel.h`/`StyleModel.cpp` — `styles.xml` as a resolved-property cache, and where the toggle
     XOR lives. Each style's whole `w:basedOn` chain is folded **once at load**, leaf-first into a local
     array and then applied root-first, so the nearest specification survives and the toggle parity —
@@ -408,7 +417,11 @@ below.
     because an ATX heading's content is its line stripped of whitespace at both ends and a renderer never
     sees what a producer left there; interior padding is kept, one hyphen per space, and a character the
     keep test drops does not break the run. Duplicates are numbered by github-slugger's own loop and not
-    by a counter, because a heading may be called "Introduction 1". This module is **not** in
+    by a counter, because a heading may be called "Introduction 1" — and the base slug stops short of its
+    buffer by `LINK_MAX_NUMBER_BYTES`, so every numbered form of a slug this module accepts has somewhere
+    to go. That margin is not tidiness: without it the counter's digits went past the end of a 512-byte
+    stack array for a heading whose slug filled it, and the over-long length then handed to `IrStoreDest`
+    published the adjacent stack in the document. This module is **not** in
     `docs/CONVERSION_REFERENCE.md` 6.3's stage list and
     is a session addition like `Ir.cpp` and `Convert`: heading slugs are numbered over the whole document,
     so the pass has to see all of it, which neither the streaming walker nor the per-block emitter can.
@@ -629,9 +642,11 @@ below.
   chart with no bitmap, a picture inside a link, a part the archive does not hold, an `mc:AlternateContent`
   that must emit one picture and not two, a part named `.png` and typed `image/jpeg`, a shape whose
   `a:blipFill` must *not* become the paragraph's picture, and a picture inside a fenced block, which must
-  become its alt text and write no file) and `anchors`
+  become its alt text and write no file, a run whose text is split by the picture in the middle of it, and
+  a reference that names no relationship at all) and `anchors`
   (a bookmark in a heading, one mid-paragraph, an unreferenced `_GoBack`, a link to a bookmark nothing
-  defines, two headings that must be numbered apart, and a bookmark between paragraphs).
+  defines, two headings that must be numbered apart, a bookmark between paragraphs, and one name declared
+  twice, where the first carries the anchor and the second emits nothing).
   `make_fixtures.py` also synthesises `media-binary.docx`, whose one media part holds every byte value,
   so that the byte path to disk is proved rather than assumed. Each case has an `expected.md` beside its
   `src/`, and every one was
@@ -730,7 +745,7 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M7 they return **125**, **86** and **1188** checks. Those three numbers are the shim's, measured on
+At M7 they return **125**, **86** and **1195** checks. Those three numbers are the shim's, measured on
 Linux; the M6 numbers they replace -- 117, 65 and 1058 -- were confirmed on Windows on 2026-08-27 and
 were identical to what the shim had measured beforehand, as they have been at every milestone since M3.
 The unit binary
@@ -1062,7 +1077,10 @@ forbidden; before D6 it was.
   kind it dropped that carried any text was an image, and `MediaPlan` now degrades an image inside a
   fenced block to its alt text before the emitter sees one. The guard stays because the emitter must
   not depend on a pass that runs before it, but it is defensive code and not a live rule. Both were
-  found by mutation testing, which is the only thing that finds this class. A third mutation survives and
+  found by mutation testing, which is the only thing that finds this class -- and it found five more that
+  are now pinned rather than merely stated: a picture ending the text span beside it, the first bookmark
+  of a repeated name winning, an image whose reference resolved to nothing degrading to alt text, and both
+  halves of the slug counter's reserved margin. A third mutation survives and
   is not the same kind of thing: deleting `LinkResolver`'s relationship index changes no byte of any
   output, because the index is a speed measure whose deliberate fallback is the scan it replaced. What
   pins *that* is a scale probe rather than a suite, and a scale probe is not something a definition of
@@ -1871,7 +1889,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     `clang-format --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs
     well-formed XML, mutually byte-identical in their `Include=` paths, and every listed file on disk.
   - **What was verified on Linux, behaviourally, against the shim build**: the unit suite passes all
-    **1188** checks, `tests/run_golden.py` all **86** and `tests/run_container.py` all **125**, every one
+    **1195** checks, `tests/run_golden.py` all **86** and `tests/run_container.py` all **125**, every one
     of them under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no
     diagnostic. Those numbers are the shim's; whether the real MSVC binary returns the same three is
     exactly what the Windows run is for, and for the four milestones before this one it has.
@@ -1885,11 +1903,19 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     harness is scratch and **the commit does not carry one**; what they leave behind is the fixtures and
     the unit cases they motivated.
   - **What that oracle and the reviews found, none of it reachable from the fixtures as they stood.**
-    Two were about scale rather than correctness and both are M5's `StyleModel` lesson arriving again: a
-    paragraph of N bookmarks between N word fragments was quadratic in the coalescer, and N hyperlinks
+    One is a **stack-buffer overflow**, and it is the only defect in the milestone that is not about
+    output: `LinkHeadingSlug` wrote a duplicate slug's counter into a 512-byte stack array with no bounds
+    check, so a heading whose slug filled that array put the digits past the end of it -- and then handed
+    the over-long length to `IrStoreDest`, which published the adjacent stack in the document. On MSVC,
+    where both configurations build with `/sdl`, that is a `__report_gsfailure` rather than a silent
+    corruption. Three more are about scale, and all three are M5's `StyleModel` lesson arriving again: a
+    paragraph of N bookmarks between N word fragments was quadratic in the coalescer; N hyperlinks
     against N relationships was quadratic in `OpcFindRelById` -- **2.34 seconds** at 32,000 links, now
-    0.10, through an index `LinkResolver` builds once. Of the rest, the ones that lost a document's
-    meaning: an `a:blip` was matched wherever it stood, so a drawn shape's *fill* was emitted as the
+    0.10, through an index `LinkResolver` builds once; and one part lookup per picture was quadratic in
+    `OpcFindPart`, which is a scan over every archive entry -- **5.10 seconds** for 100,000 pictures in a
+    9,000-entry package, now 0.38, through a part-name index `OpcPackage` builds at `OpcOpen`. That last
+    one fixes `OpcOpen`'s own two quadratic passes as well, and M10's footnote parts inherit it. Of the
+    rest, the ones that lost a document's meaning: an `a:blip` was matched wherever it stood, so a drawn shape's *fill* was emitted as the
     figure the paragraph shows; an image inside a fenced block was dropped from the output and extracted
     to disk anyway; an exclamation mark in front of a link turned it into a broken picture (pitfall 7);
     a hard break at the edge of a link emitted `[](url)`; a generated media path did not encode `#`, `%`
@@ -1910,6 +1936,14 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     notices is a rule covered by nothing. Two rounds of that found six rules covered by nothing, and
     every one of the six now fails under mutation. What is *not* pinned is stated rather than hidden --
     see the entries under Known gaps.
+  - **A second review round, run as a workflow of 105 agents over six dimensions with every finding put to
+    three skeptics, raised 33 findings of which 11 survived.** Two of the eleven were already fixed by the
+    round above; the rest are the stack overflow, the part-lookup quadratic, an r12 breach in a table this
+    session had itself added, four prolog `To Do` items and one `@param` still describing work M7 had
+    delivered or ruled the other way, and three rules live and covered by nothing. Every one is fixed or
+    pinned. That a second, larger review found a memory-safety defect the first missed is the argument for
+    running one: the first round's six dimensions were the same six, and the defect needs a heading 511
+    characters long to reach, which no fixture and no generated document had.
   - **The mutation harness's own verdicts were then re-checked by hand, and two of them were wrong.**
     Running the forty twice gave different answers for four rules: the padding trim and `--no-images`
     reported as unpinned in the second round are both caught by a suite when the mutation is applied and

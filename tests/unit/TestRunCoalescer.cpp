@@ -5,7 +5,8 @@
  * Created: 2026-08-26
  * Last Modified: 2026-08-27
  * Description: Unit tests for adjacent-run merging, whitespace hoisting and the order of the two.
- * To Do: 1) Add the hyperlink and field-result barriers when M7 and M10 stop a merge crossing one.
+ * To Do: 1) Add the field-result barrier when M10 stops a merge crossing one; M7's link barrier is
+ *           driven below, and an anchor's transparency to a merge beside it.
  *        2) Drive a document straight from IrAddSpan once a case needs a shape no body part produces.
  * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, RunCoalescer.h, StyleModel.h, typedefs.h
  * ISA: Scalar
