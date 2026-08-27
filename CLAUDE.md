@@ -590,8 +590,8 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M6 they return **117**, **65** and **1058** checks; those are the shim's numbers, and a Windows
-session is expected to see the same three, as it has at every milestone since M3.
+At M6 they return **117**, **65** and **1058** checks, confirmed on Windows on 2026-08-27 and identical
+to what the Linux shim measured beforehand, as they have been at every milestone since M3.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -1505,14 +1505,29 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     reproducing MSVC's fault, which is stricter, but it is not the same code. Two of the four defects
     M4's review fixed were reachable only on that path. All of it is now covered: both configurations
     build warning-free and every suite passes against the real binary.
-- **M6 `[done-unverified]` Inline formatting** — `RunCoalescer` (merge + hoist), the remaining
+- **M6 `[done]` Inline formatting** — `RunCoalescer` (merge + hoist), the remaining
   `MdEscape` callers, bold/italic/strike/code/sup/sub. DoD: fragmented-run and trailing-space-in-bold
   fixtures pass.
-  **Status**: the code landed from Linux on 2026-08-26. Every DoD command was run against the **shim**
-  build and passes; **none of them has been run under MSVC**, so the marker is `[done-unverified]` and
-  the next Windows session verifies rather than reimplements. The unrun commands are the five under
-  "Build & run": the two solution builds, `python tests\run_container.py`, `python tests\run_golden.py`
-  and `tests\x64\Release\DOCXtoMD.Tests.exe`.
+  **Status**: the code landed from Linux on 2026-08-26 as `[done-unverified]` over four commits, and the
+  owner verified it on Windows on 2026-08-27. Both x64 configurations compile, `python
+  tests\run_container.py` passes all **117** checks against `x64\Release` and all **117** again against
+  `x64\Debug`, `python tests\run_golden.py` passes all **65**, and
+  `tests\x64\Release\DOCXtoMD.Tests.exe` passes all **1058**. That discharges the milestone's own
+  definition of done -- `run_golden.py` is what byte-compares the fragmented-run and
+  trailing-space-in-bold fixtures -- so the marker is `[done]`.
+  **One item of the global DoD is not yet confirmed**: bullet 1 asks for zero warnings at `/W3`, and what
+  was reported is that both configurations *compile*. M4 hit exactly this and the distinction is recorded
+  in its entry: "compiled without errors" is not the same claim, and a later rebuild is what closed it.
+  The next Windows session should rebuild Debug and Release and confirm no warnings; until then treat
+  that one check as outstanding rather than passed. Nothing else is.
+  - **The three tallies are the shim's, exactly.** 117, 65 and 1058, the same three numbers in the same
+    order a Linux session measured before any of this reached a Windows machine. That is the fourth
+    milestone running where the shim predicted the real MSVC binary rather than only itself -- and it is
+    worth what it costs precisely because it proves nothing about `/W3`, `/sdl`, `/arch:AVX2` or the real
+    `include/` headers, which is what the owner's run covers instead. The Debug run matters on its own:
+    Debug is where `/RTCu` catches an indeterminate read, and where `mzero`'s aligned 256-bit path over
+    this milestone's structures would fault if any had lost its alignment. `RunCoalescer` adds no `al32`
+    structure of its own, which was the one thing that would have made that risk new at M6.
   - **The definition of done, and what discharges it**: `tests/fixtures/fragments` is the fragmented-run
     case — mid-word splits across differing rsids, with a `w:proofErr`, a `bookmarkStart`/`End` pair and
     an accepted `w:ins` between the halves, since 5.1 says merging must ignore all of them — and
@@ -1645,11 +1660,12 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     all — among them three members of the emitter's own whitespace class, and the fold above. Every rule
     either round introduced now fails under mutation; the table of which suite catches which is in the
     commit message rather than here, because it is a fact about a moment and this file is not.
-  - **What a Linux session could not reach**: `/W3` and its zero-warnings requirement, `/sdl`,
-    `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the structures this commit
+  - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/sdl`,
+    `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the structures this milestone
     touches behaves — the shim asserts the alignment `mzero`'s 256-bit path needs rather than faulting
-    the way MSVC would, which is stricter but is not the same code. `RunCoalescer` adds no `al32`
-    structure of its own, which is the one thing that would have made that risk new.
+    the way MSVC would, which is stricter but is not the same code. All of that is now exercised: both
+    configurations compile and every suite passes against the real binary. The **one** thing still
+    outstanding is `/W3`'s zero-warnings requirement, which is a rebuild away — see the Status note above.
 - **M7 `[todo]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs. M6 leaves
   three things waiting here by name: `MD_CONTEXT_LINK_TEXT`, `MD_CONTEXT_LINK_DEST` and
   `MD_CONTEXT_ALT_TEXT` still have no caller and are still provisional; `RunCoalescer` merges across a
