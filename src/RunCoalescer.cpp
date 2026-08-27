@@ -114,8 +114,8 @@ static cbool RunJoinable(cIR_SPANptr first, cIR_SPANptr next) {
    return first->textAt + first->textBytes == next->textAt;
 }
 
-// Which of the spans already kept a new one may merge into: the last of them, stepping back over any
-// anchors that stand between.
+// Which of the spans already kept a new one may merge into: the last text span, whatever anchors have
+// been kept since.
 //
 // An anchor is the one span kind a merge sees straight through, and CONVERSION_REFERENCE 5.1 is why:
 // Word writes a bookmark -- _GoBack in every saved document, a _Toc target in every heading -- in the
@@ -123,19 +123,30 @@ static cbool RunJoinable(cIR_SPANptr first, cIR_SPANptr next) {
 // "**Hel****lo**" exactly as the run fragmentation itself does. A link's brackets and an image are the
 // opposite case and must stop one: text on either side of them is not adjacent in the output, and
 // joining it would carry bytes across a boundary the reader can see.
-static IR_SPANptr RunMergeInto(IR_SPANptr spans, cui32 first, cui32 used) {
-   ui32 at = used;
+//
+// The target is carried rather than searched for, and that is not tidiness. Anchors accumulate behind
+// the span every later run merges into -- a paragraph of N bookmarks between N fragments of one word
+// leaves N of them there -- so stepping back over them costs a scan per run and the pass becomes
+// quadratic in the paragraph's own length. That is a matter of what a legal document costs to convert
+// rather than a claim that one implementation beats another, so it is not a p4 performance claim and
+// owes no bench/ diff; the scale it was found at is recorded in CHANGELOG.md and the shape it needs
+// is pinned by TestRunCoalescer, where several anchors in a row still leave one merged span.
+static IR_SPANptr RunMergeInto(IR_SPANptr spans, csi64 target) { return (target < 0 ? nullptr : spans + target); }
 
-   while(at > first && spans[at - 1u].kind == IR_SPAN_ANCHOR) --at;
-   return (at > first ? spans + at - 1u : nullptr);
+// Where the target moves when one more span is kept: to the span itself when it is text, nowhere when
+// it is an anchor, and to nothing at all when it is a barrier a merge may not cross.
+static csi64 RunMergeTarget(csi64 target, cIR_SPAN_KIND kind, cui32 at) {
+   if(kind == IR_SPAN_TEXT) return si64(at);
+   return (kind == IR_SPAN_ANCHOR ? target : -1);
 }
 
 // Merges each block's adjacent equal-formatting spans in place. Merging only ever shrinks a block, so it
 // stays inside the block's own range and no other block's spanAt moves.
 static void RunMergeBlocks(IR_DOCUMENTptrc document) {
    for(ui32 index = 0; index < IrBlockCount(document); ++index) {
-      IR_BLOCKptr block = IrBlockMutable(document, index);
-      ui32        kept  = 0;
+      IR_BLOCKptr block  = IrBlockMutable(document, index);
+      si64        target = -1;
+      ui32        kept   = 0;
 
       if(!block) continue;
       for(ui32 at = 0; at < block->spanCount; ++at) {
@@ -145,13 +156,14 @@ static void RunMergeBlocks(IR_DOCUMENTptrc document) {
          // otherwise merge, which is the same defect wearing a different hat.
          if(span->kind == IR_SPAN_TEXT && !span->textBytes) continue;
 
-         IR_SPANptr previous = RunMergeInto(document->spans + block->spanAt, 0, kept);
+         IR_SPANptr previous = RunMergeInto(document->spans + block->spanAt, target);
 
          if(previous && RunJoinable(previous, span)) {
             previous->textBytes += span->textBytes;
             continue;
          }
          document->spans[block->spanAt + kept] = *span;
+         target                                = RunMergeTarget(target, span->kind, kept);
          ++kept;
       }
       block->spanCount = kept;
@@ -165,6 +177,7 @@ struct RUN_REBUILD {
    IR_SPANptr spans;   ///< The replacement array
    ui32       used;    ///< Spans written to it
    ui32       blockAt; ///< Where the block being rewritten starts in it
+   si64       target;  ///< The span a new one may merge into, or -1 when there is none
 };
 
 typedef RUN_REBUILD *const RUN_REBUILDptrc;
@@ -175,13 +188,14 @@ typedef RUN_REBUILD *const RUN_REBUILDptrc;
 static void RunEmit(RUN_REBUILDptrc rebuild, cIR_SPANptr span) {
    if(span->kind == IR_SPAN_TEXT && !span->textBytes) return;
 
-   IR_SPANptr previous = RunMergeInto(rebuild->spans, rebuild->blockAt, rebuild->used);
+   IR_SPANptr previous = RunMergeInto(rebuild->spans, rebuild->target);
 
    if(previous && RunJoinable(previous, span)) {
       previous->textBytes += span->textBytes;
       return;
    }
    rebuild->spans[rebuild->used] = *span;
+   rebuild->target               = RunMergeTarget(rebuild->target, span->kind, rebuild->used);
    ++rebuild->used;
 }
 
@@ -245,7 +259,7 @@ cbool RunCoalesce(IR_DOCUMENTptrc document) {
       return false;
    }
 
-   RUN_REBUILD rebuild = {fresh, 0, 0};
+   RUN_REBUILD rebuild = {fresh, 0, 0, -1};
 
    for(ui32 index = 0; index < IrBlockCount(document); ++index) {
       IR_BLOCKptr block = IrBlockMutable(document, index);
@@ -257,6 +271,7 @@ cbool RunCoalesce(IR_DOCUMENTptrc document) {
       cui32 count   = block->spanCount;
 
       rebuild.blockAt = rebuild.used;
+      rebuild.target  = -1;
       for(ui32 at = 0; at < count; ++at) RunHoistSpan(&rebuild, document, document->spans + spanAt + at, literal);
       block->spanAt    = rebuild.blockAt;
       block->spanCount = rebuild.used - rebuild.blockAt;

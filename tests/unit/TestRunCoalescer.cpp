@@ -33,7 +33,8 @@ static constexpr cchptr STYLE_SPAN  = "<w:style w:type=\"character\" w:styleId=\
 // The root element every body below is wrapped in, kept out of the helper so no line reaches the column
 // limit once the formatter has joined what it can.
 static constexpr cchptr COALESCE_HEAD = "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
-                                        " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><w:body>";
+                                        " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+                                        " xmlns:v=\"urn:schemas-microsoft-com:vml\"><w:body>";
 static constexpr cchptr COALESCE_TAIL = "</w:body></w:document>";
 
 // The wrapper a styles part goes inside, for the cases that need one.
@@ -209,6 +210,19 @@ void TestRunCoalescer(void) {
                    "<w:bookmarkStart w:id=\"1\" w:name=\"_GoBack\"/>"
                    "<w:r><w:rPr><w:b/></w:rPr><w:t>lo</w:t></w:r></w:p>",
                    "P{b[Hello]N(_GoBack)}"));
+   // Several of them in a row is the shape that matters, and not only because a producer writes it:
+   // the anchors pile up behind the span every later run merges into, so a pass that looked for its
+   // merge target by stepping back over them would be quadratic in the paragraph's own length.
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r><w:bookmarkStart w:id=\"1\" w:name=\"p\"/>"
+                   "<w:r><w:t>b</w:t></w:r><w:bookmarkStart w:id=\"2\" w:name=\"q\"/>"
+                   "<w:r><w:t>c</w:t></w:r><w:bookmarkStart w:id=\"3\" w:name=\"r\"/>"
+                   "<w:r><w:t>d</w:t></w:r></w:p>",
+                   "P{[abcd]N(p)N(q)N(r)}"));
+   // An image is a barrier and an anchor behind one does not reopen the merge across it.
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r>"
+                   "<w:r><w:pict><v:shape alt=\"i\"><v:imagedata r:id=\"rId2\"/></v:shape></w:pict></w:r>"
+                   "<w:bookmarkStart w:id=\"1\" w:name=\"p\"/><w:r><w:t>b</w:t></w:r></w:p>",
+                   "P{[a]I(rId2)[i]N(p)[b]}"));
    // A link is the opposite case and must stop one: text on either side of a bracket is not adjacent
    // in the output, and joining it would carry bytes across a boundary the reader can see.
    CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r>"
