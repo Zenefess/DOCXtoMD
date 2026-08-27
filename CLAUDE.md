@@ -1509,17 +1509,19 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   `MdEscape` callers, bold/italic/strike/code/sup/sub. DoD: fragmented-run and trailing-space-in-bold
   fixtures pass.
   **Status**: the code landed from Linux on 2026-08-26 as `[done-unverified]` over four commits, and the
-  owner verified it on Windows on 2026-08-27. Both x64 configurations compile, `python
-  tests\run_container.py` passes all **117** checks against `x64\Release` and all **117** again against
-  `x64\Debug`, `python tests\run_golden.py` passes all **65**, and
+  owner verified it on Windows on 2026-08-27. Both x64 configurations build with **no errors and no
+  warnings**, `python tests\run_container.py` passes all **117** checks against `x64\Release` and all
+  **117** again against `x64\Debug`, `python tests\run_golden.py` passes all **65**, and
   `tests\x64\Release\DOCXtoMD.Tests.exe` passes all **1058**. That discharges the milestone's own
   definition of done -- `run_golden.py` is what byte-compares the fragmented-run and
-  trailing-space-in-bold fixtures -- so the marker is `[done]`.
-  **One item of the global DoD is not yet confirmed**: bullet 1 asks for zero warnings at `/W3`, and what
-  was reported is that both configurations *compile*. M4 hit exactly this and the distinction is recorded
-  in its entry: "compiled without errors" is not the same claim, and a later rebuild is what closed it.
-  The next Windows session should rebuild Debug and Release and confirm no warnings; until then treat
-  that one check as outstanding rather than passed. Nothing else is.
+  trailing-space-in-bold fixtures -- **and the global one**, so the marker is `[done]` with nothing
+  outstanding.
+  The zero-warnings half was confirmed separately, the way M4's was: the first report said both
+  configurations compiled, which is not the same claim, and a rebuild the same day produced no warnings
+  in either. That matters past bookkeeping. M2 established that the six owner-authored `include/`
+  headers come through `/W3` clean, so a warning appearing from here on belongs to the commit that
+  introduces it rather than being a latent header problem -- and M6 puts `RunCoalescer`, its test suite
+  and eleven changed files under that inheritance.
   - **The three tallies are the shim's, exactly.** 117, 65 and 1058, the same three numbers in the same
     order a Linux session measured before any of this reached a Windows machine. That is the fourth
     milestone running where the shim predicted the real MSVC binary rather than only itself -- and it is
@@ -1660,12 +1662,12 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     all — among them three members of the emitter's own whitespace class, and the fold above. Every rule
     either round introduced now fails under mutation; the table of which suite catches which is in the
     commit message rather than here, because it is a fact about a moment and this file is not.
-  - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/sdl`,
-    `/arch:AVX2`, the real `include/` headers, and whether `mzero` on the structures this milestone
-    touches behaves — the shim asserts the alignment `mzero`'s 256-bit path needs rather than faulting
-    the way MSVC would, which is stricter but is not the same code. All of that is now exercised: both
-    configurations compile and every suite passes against the real binary. The **one** thing still
-    outstanding is `/W3`'s zero-warnings requirement, which is a rebuild away — see the Status note above.
+  - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/W3` and
+    its zero-warnings requirement, `/sdl`, `/arch:AVX2`, the real `include/` headers, and whether `mzero`
+    on the structures this milestone touches behaves — the shim asserts the alignment `mzero`'s 256-bit
+    path needs rather than faulting the way MSVC would, which is stricter but is not the same code. All
+    of it is now covered: both configurations build warning-free and every suite passes against the real
+    binary.
 - **M7 `[todo]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs. M6 leaves
   three things waiting here by name: `MD_CONTEXT_LINK_TEXT`, `MD_CONTEXT_LINK_DEST` and
   `MD_CONTEXT_ALT_TEXT` still have no caller and are still provisional; `RunCoalescer` merges across a
