@@ -3,13 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
- * Description: One document end to end: container, package, styles, walk, emit, and the output write.
+ * Last Modified: 2026-08-26
+ * Description: One document end to end: container, package, styles, walk, coalesce, emit and write.
  * To Do: 1) Report the offset UtfValidate found, which the package records and nothing prints yet.
  *        2) Write through a temporary file and rename over the target, once a partial write costs more.
  * Dependencies: BuildGuards.h, CliOptions.h, Convert.h, Diag.h, DocWalker.h, Ir.h, MdEmitter.h,
- *               OpcPackage.h, StyleModel.h, ZipReader.h, typedefs.h, memory management.h, windows.h,
- *               stdio.h
+ *               OpcPackage.h, RunCoalescer.h, StyleModel.h, ZipReader.h, typedefs.h,
+ *               memory management.h, stdio.h, windows.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -29,6 +29,7 @@
 #include "Ir.h"
 #include "MdEmitter.h"
 #include "OpcPackage.h"
+#include "RunCoalescer.h"
 #include "StyleModel.h"
 #include "ZipReader.h"
 #include "Convert.h"
@@ -236,7 +237,12 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
       return (walked.result == WALK_ERROR_MEMORY ? EXIT_INTERNAL : EXIT_NOT_DOCX);
    }
 
-   cMD_RESULT emitted = MdEmitDocument(emitter, &document);
+   // Merging adjacent runs and hoisting whitespace out of the formatted ones stands between the walk and
+   // the emitter, and not inside either: the walker must not merge, because the fragmentation is what M6
+   // is measured against, and the emitter must be able to assume a delimiter is safe around every
+   // formatted span it is handed rather than testing each one.
+   cbool      coalesced = RunCoalesce(&document);
+   cMD_RESULT emitted   = (coalesced ? MdEmitDocument(emitter, &document) : MD_ERROR_MEMORY);
 
    IrClose(&document);
    if(emitted != MD_OK) {

@@ -681,7 +681,9 @@ def build_all(verbose=True, writing=True):
                  "decoy-main-rel.docx", "mixed-case-names.docx", "duplicate-names.docx"]:
         golden(same, "minimal")
     golden("relocated-main.docx", "relocated")
-    for case in ["headings", "toggles", "textflow", "nostyles", "wrappers", "dollars"]:
+    for case in ["headings", "toggles", "textflow", "nostyles", "wrappers", "dollars",
+                 "fragments", "hoisting", "inline", "code", "quotes", "rules", "monodefault",
+                 "monostyle"]:
         tree = read_part_tree(case)
         write(case + ".docx", build_zip([make_entry(name, raw) for name, raw in tree]))
         expect(case + ".docx", 0, ["wrote", case + ".md"], "the %s golden fixture" % case)

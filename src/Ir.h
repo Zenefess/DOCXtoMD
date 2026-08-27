@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-26
  * Description: The intermediate representation: blocks, spans and the arena the walker builds them in.
  * To Do: 1) Add the list, table, image, link and note span and block kinds as M7 through M10 reach them.
  *        2) Give a block a child-block list once a table cell has to hold one at M9.
@@ -23,23 +23,29 @@
 /// One bit per piece of run formatting the Markdown mapping can express. This is the *output* model, not
 /// WordprocessingML's: StyleModel resolves twelve toggles and several plain properties, and the walker
 /// keeps only what a delimiter could be emitted for.
-/// @note Nothing reads these at M5, which emits no delimiters at all -- coalescing adjacent runs and
-///       hoisting whitespace out of a span are what make a delimiter safe, and both are M6. The bits are
-///       filled from the first commit because a span with no formatting on it is a span M6 would have to
-///       rebuild rather than extend.
+/// @note Two spans merge when these bits are equal, so a property that renders identically must land on
+///       the same bit. That is why w:b and w:bCs share IR_FMT_BOLD, and why a run that is code because
+///       of its character style and one that is code because of its font share IR_FMT_CODE.
 constexpr cui32 IR_FMT_NONE   = 0x00u;
 constexpr cui32 IR_FMT_BOLD   = 0x01u; ///< ** **
 constexpr cui32 IR_FMT_ITALIC = 0x02u; ///< * *
 constexpr cui32 IR_FMT_STRIKE = 0x04u; ///< ~~ ~~
 constexpr cui32 IR_FMT_SUPER  = 0x08u; ///< <sup> </sup>
 constexpr cui32 IR_FMT_SUB    = 0x10u; ///< <sub> </sub>
+constexpr cui32 IR_FMT_CODE   = 0x20u; ///< ` `
 
 //== Blocks and spans
 
 /// What one block of the document is.
+/// @note A block has exactly one kind, so a paragraph that is both a heading and a quote by style is
+///       whichever the walker decides -- see DocWalker.h, which gives a heading precedence over both of
+///       the kinds M6 adds, because a heading is the document's structure and the others are its voice.
 enum IR_BLOCK_KIND : ui8 {
    IR_BLOCK_PARAGRAPH = 0, ///< An ordinary paragraph
    IR_BLOCK_HEADING,       ///< A heading, whose level is carried beside the kind
+   IR_BLOCK_QUOTE,         ///< A blockquote paragraph; every emitted line takes the "> " prefix
+   IR_BLOCK_CODE,          ///< One line of a fenced code block; consecutive ones share a fence
+   IR_BLOCK_RULE,          ///< A horizontal rule, which carries no spans at all
    IR_BLOCK_KIND_COUNT     ///< Number of values above; not a kind
 };
 
@@ -143,6 +149,11 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
 /// @note A paragraph whose text is empty or nothing but ASCII whitespace is dropped whole, which is what
 ///       gives CONVERSION_REFERENCE row 40's "runs of N empty paragraphs collapse" for free: blocks are
 ///       separated by exactly one blank line, so a block that never existed leaves no gap.
+/// @note Two kinds are exempt from the emptiness test. IR_BLOCK_RULE is an empty paragraph by
+///       construction -- CONVERSION_REFERENCE row 25 makes it a lone w:pBdr bottom on a paragraph with
+///       nothing in it -- so the test would throw away every one; its spans are dropped instead, since a
+///       rule emits none. IR_BLOCK_CODE is kept because an empty code paragraph is a blank line inside a
+///       fence, and the emitter trims one only where it falls at the fence's edge.
 /// @note Leading and trailing break spans are trimmed. A break at the end of a paragraph would emit a
 ///       hard-break marker with nothing after it, which is a stray backslash at the end of a line.
 /// @note A non-breaking space counts as content. CONVERSION_REFERENCE row 35 keeps U+00A0 verbatim, and
@@ -194,6 +205,13 @@ cIR_BLOCKptr IrBlockAt(cIR_DOCUMENTptr document, cui32 index);
 /// @return The span, or null for an index outside the document.
 cIR_SPANptr IrSpanAt(cIR_DOCUMENTptr document, cui32 index);
 
+/// One block by index, for a caller that has to rewrite it.
+/// @return The block, or null for an index outside the document.
+/// @note The mutable twin of IrBlockAt. RunCoalescer rewrites a block's span range, and the walker
+///       settles a paragraph's kind only once every one of its runs has been seen -- neither can be
+///       expressed through a const view, and neither is worth a second entry point per field.
+IR_BLOCKptr IrBlockMutable(IR_DOCUMENTptrc document, cui32 index);
+
 /// The bytes one arena offset names.
 /// @return The bytes, or an empty string when the arena is empty. Never null, never NUL-terminated at
 ///         the span's own end.
@@ -202,3 +220,19 @@ cchptr IrText(cIR_DOCUMENTptr document, cui32 at);
 /// Whether any append ran out of memory.
 /// @return true once an append has failed, and from then on. A failed document holds no usable IR.
 cbool IrFailed(cIR_DOCUMENTptr document);
+
+/// Marks the document as out of memory, for a pass that allocates on its behalf.
+/// @param document  A prepared document.
+/// @note RunCoalescer builds a new span array, and a failure there has to reach the same sticky flag
+///       every other allocation in this module reports through, or a caller would have to test two.
+void IrFail(IR_DOCUMENTptrc document);
+
+/// Replaces the span array wholesale, taking ownership of the replacement.
+/// @param document  A prepared document.
+/// @param spans     A block amalloc returned, holding count spans; the document frees it from now on.
+/// @param capacity  How many spans were allocated at spans, which is what IrClose has to release.
+/// @param count     How many of them are in use.
+/// @note This is RunCoalescer's one privilege. Hoisting whitespace out of a formatted span splits it in
+///       three, so the pass cannot rewrite the array in place, and every block's spanAt moves with it --
+///       which is why the caller rewrites the blocks in the same pass and hands the finished array over.
+void IrAdoptSpans(IR_DOCUMENTptrc document, IR_SPANptr spans, cui64 capacity, cui32 count);

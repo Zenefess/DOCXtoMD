@@ -24,21 +24,25 @@
 // Escapes a NUL-terminated literal and compares the result with another. Measuring and writing are both
 // exercised, and the two are checked against each other: a disagreement between them would let the
 // emitter reserve one length and write a different one.
-static cbool EscapedIs(cchptr text, cMD_CONTEXT context, cchptr wanted) {
+static cbool EscapedAs(cchptr text, cMD_CONTEXT context, cbool dollars, cchptr wanted) {
    char produced[512];
    ui64 length = 0;
    ui64 index  = 0;
 
    while(text[length]) ++length;
 
-   cui64 measured = MdEscapeMeasure(text, length, context);
-   cui64 written  = MdEscapeWrite(produced, sizeof(produced) - 1u, text, length, context);
+   cui64 measured = MdEscapeMeasure(text, length, context, dollars);
+   cui64 written  = MdEscapeWrite(produced, sizeof(produced) - 1u, text, length, context, dollars);
 
    produced[written] = 0;
    if(measured != written) return false;
    while(produced[index] && produced[index] == wanted[index]) ++index;
    return produced[index] == wanted[index];
 }
+
+// The same for a line the caller counted fewer than two dollar signs on, which is every case but the
+// ones that say otherwise: since M6 the verdict belongs to the caller, not to the run.
+static cbool EscapedIs(cchptr text, cMD_CONTEXT context, cchptr wanted) { return EscapedAs(text, context, false, wanted); }
 
 // The offset the line-start pass reports for a NUL-terminated literal at the head of a block.
 static csi64 LineStartOf(cchptr line) {
@@ -114,44 +118,48 @@ void TestMdEscape(void) {
    CHECK(EscapedIs("&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;", MD_CONTEXT_INLINE, "&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;"));
 
    CheckGroup("MdEscape: the conditional dollar rule, which is D12");
-   // A math span needs two delimiters, so a run holding one dollar cannot open one and keeps it. That
+   // Since M6 the verdict is the caller's, because a run cannot answer a question about the line it is
+   // part of -- so these cases pass the verdict the emitter would have reached over the whole line. The
+   // count itself is checked separately, through MdEscapeCountDollars and the fixtures.
+   // A math span needs two delimiters, so a line holding one dollar cannot open one and keeps it. That
    // is the whole point of the ruling: a price is the common case and must not grow a backslash.
-   CHECK(EscapedIs("costs $5", MD_CONTEXT_INLINE, "costs $5"));
-   CHECK(EscapedIs("$", MD_CONTEXT_INLINE, "$"));
-   CHECK(EscapedIs("Total: 100$", MD_CONTEXT_INLINE, "Total: 100$"));
+   CHECK(EscapedAs("costs $5", MD_CONTEXT_INLINE, false, "costs $5"));
+   CHECK(EscapedAs("$", MD_CONTEXT_INLINE, false, "$"));
+   CHECK(EscapedAs("Total: 100$", MD_CONTEXT_INLINE, false, "Total: 100$"));
    // Two or more and every one of them is escaped, which leaves no pair for a renderer to match.
-   CHECK(EscapedIs("costs $5 and $10", MD_CONTEXT_INLINE, "costs \\$5 and \\$10"));
-   CHECK(EscapedIs("$1 $2 $3", MD_CONTEXT_INLINE, "\\$1 \\$2 \\$3"));
-   CHECK(EscapedIs("US$5 and CA$5", MD_CONTEXT_INLINE, "US\\$5 and CA\\$5"));
+   CHECK(EscapedAs("costs $5 and $10", MD_CONTEXT_INLINE, true, "costs \\$5 and \\$10"));
+   CHECK(EscapedAs("$1 $2 $3", MD_CONTEXT_INLINE, true, "\\$1 \\$2 \\$3"));
+   CHECK(EscapedAs("US$5 and CA$5", MD_CONTEXT_INLINE, true, "US\\$5 and CA\\$5"));
    // Display math is $$...$$, and it needs no clause of its own: any $$ is already two dollars.
-   CHECK(EscapedIs("$$x$$", MD_CONTEXT_INLINE, "\\$\\$x\\$\\$"));
-   CHECK(EscapedIs("$$", MD_CONTEXT_INLINE, "\\$\\$"));
+   CHECK(EscapedAs("$$x$$", MD_CONTEXT_INLINE, true, "\\$\\$x\\$\\$"));
+   CHECK(EscapedAs("$$", MD_CONTEXT_INLINE, true, "\\$\\$"));
    // Escaped although Pandoc and the KaTeX previews would both decline to make this math: GitHub's
    // observed rule is looser than theirs and counting is what stays safe without knowing its edge.
-   CHECK(EscapedIs("a $ b $ c", MD_CONTEXT_INLINE, "a \\$ b \\$ c"));
+   CHECK(EscapedAs("a $ b $ c", MD_CONTEXT_INLINE, true, "a \\$ b \\$ c"));
    // A literal backslash doubles first, so our escape always starts a fresh one and cannot be eaten.
-   CHECK(EscapedIs("\\$5 and $6", MD_CONTEXT_INLINE, "\\\\\\$5 and \\$6"));
-   // U+FF04 FULLWIDTH DOLLAR SIGN holds no 0x24 byte, so it is not a delimiter and is left alone.
-   CHECK(EscapedIs("\xEF\xBC\x84"
-                   "a\xEF\xBC\x84",
-                   MD_CONTEXT_INLINE,
-                   "\xEF\xBC\x84"
-                   "a\xEF\xBC\x84"));
+   CHECK(EscapedAs("\\$5 and $6", MD_CONTEXT_INLINE, true, "\\\\\\$5 and \\$6"));
    // The four other contexts whose text a renderer parses as inline content take the same rule.
-   CHECK(EscapedIs("$5 or $6", MD_CONTEXT_TABLE_CELL, "\\$5 or \\$6"));
-   CHECK(EscapedIs("$5 or $6", MD_CONTEXT_LINK_TEXT, "\\$5 or \\$6"));
-   CHECK(EscapedIs("$5 or $6", MD_CONTEXT_ALT_TEXT, "\\$5 or \\$6"));
-   CHECK(EscapedIs("$5 or $6", MD_CONTEXT_HTML, "\\$5 or \\$6"));
-   CHECK(EscapedIs("$5 off", MD_CONTEXT_ALT_TEXT, "$5 off"));
-   // One amount per cell is one dollar per scope, so a table of forty prices grows no backslash at all.
-   CHECK(EscapedIs("$5", MD_CONTEXT_TABLE_CELL, "$5"));
+   CHECK(EscapedAs("$5 or $6", MD_CONTEXT_TABLE_CELL, true, "\\$5 or \\$6"));
+   CHECK(EscapedAs("$5 or $6", MD_CONTEXT_LINK_TEXT, true, "\\$5 or \\$6"));
+   CHECK(EscapedAs("$5 or $6", MD_CONTEXT_ALT_TEXT, true, "\\$5 or \\$6"));
+   CHECK(EscapedAs("$5 or $6", MD_CONTEXT_HTML, true, "\\$5 or \\$6"));
+   CHECK(EscapedAs("$5 off", MD_CONTEXT_ALT_TEXT, false, "$5 off"));
    // The pipe rule and the dollar rule are independent and both fire.
-   CHECK(EscapedIs("$5|$6", MD_CONTEXT_TABLE_CELL, "\\$5\\|\\$6"));
-   // The three whose text is never parsed as inline content do not: a backslash in code is literal,
-   // and a destination is percent-encoded rather than escaped -- $ is a legal RFC 3986 sub-delimiter.
-   CHECK(EscapedIs("$x$", MD_CONTEXT_CODE_SPAN, "$x$"));
-   CHECK(EscapedIs("$$x$$", MD_CONTEXT_CODE_BLOCK, "$$x$$"));
-   CHECK(EscapedIs("http://x/a$b$c", MD_CONTEXT_LINK_DEST, "http://x/a$b$c"));
+   CHECK(EscapedAs("$5|$6", MD_CONTEXT_TABLE_CELL, true, "\\$5\\|\\$6"));
+   // The three whose text is never parsed as inline content ignore the verdict entirely: a backslash in
+   // code is literal, and a destination is percent-encoded -- $ is a legal RFC 3986 sub-delimiter.
+   CHECK(EscapedAs("$x$", MD_CONTEXT_CODE_SPAN, true, "$x$"));
+   CHECK(EscapedAs("$$x$$", MD_CONTEXT_CODE_BLOCK, true, "$$x$$"));
+   CHECK(EscapedAs("http://x/a$b$c", MD_CONTEXT_LINK_DEST, true, "http://x/a$b$c"));
+   // The count itself, which is what the emitter takes over a whole line before calling either writer.
+   CHECK(MdEscapeCountDollars("costs $5", 8u) == 1u);
+   CHECK(MdEscapeCountDollars(" and $10", 8u) == 1u);
+   CHECK(MdEscapeCountDollars("$$x$$", 5u) == 4u);
+   CHECK(MdEscapeCountDollars("none", 4u) == 0u);
+   CHECK(MdEscapeCountDollars(nullptr, 9u) == 0u);
+   // U+FF04 FULLWIDTH DOLLAR SIGN holds no 0x24 byte, so it is not a delimiter and is not counted.
+   CHECK(MdEscapeCountDollars("\xEF\xBC\x84", 3u) == 0u);
+
    {
       // At scale: the count saturates at two and the escape stays linear, and the measuring pass and
       // the writing pass must still agree byte for byte over a line made of nothing else.
@@ -161,8 +169,8 @@ void TestMdEscape(void) {
 
       for(ui64 index = 0; index < count; ++index) many[index] = '$';
 
-      cui64 measured = MdEscapeMeasure(many, count, MD_CONTEXT_INLINE);
-      cui64 written  = MdEscapeWrite(wide, sizeof(wide), many, count, MD_CONTEXT_INLINE);
+      cui64 measured = MdEscapeMeasure(many, count, MD_CONTEXT_INLINE, true);
+      cui64 written  = MdEscapeWrite(wide, sizeof(wide), many, count, MD_CONTEXT_INLINE, true);
       bool  paired   = true;
 
       for(ui64 index = 0; index < count; ++index) {

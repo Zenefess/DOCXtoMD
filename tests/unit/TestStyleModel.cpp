@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-26
  * Description: Unit tests for name normalization, role detection, basedOn folding and the toggle XOR.
  * To Do: 1) Drive a numbering-bearing style chain once M8 gives w:numPr somewhere to be read into.
  *        2) Add a case per producer from CONVERSION_REFERENCE 5.10 as real exports are collected at M11.
@@ -79,11 +79,19 @@ static cbool NormalizesTo(cchptr text, cchptr wanted) {
    return produced[index] == wanted[index];
 }
 
-// The role and level a literal name resolves to.
+// The role and level a literal name resolves to when a paragraph style declares it.
 static cbool RoleIs(cchptr normalized, cSTYLE_ROLE wantedRole, cui8 wantedLevel) {
    ui8 level = 0;
 
-   return StyleRoleOfName(normalized, &level) == wantedRole && level == wantedLevel;
+   return StyleRoleOfName(normalized, STYLE_TYPE_PARAGRAPH, &level) == wantedRole && level == wantedLevel;
+}
+
+// The role a literal name resolves to when a *character* style declares it, which reads a different
+// table: only CONVERSION_REFERENCE row 11's inline-code names mean anything there.
+static cbool CharRoleIs(cchptr normalized, cSTYLE_ROLE wantedRole) {
+   ui8 level = 0;
+
+   return StyleRoleOfName(normalized, STYLE_TYPE_CHARACTER, &level) == wantedRole && level == 0;
 }
 
 //== The suite
@@ -117,6 +125,41 @@ void TestStyleModel(void) {
    CHECK(RoleIs("subtitle", STYLE_ROLE_SUBTITLE, 0u));
    CHECK(RoleIs("normal", STYLE_ROLE_NORMAL, 0u));
    CHECK(RoleIs("", STYLE_ROLE_NORMAL, 0u));
+   // The quote names of CONVERSION_REFERENCE row 13, and the code-block names of row 12.
+   CHECK(RoleIs("quote", STYLE_ROLE_QUOTE, 0u));
+   CHECK(RoleIs("intense quote", STYLE_ROLE_QUOTE, 0u));
+   CHECK(RoleIs("block text", STYLE_ROLE_QUOTE, 0u));
+   CHECK(RoleIs("quotations", STYLE_ROLE_QUOTE, 0u));
+   CHECK(RoleIs("source code", STYLE_ROLE_CODE, 0u));
+   CHECK(RoleIs("preformatted text", STYLE_ROLE_CODE, 0u));
+   CHECK(RoleIs("html preformatted", STYLE_ROLE_CODE, 0u));
+   CHECK(RoleIs("code", STYLE_ROLE_CODE, 0u));
+   // A character style reads a different table, and the two overlap on exactly one name. "Source Text"
+   // is LibreOffice's character style for inline code and an ordinary paragraph style name otherwise,
+   // which is what tests/fixtures/headings depends on: it carries a paragraph style called that.
+   CHECK(CharRoleIs("code", STYLE_ROLE_CODE));
+   CHECK(CharRoleIs("html code", STYLE_ROLE_CODE));
+   CHECK(CharRoleIs("verbatim char", STYLE_ROLE_CODE));
+   CHECK(CharRoleIs("source text", STYLE_ROLE_CODE));
+   CHECK(CharRoleIs("macro text", STYLE_ROLE_CODE));
+   CHECK(RoleIs("source text", STYLE_ROLE_NORMAL, 0u));
+   CHECK(RoleIs("macro text", STYLE_ROLE_NORMAL, 0u));
+   CHECK(CharRoleIs("source code", STYLE_ROLE_NORMAL));
+   CHECK(CharRoleIs("quote", STYLE_ROLE_NORMAL));
+   // Word's linked character styles are named "<paragraph style> Char", so none of them is a heading.
+   CHECK(CharRoleIs("heading 1", STYLE_ROLE_NORMAL));
+   CHECK(CharRoleIs("heading 1 char", STYLE_ROLE_NORMAL));
+   CHECK(CharRoleIs("title", STYLE_ROLE_NORMAL));
+
+   CheckGroup("StyleModel: the monospace font table of row 11");
+   CHECK(StyleFontIsMonospace("consolas"));
+   CHECK(StyleFontIsMonospace("courier new"));
+   CHECK(StyleFontIsMonospace("dejavu sans mono"));
+   CHECK(StyleFontIsMonospace("jetbrains mono"));
+   CHECK(StyleFontIsMonospace("ibm plex mono"));
+   CHECK(!StyleFontIsMonospace("calibri"));
+   CHECK(!StyleFontIsMonospace("courier newer"));
+   CHECK(!StyleFontIsMonospace(""));
 
    CheckGroup("StyleModel: OnOff values");
    XML_TEXT absent = {nullptr, 0};
@@ -300,6 +343,153 @@ void TestStyleModel(void) {
    CHECK(StyleResolveRun(&model, StyleFind(&model, "Base"), &direct).vertAlign == STYLE_VERT_BASELINE);
    direct.vertAlign = STYLE_VERT_SUPERSCRIPT;
    CHECK(StyleResolveRun(&model, StyleFind(&model, "Base"), &direct).vertAlign == STYLE_VERT_SUPERSCRIPT);
+   StyleClose(&model);
+
+   CheckGroup("StyleModel: the monospace verdict layers like every other plain property");
+   CHECK(LoadStyles(&model, "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Calibri\"/></w:rPr>"
+                            "</w:rPrDefault></w:docDefaults>"
+                            "<w:style w:styleId=\"Fixed\"><w:name w:val=\"Fixed\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"Back\"><w:name w:val=\"Back\"/><w:basedOn w:val=\"Fixed\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Georgia\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"Mono\"><w:name w:val=\"Mono\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Menlo\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"Themed\"><w:name w:val=\"Themed\"/>"
+                            "<w:rPr><w:rFonts w:asciiTheme=\"minorHAnsi\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"CodeChar\"><w:name w:val=\"Code\"/></w:style>") == STYLE_OK);
+   CHECK(ResolveUnder(&model, "Fixed").monospace);
+   CHECK(!ResolveUnder(&model, "Back").monospace);  // The nearer specification wins, as w:dstrike does
+   CHECK(!ResolveUnder(&model, "Nope").monospace);  // docDefaults named a proportional family
+   CHECK(!ResolveUnder(&model, "Fixed").codeStyle); // A paragraph style is never a code *span*
+
+   // A character style is nearer than the paragraph style, either way round.
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "Mono");
+   CHECK(StyleResolveRun(&model, StyleFind(&model, "Back"), &direct).monospace);
+   direct.characterStyle = StyleFind(&model, "Themed");
+   // A w:rFonts naming only a theme slot specifies nothing, so the paragraph style still decides.
+   CHECK(StyleResolveRun(&model, StyleFind(&model, "Fixed"), &direct).monospace);
+   direct.monospace = 0;
+   CHECK(!StyleResolveRun(&model, StyleFind(&model, "Fixed"), &direct).monospace);
+   // The code role rides on the character style chain alone, and is a separate answer from the font.
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "CodeChar");
+   CHECK(StyleResolveRun(&model, -1, &direct).codeStyle);
+   CHECK(!StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClose(&model);
+
+   CheckGroup("StyleModel: a monospace docDefaults switches the font heuristic off");
+   // A document whose own default font is monospace says nothing about any particular run. Without the
+   // guard every run in a Courier-set filing is code, every paragraph satisfies row 12's "every run is
+   // monospace", and the whole document converts to one fence with every delimiter dead inside it.
+   CHECK(LoadStyles(&model, "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr>"
+                            "</w:rPrDefault></w:docDefaults>"
+                            "<w:style w:styleId=\"Body\"><w:name w:val=\"Body\"/></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"CodeChar\"><w:name w:val=\"Code\"/></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"Fixed\"><w:name w:val=\"Fixed\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>") == STYLE_OK);
+   CHECK(!ResolveUnder(&model, "Body").monospace);
+   CHECK(!ResolveUnder(&model, "Nope").monospace);
+
+   // What says something about the *run* still says it: a code character style, and a run or a style
+   // that names its own monospace family.
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "CodeChar");
+   CHECK(StyleResolveRun(&model, -1, &direct).codeStyle);
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "Fixed");
+   CHECK(StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClearDirect(&direct);
+   direct.monospace = 1;
+   CHECK(StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClose(&model);
+
+   CheckGroup("StyleModel: the baseline is the default paragraph style before docDefaults");
+   // The other half of the same guard, and the likelier one: Word's w:docDefaults normally names a
+   // *theme* slot, which specifies no family, and Modify Style on Normal is what carries the font. A
+   // guard that reads only w:docDefaults leaves this document converting to one fence.
+   CHECK(LoadStyles(&model, "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme=\"minorHAnsi\"/>"
+                            "</w:rPr></w:rPrDefault></w:docDefaults>"
+                            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"Body\"><w:name w:val=\"Body\"/>"
+                            "<w:basedOn w:val=\"Normal\"/></w:style>") == STYLE_OK);
+   CHECK(!ResolveUnder(&model, "Normal").monospace);
+   CHECK(!ResolveUnder(&model, "Body").monospace);
+   StyleClearDirect(&direct);
+   direct.monospace = 1;
+   CHECK(StyleResolveRun(&model, StyleFind(&model, "Body"), &direct).monospace);
+   StyleClose(&model);
+
+   // The baseline is read off the default style's *folded* record, so a Normal that inherits the family
+   // rather than naming it is still a monospace baseline. Reading the unfolded property instead leaves
+   // every suite green and restores the whole-document fence, so this is the case that pins the fold.
+   CHECK(LoadStyles(&model, "<w:style w:type=\"paragraph\" w:styleId=\"Base\"><w:name w:val=\"Base\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:basedOn w:val=\"Base\"/></w:style>") == STYLE_OK);
+   CHECK(!ResolveUnder(&model, "Normal").monospace);
+   CHECK(!ResolveUnder(&model, "Base").monospace);
+   StyleClose(&model);
+
+   // And the reverse, where the fold is what turns the heuristic back *on*: a default style that
+   // inherits Courier and then names a proportional family of its own is a proportional baseline.
+   CHECK(LoadStyles(&model, "<w:style w:type=\"paragraph\" w:styleId=\"Base\"><w:name w:val=\"Base\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:basedOn w:val=\"Base\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Calibri\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"Fixed\"><w:name w:val=\"Fixed\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>") == STYLE_OK);
+   CHECK(ResolveUnder(&model, "Fixed").monospace);
+   StyleClose(&model);
+
+   CheckGroup("StyleModel: a basedOn across two style types is ignored");
+   // ISO/IEC 29500-1 17.7.4.3: a character style's parent shall be a character style. Beyond
+   // conformance it is a hole through the monospace guard -- a character style based on a monospace
+   // default *paragraph* style inherits its family, and the character layer is taken before the guard
+   // is read, so italic prose converts to a fenced code block.
+   CHECK(LoadStyles(&model, "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr></w:style>"
+                            "<w:style w:type=\"character\" w:styleId=\"Emph\"><w:name w:val=\"Emphasis Char\"/>"
+                            "<w:basedOn w:val=\"Normal\"/><w:rPr><w:i/></w:rPr></w:style>") == STYLE_OK);
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "Emph");
+   CHECK(!StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClose(&model);
+
+   // The role leaks the same way in the other direction, and needs no monospace font at all.
+   CHECK(LoadStyles(&model, "<w:style w:type=\"character\" w:styleId=\"CodeChar\">"
+                            "<w:name w:val=\"HTML Code\"/></w:style>"
+                            "<w:style w:type=\"paragraph\" w:styleId=\"Body\"><w:name w:val=\"Body\"/>"
+                            "<w:basedOn w:val=\"CodeChar\"/></w:style>") == STYLE_OK);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Body"), -1).role != STYLE_ROLE_CODE);
+
+   // But w:type is optional, and an absent one is a *default* rather than a statement -- so a typeless
+   // style keeps its link to a real character style. Comparing the stored types alone would drop it and
+   // silently lose the code span it carries.
+   StyleClose(&model);
+   CHECK(LoadStyles(&model, "<w:style w:type=\"character\" w:styleId=\"MonoBase\"><w:name w:val=\"Mono Base\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"VerbatimChar\"><w:name w:val=\"Verbatim Char\"/>"
+                            "<w:basedOn w:val=\"MonoBase\"/></w:style>") == STYLE_OK);
+   StyleClearDirect(&direct);
+   direct.characterStyle = StyleFind(&model, "VerbatimChar");
+   CHECK(StyleResolveRun(&model, -1, &direct).monospace);
+   StyleClose(&model);
+
+   CheckGroup("StyleModel: a proportional default style beats a monospace docDefaults");
+   // Nearest-wins runs the other way too, and the answer is the same rule rather than an exception: an
+   // unstyled paragraph is proportional here, so a monospace run really does stand out and the
+   // heuristic belongs back on.
+   CHECK(LoadStyles(&model, "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Courier New\"/></w:rPr>"
+                            "</w:rPrDefault></w:docDefaults>"
+                            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                            "<w:name w:val=\"Normal\"/><w:rPr><w:rFonts w:ascii=\"Calibri\"/></w:rPr></w:style>"
+                            "<w:style w:styleId=\"Fixed\"><w:name w:val=\"Fixed\"/>"
+                            "<w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr></w:style>") == STYLE_OK);
+   CHECK(!ResolveUnder(&model, "Normal").monospace);
+   CHECK(ResolveUnder(&model, "Fixed").monospace);
    StyleClose(&model);
 
    CheckGroup("StyleModel: a value that had to be decoded outlives the token that carried it");

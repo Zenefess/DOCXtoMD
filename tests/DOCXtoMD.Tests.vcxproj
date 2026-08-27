@@ -96,6 +96,7 @@
     <ClCompile Include="..\src\MdEmitter.cpp" />
     <ClCompile Include="..\src\MdEscape.cpp" />
     <ClCompile Include="..\src\OpcPackage.cpp" />
+    <ClCompile Include="..\src\RunCoalescer.cpp" />
     <ClCompile Include="..\src\StyleModel.cpp" />
     <ClCompile Include="..\src\Utf.cpp" />
     <ClCompile Include="..\src\XmlPull.cpp" />
@@ -107,6 +108,7 @@
     <ClCompile Include="unit\TestMdEmitter.cpp" />
     <ClCompile Include="unit\TestMdEscape.cpp" />
     <ClCompile Include="unit\TestOpcPackage.cpp" />
+    <ClCompile Include="unit\TestRunCoalescer.cpp" />
     <ClCompile Include="unit\TestStyleModel.cpp" />
     <ClCompile Include="unit\TestUtf.cpp" />
     <ClCompile Include="unit\TestXmlPull.cpp" />
@@ -123,6 +125,7 @@
     <ClInclude Include="..\src\MdEmitter.h" />
     <ClInclude Include="..\src\MdEscape.h" />
     <ClInclude Include="..\src\OpcPackage.h" />
+    <ClInclude Include="..\src\RunCoalescer.h" />
     <ClInclude Include="..\src\StyleModel.h" />
     <ClInclude Include="..\src\Utf.h" />
     <ClInclude Include="..\src\XmlPull.h" />

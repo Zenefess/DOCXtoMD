@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:i/></w:rPr><w:t>italic</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>both</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:strike/></w:rPr><w:t>struck</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:dstrike/></w:rPr><w:t>double struck</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>up</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>down</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/><w:i/><w:strike/></w:rPr><w:t>all three</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/><w:vertAlign w:val="superscript"/></w:rPr><w:t>bold up</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:u w:val="single"/><w:highlight w:val="yellow"/><w:color w:val="FF0000"/></w:rPr><w:t>plain</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:smallCaps/></w:rPr><w:t>small</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Stars </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>*not*</w:t></w:r><w:r><w:t xml:space="preserve"> here</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>a &amp; b &lt;c&gt;</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:i/></w:rPr><w:t>a &amp; b &lt;c&gt;</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t xml:space="preserve">Heading with </w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>italic</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Never doubly bold</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>- not a bullet</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>1998. not a list</w:t></w:r></w:p>
+    <w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/><w:strike/></w:rPr><w:t>struck</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+    <w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>(a)</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">word </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>(a)</w:t></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>T</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>=eq=</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bo</w:t></w:r><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>ld</w:t></w:r></w:p>
+    <w:p><w:r><w:t>a</w:t></w:r><w:r><w:rPr><w:strike/></w:rPr><w:t>#hash</w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>
+    <w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>&#8220;quoted&#8221;</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+    <w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>&#233;t&#233;</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+    <w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>&#2404;a&#2404;</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+    <w:p><w:r><w:t>word</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>&#8550;a&#8550;</w:t></w:r><w:r><w:t>after</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bo</w:t></w:r><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>th</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>ree</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">word </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>a(</w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">x </w:t></w:r><w:r><w:rPr><w:strike/></w:rPr><w:t>a#</w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

@@ -8,6 +8,204 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M6, inline formatting.** The converter now emits delimiters. `src/RunCoalescer.h`/`.cpp` is the new
+  module the architecture list has been holding a place for: it merges adjacent spans carrying equal
+  formatting (CONVERSION_REFERENCE 5.1) and then hoists leading and trailing whitespace out of every
+  formatted span (5.3), in that order and not the other -- merged first, `**one ** **two**` is one bold
+  span reading `**one two**`, and hoisted first it would come apart. A span left holding nothing but
+  whitespace loses its formatting rather than its bytes, which makes 5.5's "never emit delimiters around
+  empty content" structural rather than a test the emitter has to remember. The merge is a length
+  extension over the arena and never moves a byte, and it checks that the two ranges really do meet
+  rather than trusting that they always will.
+- Bold, italic, strikethrough, superscript, subscript and inline code, nested in one fixed order:
+  `<sup>`/`<sub>`, then the strikethrough, then the emphasis, then a code span. Bold and italic together
+  are `***` (mapping row 5), and code drops bold and italic (row 11's own ruling on that collision)
+  while keeping the strikethrough and the vertical alignment, which wrap a code span perfectly well.
+  A code span's backtick run is longer than the longest run inside it and pads with one space when the
+  content begins or ends with a backtick, which is the only way a literal backtick can survive.
+- **The three escaping contexts M6 owed a caller.** `MD_CONTEXT_HTML` is what a superscript, a subscript
+  and every HTML fallback below write through; `MD_CONTEXT_CODE_SPAN` is what a code span writes
+  through; and `MD_CONTEXT_CODE_BLOCK` is what a fenced block writes through, so correctness rule 6's
+  "walker code never concatenates raw strings into output" holds for the literal contexts too.
+- Blockquotes (mapping row 13): a paragraph whose style chain is named Quote, Intense Quote, Block Text
+  or LibreOffice's Quotations becomes a block whose every line carries a `> ` prefix, the continuation
+  line after a hard break included. Two consecutive quote paragraphs are separated by a bare `>` rather
+  than a blank line, because a blank line closes the blockquote and opens a second one -- the single
+  exception to the one-blank-line-between-blocks rule, and it is still exactly one line. The row's
+  `w:ind >= 720` heuristic is deliberately not implemented; the reference has it off by default.
+- Fenced code blocks (row 12), by either detection: a paragraph style named HTML Preformatted,
+  Preformatted Text, Source Code or Code, or a paragraph whose every text-bearing run is set in one of
+  row 11's monospace families. Consecutive code paragraphs merge into one fence, whose length is longer
+  than the longest backtick run anywhere inside it; there is no info string, because the language is
+  never recoverable. An empty code paragraph is a blank line of the fence and is trimmed only where it
+  falls at either end of one, which is the one place `IrEndBlock`'s emptiness test is now suspended --
+  and its break trim with it, because inside a fence a break is a real newline rather than a marker.
+- The horizontal rule of row 25: a lone `w:pBdr` bottom or between border on a paragraph that came to
+  nothing becomes `---`. "Lone" is enforced at both ends -- a paragraph wearing a box is not a rule, and
+  neither is a bordered paragraph that has text in it -- and "came to nothing" covers a paragraph of
+  whitespace as well as one with no runs at all.
+- `StyleModel` gains the quote and code roles and the monospace verdict. A role now depends on what kind
+  of style declares the name, which is load-bearing rather than tidy: "Source Text" is LibreOffice's
+  *character* style for inline code (row 11) and an ordinary paragraph style name otherwise, and
+  `tests/fixtures/headings` has carried a paragraph style called exactly that since M5. `w:rFonts` is
+  read for its `w:ascii` alone and reduced to a tri-state at parse time, so the model stores no font
+  names; a `w:rFonts` naming only a theme slot specifies nothing rather than specifying false.
+- Seven golden fixture cases, each pinning a decision that would otherwise be unpinned: `fragments`
+  (mid-word run splits across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting`
+  (a trailing space inside bold, a leading one, a whitespace-only span, U+00A0 and a tab), `inline`
+  (every delimiter and combination, and the fallbacks below), `code` (both code detections, backtick
+  collisions, two fences and the blank line that does *not* separate them), `quotes`, `rules`, and
+  `monodefault`, whose `w:docDefaults` names Courier and which must not become one fence. The two the
+  milestone names by name are the first two. Every `expected.md` was written by hand from the
+  specification before the converter was run at it; six matched on the first run, and `monodefault`
+  was authored afterwards as a regression pin, so it failed until the guard below landed.
+- `tests/unit/TestRunCoalescer.cpp`, and the trace notation the other suites already use extended with
+  `c` for a code span and `Q`, `C` and `R` for the three new block kinds.
+- Rules that were implemented but pinned by nothing now have tests, each verified by deleting the rule
+  and watching the new case fail. Row 11's "code drops bold and italic", whose only observable effect is
+  whether two spans merge, so no golden could see it; the **closing** half of the flanking test, which
+  every existing fallback case reached the opening half of instead; and the guard that suppresses
+  hoisting inside a fence, whose case drove an *unformatted* span and so returned before the guard was
+  read. Then a second sweep, which mutated every rule the first round had touched and ran all three
+  suites against each: it found six more that were live and covered by nothing -- `DocIsSolid`'s CR and
+  tab, four of the six members of the emitter's flanking whitespace class, and `StyleReadBaseline`'s
+  `w:basedOn` fold, whose absence restores the whole-document fence verbatim because every
+  `w:default="1"` style in the repository named its font directly rather than inheriting it.
+  `tests/fixtures/monostyle` now inherits it through a parent, so the fold is pinned at golden level for
+  nothing.
+
+### Changed
+- `MdEscapeMeasure` and `MdEscapeWrite` take the D12 dollar verdict as an argument rather than counting
+  it themselves, and `MdEscapeCountDollars` is what a caller counts with. This is the obligation D12
+  left for M6 in writing: a line is escaped span by span now, because there is markup between the spans,
+  and a per-span count would read `costs $5` and `and $10` as two runs of one dollar each and escape
+  neither -- restoring exactly the corruption the ruling was made to fix. The emitter counts over the
+  whole assembled line and passes one verdict down to every span of it. A dollar inside a code span does
+  not count towards it: it cannot be escaped there, and 4.1 records that it is inert.
+- A line is assembled in its output form -- delimiters and escaped text together -- rather than raw and
+  escaped in one piece. The ampersand lookahead is safe within a span because the coalescer has already
+  merged every adjacent pair with equal formatting, so a split entity can only be separated by markup
+  that stops it being one; `tests/fixtures/textflow` pins that its bytes did not change.
+- Three existing goldens change, all for the same reason: `minimal` (and the fourteen container fixtures
+  that compare against it) and `relocated` gain `**bold**` and `**fails**`, and `nostyles` gains
+  `***...***`. Every other case is byte-identical, which is what says the escaping restructure and the
+  type-qualified style roles cost nothing they should not.
+
+### Fixed
+- **A strikethrough that wraps another delimiter no longer disappears.** `word~~**x**~~` emits four
+  literal tildes and no strikethrough at all: CommonMark refuses a delimiter run that is both preceded
+  by a letter and followed by punctuation, and a `~~` in front of a `**` is always followed by
+  punctuation. Two `~~` runs that meet fail differently and as completely -- `~~a~~~~b~~` is a run of
+  four tildes, which GFM does not recognise. A strikethrough that wraps anything is written `<del>`
+  instead, which has no flanking rule at all; one that wraps only text keeps the `~~` the mapping table
+  rules.
+- **Emphasis no longer disappears against punctuation.** The same flanking rules break `word**(a)**after`
+  and `***T*****=eq=**`, and the general answer is the same one: where the outermost Markdown delimiter
+  cannot open or close where it stands, an HTML element takes its place. Two delimiter runs that meet
+  are one run to a parser, so the test steps back over an adjacent run before looking at what precedes
+  it.
+- **Two adjacent runs that render as the same code span now merge.** Code drops bold and italic, so a
+  bold monospace run and a plain one beside it come out identical -- and left unmerged their two
+  backtick delimiters met and a renderer read the pair as one span with backticks in it. The bits are
+  cleared in the walker for the same reason the complex-script twins share one: the intermediate
+  representation is the output model, and what renders identically has to coalesce.
+  All three were found by a differential test against an independent CommonMark implementation, not by
+  a fixture, and none of them was reachable from the suites as they stood. The punctuation the flanking
+  test rests on is CommonMark's own definition -- the Unicode P and S categories, as a 338-range table
+  generated from the character database and binary-searched; a first cut carried a hand-picked subset
+  and an audit found it wrong both ways, calling 326 letters and numbers punctuation and missing 854
+  punctuation characters below U+3100 alone, the Arabic full stop and the Hebrew maqaf among them. The
+  generated table agrees with Python's `unicodedata` on all 1,112,064 code points.
+  `docs/CONVERSION_REFERENCE.md`
+  gains an eleventh pitfall in 4.2 for the flanking rules, and mapping rows 6 and 11 gain the two
+  caveats it implies, so the two documents do not disagree about what a delimiter may do.
+- **A document whose default font is monospace is no longer one enormous code block.** Row 12's second
+  detection asks whether every text-bearing run in a paragraph is monospace, and a `w:docDefaults`
+  naming Courier -- which legal filings routinely do -- makes that true of every paragraph in the file,
+  so the whole document converted to a single fence with every heading, emphasis and link delimiter
+  dead inside it. Such a default now switches the font heuristic off rather than on: it is a signal only
+  where it distinguishes one run from its neighbours. A code *character* style is unaffected, because
+  that is a statement about a run and not about the document. `tests/fixtures/monodefault` pins it.
+- **A space between two code runs no longer breaks the fence.** Word splits a logical run at every rsid
+  boundary and the space between two monospace runs routinely lands in the body font, so a run that
+  produced nothing but whitespace was voting against row 12 on exactly the fragmentation correctness
+  rule 4 exists to absorb. The vote is now taken once a whole run is read, and only by a run that
+  produced a byte which is neither a space nor a tab -- a space renders identically in every face.
+- **Three adjacent asterisk spans no longer lose all three.** CommonMark reads adjacent runs of one
+  delimiter character as a single run and pairs openers to closers by length -- its rule of three -- so
+  `**bo*****th****ree*` came out as six literal asterisks. That is arithmetic no character class can
+  express, so the flanking test could not see it; a span abutted by an identical run on both sides now
+  takes the element form, which has neither a length nor a flanking rule and also keeps the two
+  Markdown runs apart.
+- **A fenced block no longer closes on its own content.** The backtick run was measured within each
+  span, but a code block's spans need not carry equal formatting -- a bold ` `` ` beside a plain
+  `` ` `` stays two spans -- so a fence sized at three met content holding three. The run now carries
+  from span to span and resets at a line end.
+- **A fence no longer opens on a line of invisible padding.** Its outermost blank blocks were trimmed by
+  byte count, so a code paragraph of nothing but spaces counted as a line of code; the test is now the
+  same has-content test `IrEndBlock` applies to every other block kind. Inside the fence a blank line
+  still stays verbatim, because there it is content.
+- **A blank line inside a fence survives.** `IrEndBlock` trimmed a block's leading and trailing break
+  spans on the reasoning that a break with nothing beside it renders as a stray marker -- which is true
+  everywhere except inside a fence, where a break is a real newline and no marker is written for it, so
+  the trim simply lost a line. `IR_BLOCK_CODE` is exempt.
+- **A vendor element inside a `w:pBdr` no longer suppresses a horizontal rule.** The borders that make an
+  empty paragraph a rule were matched by name and every *other* element counted against it, so an
+  extension element or an `mc:AlternateContent` inside the `w:pBdr` read as a fourth border. Both halves
+  of `CT_PBdr` are now matched by name from their own tables, which is the OOXML compatibility model:
+  what this build has never heard of gets no vote.
+  All seven were raised by a review reading the code against the specification rather than by a test,
+  and every one was reproduced on the build before it was fixed. Each is pinned by a fixture, a unit
+  case, or both.
+- **The monospace-baseline guard now covers the half that matters more.** It read `w:docDefaults` alone,
+  and the other place a document declares a font baseline is the `w:default="1"` paragraph style -- which
+  is what Word's *Modify Style ▸ Normal* writes, and what LibreOffice and Pandoc reference documents
+  carry. It is also the likelier of the two, because Word's `w:docDefaults` normally names a *theme*
+  slot, which specifies no family at all. A file with a theme `w:docDefaults` and Courier on `Normal`
+  still converted to one fence, its headings becoming `` # `Chapter One` `` and its quotes
+  `` > `A quotation.` ``. The baseline is now computed once after the chains are folded, nearest-wins
+  over both halves, and both lower layers are suppressed where it is monospace -- a run's own `w:rFonts`
+  and its character style still speak, because each is a statement about a run and not about the
+  document. A *proportional* default style beats a monospace `w:docDefaults` and puts the heuristic back
+  on, which is the same nearest-wins rule and the right answer: an unstyled paragraph is proportional
+  there, so a monospace run really does stand out. `tests/fixtures/monostyle` is the golden pair.
+- **Whitespace hoisting now covers the whole Zs category**, not the ASCII space, the tab and U+00A0
+  alone: U+1680, U+2000-U+200A, U+202F, U+205F and U+3000 flank exactly the way an ordinary space does,
+  so a delimiter written hard against one does not parse and the formatting was silently lost --
+  `a<EN SPACE>bold` in bold emitted `a** bold** c`, which renders as four literal asterisks. Neither
+  character is exotic: U+2002 is one Insert ▸ Symbol away in Word and U+3000 is what a CJK keyboard's
+  space bar produces. The emitter's flanking classifier gained the same set, which also *relaxes* it --
+  a Zs in front of a span is whitespace rather than a word character, so a delimiter that parses
+  perfectly well no longer spends an HTML element. U+200B stays out of both: it is Cf, not Zs, and
+  CommonMark does not count it.
+- **A discarded `mc:Choice` no longer votes on the paragraph it was rewound out of.** The row 12 verdict
+  is walker state rather than intermediate representation, so `IrRewind` does not carry it and the walk
+  has to restore it by hand, exactly as `DocWalkParagraph` already did around a paragraph. Without it a
+  plain `mc:Choice` beside an all-monospace `mc:Fallback` demoted the fence that survived to an inline
+  code span, and a monospace Choice beside a plain Fallback did the reverse.
+- **A run that contributes no visible character no longer breaks a fence.** The abstention rule counted
+  bytes as they arrived rather than as they would be emitted, but a CR or an LF inside a `w:t` folds to
+  one space and a soft hyphen is dropped outright -- so a run made only of those voted, and Word gives a
+  hyphenation point from a later editing session its own `w:r`. The set is now the tab and the whole Zs
+  category as well, which is where the first cut of this fix stopped short: it was widened in a
+  different direction from the other two whitespace sites and never reached the class they had just
+  agreed on, so a body-font U+2002 or U+3000 between two monospace runs still broke the fence. On a
+  four-line listing with one such character, one fence became three blocks **and the demoted line's
+  leading indentation was silently dropped** by the emitter's padding trim -- bytes that survive under an
+  ASCII space. U+00A0 stays out of the set by mapping row 35, which makes it content; that is the one
+  place this question and `RunCoalescer`'s answer differ, and it is deliberate.
+- **A `w:basedOn` across two style types is now ignored**, which ISO/IEC 29500-1 17.7.4.3 requires: a
+  character style's parent shall be a character style. Beyond conformance it was a hole straight through
+  the monospace guard above -- a character style based on a monospace default *paragraph* style inherits
+  its family, and `StyleResolveRun` takes the character layer *before* the guard is read, so a document
+  whose only sin was `<w:basedOn w:val="Normal"/>` on an italic character style converted its prose to a
+  fenced code block. The role leaks the same way in the other direction, and that manifestation needs no
+  monospace font at all: a paragraph style based on a character style named "HTML Code" made ordinary
+  prose a fence. The test asks whether **both** styles said what they are, because `w:type` is optional
+  and this reader defaults an absent one to paragraph -- comparing the stored types alone would drop a
+  typeless style's link to a real character style, which is a shape producers write, and would silently
+  lose the code span it carries.
+
 - Decision **D12**, ruled 2026-08-26: a `$` is escaped as `\$`, but only where the assembled line holds
   two or more of them. GitHub has read `$...$` as inline math and `$$...$$` as display math since 2022,
   so `costs $5 and $10` rendered `5 and ` in math font and lost both signs; `docs/CONVERSION_REFERENCE.md`

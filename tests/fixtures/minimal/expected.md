@@ -1,3 +1,3 @@
 # Minimal fixture
 
-One paragraph of plain text, and one bold run.
+One paragraph of plain text, and one **bold** run.

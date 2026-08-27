@@ -45,12 +45,21 @@ typedef const MD_CONTEXT cMD_CONTEXT;
 
 //== Entry points
 
+/// Counts the dollar signs in a run of text, for a caller assembling D12's verdict over a whole line.
+/// @param text       The bytes to count; a null pointer counts nothing.
+/// @param byteCount  How many there are.
+/// @return How many U+0024 bytes it holds.
+/// @note This exists so the count can be taken over a line built from several spans. See the dollar note
+///       on MdEscapeWrite: the scope is the line, and it always was.
+cui64 MdEscapeCountDollars(cchptr text, cui64 byteCount);
+
 /// Measures the escaped form of a run of text.
 /// @param text       The bytes to escape; a null pointer measures nothing.
 /// @param byteCount  How many there are.
 /// @param context    Where they are going.
+/// @param dollars    Whether the line this run belongs to holds two or more dollar signs (D12).
 /// @return How many bytes the escaped form occupies.
-cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context);
+cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars);
 
 /// Writes the escaped form of a run of text.
 /// @param dest       Receives the escaped bytes, unterminated.
@@ -58,6 +67,7 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context);
 /// @param text       The bytes to escape; a null pointer writes nothing.
 /// @param byteCount  How many there are.
 /// @param context    Where they are going.
+/// @param dollars    Whether the line this run belongs to holds two or more dollar signs (D12).
 /// @return How many bytes were written.
 /// @note The escape set is CONVERSION_REFERENCE 4.1 and 4.2. In the inline family, the backslash,
 ///       asterisk, underscore, backtick, both brackets and the tilde are escaped unconditionally, per
@@ -75,24 +85,25 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context);
 ///       ordinary inline content, so "<sup>*n*</sup>" italicises the n. The ampersand and the
 ///       less-than sign become entities unconditionally there, because inside a fallback there is no
 ///       room for the guesswork the inline rules do about which of them could start markup.
-/// @note The dollar sign is escaped only where the run holds **two or more** of them, which is D12,
-///       ruled 2026-08-26. GitHub has read `$...$` as inline math and `$$...$$` as display math since
-///       2022, so "costs $5 and $10" loses both signs; a lone dollar cannot open a span and keeps its
-///       bare form, which is what makes a price -- the common case -- cost nothing. Counting is the
-///       whole rule on purpose: GitHub, Pandoc and the KaTeX-based previews disagree about whether a
-///       space may follow the opener or a digit the closer, and a count is safe under every one of
-///       those readings. It applies in the five contexts whose text a renderer parses as inline
-///       content -- inline, table cell, link text, alt text and the HTML fallback -- and in none of
-///       the other three: a backslash inside code is literal, and a destination is percent-encoded
-///       rather than escaped, where a dollar is a legal RFC 3986 sub-delimiter that %24 may not match.
-/// @note Two things the dollar rule rests on, so that neither is changed without noticing. The
-///       backslash must stay *unconditionally* escaped, or a source backslash before a dollar would
-///       swallow the escape this rule inserts. And the run handed here must be a whole assembled
-///       line: M6 moves escaping to per coalesced span, and a per-span count would see "costs $5"
-///       and "and $10" as two runs of one dollar each and escape neither, silently restoring exactly
-///       the corruption D12 was ruled to fix. M6 must count over the line and pass the verdict down.
-///       `tests/fixtures/dollars` pins that: it carries a line built from two runs holding one dollar
-///       each, which comes out escaped only while the count is taken over the whole line.
+/// @note The dollar sign is escaped only where the *line* holds two or more of them, which is D12, ruled
+///       2026-08-26 -- and the caller is what decides that, through the dollars argument. GitHub has read
+///       `$...$` as inline math and `$$...$$` as display math since 2022, so "costs $5 and $10" loses
+///       both signs; a lone dollar cannot open a span and keeps its bare form, which is what makes a
+///       price -- the common case -- cost nothing. Counting is the whole rule on purpose: GitHub, Pandoc
+///       and the KaTeX-based previews disagree about whether a space may follow the opener or a digit the
+///       closer, and a count is safe under every one of those readings. It applies in the five contexts
+///       whose text a renderer parses as inline content -- inline, table cell, link text, alt text and
+///       the HTML fallback -- and in none of the other three: a backslash inside code is literal, and a
+///       destination is percent-encoded rather than escaped, where a dollar is a legal RFC 3986
+///       sub-delimiter that %24 may not match.
+/// @note Two things the dollar rule rests on, so that neither is changed without noticing. The backslash
+///       must stay *unconditionally* escaped, or a source backslash before a dollar would swallow the
+///       escape this rule inserts. And the verdict must be taken over a whole assembled line and not
+///       over one run: since M6 a line is escaped span by span, because there is markup between the
+///       spans, and a per-span count would see "costs $5" and "and $10" as two runs of one dollar each
+///       and escape neither, silently restoring exactly the corruption D12 was ruled to fix. That is why
+///       this is an argument rather than something measured here: a run cannot answer it.
+///       `tests/fixtures/dollars` pins it, with a line built from two runs holding one dollar each.
 /// @note What the line scope does not cover, stated rather than hidden: one dollar before a hard break
 ///       and one after are two runs of one each, so both stay bare. This build assumes inline math
 ///       does not cross a line end -- GitHub documents `$$` for multi-line expressions, which reads
@@ -102,7 +113,7 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context);
 ///       cell. They are written now because correctness rule 6 forbids an emitter concatenating raw
 ///       text and because the rules are pure and testable without one -- but they are provisional,
 ///       and the milestone that first emits through one is expected to re-cut it against real input.
-cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context);
+cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars);
 
 /// Reports where a finished line needs one backslash to stop it starting a block it should not.
 /// @param line         The line's bytes, already escaped for MD_CONTEXT_INLINE and already trimmed.
