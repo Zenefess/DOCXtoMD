@@ -564,6 +564,7 @@ static cbool DocTakeRef(DOC_CONTEXTptrc context, cchptrcptr names, boolptrc take
 static cbool DocWalkImage(DOC_CONTEXTptrc context) {
    cui32    depthHere = context->reader->depth;
    cIR_MARK mark      = IrMark(context->document);
+   ui32     fillDepth = 0;
    bool     altTaken  = false;
    bool     refTaken  = false;
 
@@ -578,12 +579,23 @@ static cbool DocWalkImage(DOC_CONTEXTptrc context) {
 
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
+      // The picture fill is left behind the moment anything at its own level or above appears.
+      if(fillDepth && context->reader->depth <= fillDepth) fillDepth = 0;
       if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_PIC, "blipFill")) {
+         fillDepth = context->reader->depth;
+         continue;
+      }
       if(XmlIsElement(context->reader, XML_NS_WP, "docPr")) {
          if(!DocTakeAlt(context, XML_NS_NONE, DOC_DRAWING_ALT, &altTaken)) return false;
          continue;
       }
-      if(XmlIsElement(context->reader, XML_NS_A, "blip")) {
+      // A blip is the document's picture only under a pic:blipFill, which is the DrawingML picture
+      // vocabulary. The same element under an a:blipFill is a *fill* -- the bitmap a drawn shape, a
+      // chart wall or a table cell is painted with -- and taking it would emit the wallpaper of a
+      // shape as the figure the paragraph shows, which is also the opposite of this walk's own rule
+      // that a container with no picture in it comes to nothing.
+      if(fillDepth && context->reader->depth == fillDepth + 1u && XmlIsElement(context->reader, XML_NS_A, "blip")) {
          if(!DocTakeRef(context, DOC_BLIP_REF, &refTaken)) return false;
          continue;
       }

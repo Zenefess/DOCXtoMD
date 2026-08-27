@@ -21,3 +21,9 @@ Missing
 ![Shape](images_media/image1.png)
 
 ![a\] b](images_media/image1.png)
+
+A shape fill is not a picture: gone.
+
+```
+draw(Fenced)
+```

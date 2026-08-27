@@ -76,6 +76,10 @@ typedef const WALK_STATUS cWALK_STATUS;
 ///       once and the first alt text and the first relationship win, which is what emits a picture with
 ///       two vocabularies exactly once. A container holding no picture reference -- a chart, a diagram,
 ///       a drawn shape -- comes to nothing, because none of them has a bitmap the document could show.
+///       An a:blip counts only as the direct child of a pic:blipFill, which is the DrawingML *picture*
+///       vocabulary: the same element under an a:blipFill is the bitmap a drawn shape, a chart wall or a
+///       table cell is painted with, and taking it emits a shape's wallpaper as the figure the paragraph
+///       shows -- which is also the opposite of the rule in the sentence before this one.
 ///       A w:bookmarkStart becomes an anchor span where it stood, or is held for the next block when it
 ///       stood between two; LinkResolve mutes every anchor nothing points at, which is what keeps
 ///       Word's own _GoBack out of the output without this having to know its name.

@@ -88,5 +88,18 @@
         <pic:blipFill><a:blip r:embed="rId2"/></pic:blipFill>
       </pic:pic></a:graphicData></a:graphic>
     </wp:inline></w:drawing></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">A shape fill is not a picture: </w:t></w:r><w:r><w:drawing><wp:inline>
+      <wp:docPr id="13" name="Shape 2" descr="Wallpaper"/>
+      <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+        <a:sp><a:spPr><a:blipFill><a:blip r:embed="rId2"/></a:blipFill></a:spPr></a:sp>
+      </a:graphicData></a:graphic>
+    </wp:inline></w:drawing></w:r><w:r><w:t>gone.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t xml:space="preserve">draw(</w:t></w:r>
+      <w:r><w:drawing><wp:inline>
+        <wp:docPr id="14" name="Picture 14" descr="Fenced"/>
+        <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>
+          <pic:blipFill><a:blip r:embed="rId11"/></pic:blipFill>
+        </pic:pic></a:graphicData></a:graphic>
+      </wp:inline></w:drawing></w:r><w:r><w:t>)</w:t></w:r></w:p>
   </w:body>
 </w:document>

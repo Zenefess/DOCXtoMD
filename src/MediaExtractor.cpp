@@ -92,6 +92,33 @@ static cbool MediaAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr byt
    return true;
 }
 
+// Appends a path segment to an emitted destination, percent-encoding the three bytes a destination
+// cannot carry literally.
+//
+// MD_CONTEXT_LINK_DEST encodes CONVERSION_REFERENCE 4.1's reserved set and deliberately leaves these
+// three alone: '#' because the emitter writes one itself to open a fragment, and '%' and '?' because a
+// target arrives already encoded far more often than it arrives holding a literal one. None of that
+// holds for a path *this* module generates, where all three are ordinary bytes of a file name -- so a
+// document called "draft #2.docx" would otherwise link its pictures to a fragment of itself.
+static cbool MediaAppendPath(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr bytes, cui64 byteCount) {
+   static constexpr cchptr digits = "0123456789ABCDEF";
+
+   for(ui64 index = 0; index < byteCount; ++index) {
+      cchar byte = bytes[index];
+
+      if(byte != '#' && byte != '%' && byte != '?') {
+         if(!MediaAppend(dest, destBytes, used, bytes + index, 1u)) return false;
+         continue;
+      }
+      if(*used + 4u > destBytes) return false;
+      dest[(*used)++] = '%';
+      dest[(*used)++] = digits[(ui8(byte) >> 4) & 0x0Fu];
+      dest[(*used)++] = digits[ui8(byte) & 0x0Fu];
+      dest[*used]     = 0;
+   }
+   return true;
+}
+
 // Appends a decimal number to a buffer that is being built.
 static cbool MediaAppendNumber(chptrc dest, cui64 destBytes, ui64ptrc used, ui32 value) {
    char digits[12];
@@ -187,6 +214,19 @@ void MediaClose(MEDIA_SETptrc set) {
 cbool MediaPlan(MEDIA_SETptrc set, IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cchptr linkPrefix, cbool emitImages) {
    cui64 prefixBytes = (linkPrefix ? MediaLength(linkPrefix, MEDIA_MAX_PATH) : 0);
 
+   // A fenced block emits its text and nothing else -- a picture has no spelling inside one -- so an
+   // image there degrades to its alt text before anything is planned. Extracting the file anyway would
+   // write a picture to disk that no line of the document refers to.
+   for(ui32 index = 0; index < IrBlockCount(document); ++index) {
+      cIR_BLOCKptr block = IrBlockAt(document, index);
+
+      if(!block || block->kind != IR_BLOCK_CODE) continue;
+      for(ui32 at = 0; at < block->spanCount; ++at) {
+         cIR_SPANptr span = IrSpanAt(document, block->spanAt + at);
+
+         if(span && span->kind == IR_SPAN_IMAGE) MediaToText(document, block->spanAt + at);
+      }
+   }
    for(ui32 index = 0; index < IrSpanCount(document); ++index) {
       cIR_SPANptr span = IrSpanAt(document, index);
 
@@ -217,14 +257,16 @@ cbool MediaPlan(MEDIA_SETptrc set, IR_DOCUMENTptrc document, OPC_PACKAGEptrc pac
          continue;
       }
 
-      char path[MEDIA_MAX_PATH];
+      char   path[MEDIA_MAX_PATH];
+      cchptr leaf      = MediaNameOf(set, ui32(file));
+      cui64  leafBytes = MediaLength(leaf, MEDIA_MAX_NAME_BYTES);
 
       used = 0;
-      if(prefixBytes && (!MediaAppend(path, sizeof(path), &used, linkPrefix, prefixBytes) || !MediaAppend(path, sizeof(path), &used, "/", 1u))) {
+      if(prefixBytes && (!MediaAppendPath(path, sizeof(path), &used, linkPrefix, prefixBytes) || !MediaAppend(path, sizeof(path), &used, "/", 1u))) {
          MediaToText(document, index);
          continue;
       }
-      if(!MediaAppend(path, sizeof(path), &used, MediaNameOf(set, ui32(file)), MediaLength(MediaNameOf(set, ui32(file)), MEDIA_MAX_NAME_BYTES))) {
+      if(!MediaAppendPath(path, sizeof(path), &used, leaf, leafBytes)) {
          MediaToText(document, index);
          continue;
       }

@@ -25,10 +25,10 @@ below.
 ## Current state (do not assume more exists)
 
 - `src/` — **exists** and holds the CLI skeleton (M2), the container layer (M3), the XML and package
-  layer (M4) and the converter (M5): thirty-two files, all
+  layer (M4), the converter (M5/M6) and M7's reference resolution: thirty-six files, all
   CRLF, tab-free, ASCII-only, none over 150 columns, each carrying a validated r17 prolog at `v0.1.0`
   with `ISA: Scalar`. Unlike
-  `include/`, `src/` is **not** exempt from the repository style, and all thirty-two are committed in
+  `include/`, `src/` is **not** exempt from the repository style, and all thirty-six are committed in
   the shape `.clang-format` produces — running the formatter over them is a verified no-op, so a
   format-on-save cannot manufacture a diff. Keep it that way: format after editing, then re-check the
   r17 prolog, since the formatter has no opinion about it. Two shapes are worth copying because they
@@ -261,8 +261,23 @@ below.
     two tables rather than one half by exclusion, so a vendor extension or an `mc:AlternateContent`
     inside a `w:pBdr` is ignored instead of counting as a fourth border and suppressing the rule.
     A heading beats all of them. `w:t` text is taken literally —
-    `xml:space` is the producer's business — with U+00AD removed. What is skipped whole and why:
-    `w:tbl` (M9), `w:drawing`/`w:pict` (M7), `w:instrText` and `w:fldChar` (M10's field state machine),
+    `xml:space` is the producer's business — with U+00AD removed.
+    Since M7 the walk also reads references. A `w:hyperlink` becomes a link span pair around its content,
+    carrying the reference **as written** — an `r:id`, a `#` and a `w:anchor`, or both joined by the `#`
+    that will separate them in the output — because ids are scoped per part and the lookup belongs where
+    the part is known. A `w:bookmarkStart` becomes an anchor span where it stood, or is held for the next
+    block when it stood between two. A `w:drawing`, a `w:pict`, a `w:object` and an `mc:AlternateContent`
+    standing in for one all become a single image span through **one scan**: a picture is identified by
+    the markers inside it rather than by the element it arrived in, so both markup families are looked for
+    at once and the first alt text and the first relationship win — which is what emits a picture
+    described in two vocabularies exactly once, closing 5.8's double-emit by arithmetic rather than by
+    understanding the branches. A container holding no picture reference comes to nothing. **An `a:blip`
+    counts only as the direct child of a `pic:blipFill`**: the same element under an `a:blipFill` is the
+    bitmap a drawn shape, a chart wall or a table cell is *painted with*, and taking it emitted a shape's
+    wallpaper as the figure the paragraph shows — which also contradicted the "comes to nothing" rule,
+    since a drawn shape is exactly what that names.
+    What is skipped whole and why:
+    `w:tbl` (M9), `w:instrText` and `w:fldChar` (M10's field state machine),
     `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
     than merely unformatted — both are named in `DocWalker.cpp`'s To Do), and anything this build has
     never heard of, which is the OOXML compatibility model. Descended into although their own meaning
@@ -282,7 +297,11 @@ below.
     holding two or more `$` has every one of them escaped and a line holding one keeps it bare, because
     a math span needs two delimiters and a price is the common case. Two things it rests on — the
     backslash must stay unconditionally escaped, or a source `\` before a `$` would swallow the one
-    this rule inserts, and the count must be taken over a whole assembled line.
+    this rule inserts, and the count must be taken over a whole assembled line. Three of the four
+    contexts M5 wrote without a caller got one at M7, and re-cutting them against real hyperlinks changed
+    none of them: link text and alt text are the inline set, because what 4.1 asks of them beyond it is
+    that a closing bracket may not appear unescaped and the inline set escapes both brackets already.
+    `MD_CONTEXT_TABLE_CELL` is the one still waiting, and M9 is expected to re-cut it the same way.
   - `RunCoalescer.h`/`RunCoalescer.cpp` — the coalescing pass, and the reason a delimiter is safe. It
     merges adjacent text spans carrying equal formatting (correctness rule 4 / reference 5.1) and then
     hoists leading and trailing whitespace out of every formatted one (5.3), **in that order**: merged
@@ -329,17 +348,111 @@ below.
     which has neither a length nor a flanking rule and also keeps the two Markdown runs apart. That
     fallback is session-derived, not ruled, and it is the one place M6 writes markup the mapping
     table does not name.
+    M7's four span kinds emit here too: a link is its content between brackets and its destination in
+    parentheses, percent-encoded rather than backslash-escaped; an image is that with a `!` in front and
+    its alt text between the brackets; an anchor is the raw `<a id>` of mapping row 22; and a muted span
+    emits nothing at all. Two rules come from a link needing more than the span it stands on. A link that
+    runs over a hard break is **closed at the end of its line and opened again on the next**, because
+    Markdown cannot spell one that does — and a break at the very *edge* of a link leaves a half with
+    nothing between its brackets, so that bracket is unwound instead of closed: `[](url)` is a link a
+    reader can neither see nor click. And an **exclamation mark immediately before a link's `[` is
+    escaped**, because the pair is an image marker and "see this!" followed by a link renders as a broken
+    picture with the text gone. That is `docs/CONVERSION_REFERENCE.md` 4.2's pitfall 7, and `MdEscape`
+    leaves the mark alone on purpose: it is only dangerous next to a bracket the emitter itself writes,
+    which is knowledge a run does not have.
+    M7 re-cut the two lookaheads the fallback rests on, which its roadmap entry asks for by name: both
+    used to read past a non-text span to the text behind it, which was right while every neighbour *was*
+    text, and a link start now writes `[`, a link end `]`, an image `!` and an anchor `<` — every one of
+    them punctuation, so reading past one would report a letter where a bracket stands. A delimiter run
+    cannot merge with one on the far side of a bracket either, so anything but text ahead reports no
+    formatting at all. A link that runs over a hard break is closed at the end of its line and opened
+    again on the next, because Markdown cannot spell one that does; a span `LinkResolve` muted emits
+    nothing.
     A fence is sized from the longest backtick run **across** its blocks' spans rather than within each,
     because a code block's spans need not carry equal formatting — a bold ` `` ` beside a plain `` ` ``
     stays two spans, and measuring them apart sizes the fence at three, which the content's own three
     then closes. Its outermost blank lines are trimmed by whether a block holds a byte worth a line of
     its own, not by its byte count, so a code paragraph of nothing but padding does not open the fence.
+  - `LinkResolver.h`/`LinkResolver.cpp` — where a reference becomes a destination, and where correctness
+    rule 1 is kept for content. `LinkResolveRefs` looks a relationship id up in the part it was read in,
+    because ids are scoped per part; a hyperlink to an External target becomes that URI (with the
+    `w:anchor` fragment appended when the element carried both), a hyperlink to a part inside the package
+    becomes nothing, and an image becomes the part name for `MediaPlan` to turn into a file path. A
+    reference that resolves to nothing leaves an empty destination, which every later stage reads as "no
+    link": the text stays and the brackets go. `LinkResolveAnchors` is mapping row 22's two halves. A
+    bookmark that sits in a heading resolves to that heading's own GFM slug and then emits nothing, since
+    the heading already carries the anchor a renderer generates; one that sits anywhere else resolves to
+    its own sanitised name and is emitted as an `<a id>` element where it stands. An anchor nothing points
+    at is **muted**, which is what keeps `_GoBack` -- in every document Word saves -- out of the output
+    without this module knowing its name; a link naming a bookmark the document does not define is muted
+    too, and `IrDropEmptyBlocks` then removes a block that held nothing else. Both passes are muted twice,
+    at each end, because resolution is itself a way for a link to lose its destination. Names are paired
+    through an **open-addressed index built once**, for the reason M5's review found in `StyleModel`: a
+    document may carry tens of thousands of bookmarks and as many references, and pairing them by
+    scanning is quadratic in a way no fixture notices. **Relationship ids are indexed the same way and for
+    the same reason**, found one milestone later by the same kind of probe: `OpcFindRelById` is a scan,
+    which suits the handful of lookups every earlier milestone made, and M7 makes one per hyperlink and
+    one per picture against a part declaring one relationship for each -- 32,000 links took 2.34 seconds
+    and now take 0.10. The index is built here rather than in `OpcPackage` because the scan is still the
+    right shape for a caller that makes three lookups, and a failed allocation falls back to it: the index
+    is a speed measure and never a reason to fail a conversion. The slug is the piece that has to agree
+    with a machine nobody here controls -- we write `#dont-panic` and GitHub writes the heading's own id
+    -- so both halves of github-slugger's rule come from the Unicode character database rather than from
+    a guess: 753 ranges of code points a slug keeps and 181 runs of simple lower-case mappings, all
+    **1,112,064** code points agreeing with Python's `unicodedata`. The keep set is **L, M, Nd and
+    connector punctuation** -- `Nd` and not the whole of `N`, which is the one place a plausible reading
+    of "a number" is wrong: github-slugger's removal class takes out the superscripts and the vulgar
+    fractions while leaving the feminine ordinal, the micro sign and the masculine ordinal in the gaps
+    between its Latin-1 ranges, and Bengali says it again with the digits kept and the currency
+    numerators beside them dropped. A heading's leading and trailing padding is dropped before any of it,
+    because an ATX heading's content is its line stripped of whitespace at both ends and a renderer never
+    sees what a producer left there; interior padding is kept, one hyphen per space, and a character the
+    keep test drops does not break the run. Duplicates are numbered by github-slugger's own loop and not
+    by a counter, because a heading may be called "Introduction 1". This module is **not** in
+    `docs/CONVERSION_REFERENCE.md` 6.3's stage list and
+    is a session addition like `Ir.cpp` and `Convert`: heading slugs are numbered over the whole document,
+    so the pass has to see all of it, which neither the streaming walker nor the per-block emitter can.
+  - `MediaExtractor.h`/`MediaExtractor.cpp` — stage [11], split in two so that nothing reaches disk before
+    the document does. `MediaPlan` is the half that reads and writes nothing: it gives each distinct part
+    a name, `imageN.ext` in the order the document first draws it, and rewrites the span to point at it. A
+    part drawn twice keeps one file (5.8). The extension comes from `[Content_Types].xml` and **never**
+    from the entry name, which producers get wrong -- `tests/fixtures/images` carries a part named
+    `mystery.png` typed `image/jpeg`, which is 1.2's Google Docs trap -- and falls back to the entry
+    name's own extension only where it is short and alphanumeric, and to `.bin` otherwise. A picture whose
+    part the archive does not hold, and one whose reference resolved to nothing, degrade to their alt text
+    exactly as `--no-images` makes every picture do; neither is a refusal, because a picture that cannot
+    be found is a defect in the document. **So does a picture inside a fenced code block**, before
+    anything is planned: a fence emits its text and nothing else, so extracting the file would put a
+    picture on disk that no line of the document refers to and lose the alt text as well. The path this
+    module writes into the document percent-encodes `#`, `%` and `?` -- the three bytes
+    `MD_CONTEXT_LINK_DEST` deliberately leaves alone, because a *target* arrives already encoded far more
+    often than it arrives holding a literal one, and none of that reasoning holds for a name this module
+    generates from a document called `draft #2.docx`. `MediaWrite` is the half that touches the
+    filesystem, and it runs **after** the `.md` is written, so a conversion that fails before that point
+    leaves nothing behind at all; a half-written picture is deleted the way a half-written `.md` is. The
+    other order is not promised: a media directory that cannot be created leaves the document beside a
+    picture it names and does not have, which is the right way round -- the text is what the conversion
+    was for -- and the run still reports a failure. No archive entry name ever reaches disk, which is
+    correctness rule 10's other half.
   - `Convert.h`/`Convert.cpp` — the per-file pipeline: container, package, relationships, styles, walk,
-    coalesce, emit, write. This is the function one worker runs when M13 adds the bounded pool, which is why it
-    is a module and not a lump of `main.cpp`. `ConvertOutputPath` is pure and allocation-free and is
+    coalesce, resolve, plan the media, emit, write, extract. This is the function one worker runs when M13
+    adds the bounded pool, which is why it
+    is a module and not a lump of `main.cpp`. The four passes between the coalescer and the emitter run in
+    the one order that works: references resolve against the part they were read in, anchors resolve once
+    every reference is a destination (a heading's slug is numbered over the whole document), the media plan
+    turns a part name into a path and can turn a picture back into its alt text, and dropping the emptied
+    blocks last is what restores the invariant the emitter rests on — that every block it is handed
+    produces at least one byte. `ConvertOutputPath` is pure and allocation-free and is
     therefore what the unit suite hammers: D7d's rule is `-o` as a filename for one input and a
     directory for several, otherwise the input's own path with its extension replaced. A trailing
     separator names a directory whatever the input count, because no Windows file name may end in one.
+    `ConvertMediaDir` is pure too and shares `ConvertSplitPath` with it, which is not tidiness: a document
+    written as `report.md` must find its pictures in `report_media`, so one function has to answer both.
+    With no `--media-dir` the directory is the document's own stem with `_media` on it, beside the
+    document, and the path a reader follows is a single leaf, so the pair survives being moved together;
+    with `--media-dir` the directory is exactly what was asked for and the emitted path is the same string,
+    which is relative to the working directory rather than to the document — the user chose it, and
+    second-guessing a path they typed would be worse than honouring it.
     The output file is written with `CreateFileW`/`WriteFile` and **deleted again if the write does not
     finish** — a half-written `.md` that looks converted is worse than none. A derived path equal to
     the input is refused rather than overwritten, and `ConvertTargetTaken` is the pre-flight over the
@@ -352,7 +465,7 @@ below.
     replaces, so it lives there until then.
   - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, option handling, the input loop and the
     exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
-  - **What the binary does at M6**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+  - **What the binary does at M7**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
     input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and which
     part broke it**, an output that cannot be written exits 4, and a sound package is **converted** and
@@ -360,12 +473,15 @@ below.
     the document to standard output instead, through `DiagWriteOutBytes`, which goes to the handle
     rather than the CRT stream so that Windows cannot turn the emitter's LF endings into CRLF. A run
     that converted something and failed something exits **6**, which D7c reserves for exactly that; a
-    run in which everything failed returns the highest of their verdicts.
-  - **What M6 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
-    escaping that keeps all of it from being re-read as markup, and — new at M6 — bold, italic,
+    run in which everything failed returns the highest of their verdicts. Since M7 a document that draws
+    pictures also writes them, into `<stem>_media\` beside the `.md` or into `--media-dir`, and says how
+    many in a note; `--no-images` turns that off and keeps the alt text.
+  - **What M7 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
+    escaping that keeps all of it from being re-read as markup; bold, italic,
     strikethrough, superscript, subscript, inline code, fenced code blocks, blockquotes and the
-    horizontal rule. Lists, tables, links, images, notes and fields arrive at M7 through M10 and are
-    skipped until then, which means `w:tbl`, `w:drawing`, `w:pict`, `w:instrText`, `w:fldChar`, the
+    horizontal rule; and — new at M7 — hyperlinks, bookmark anchors, heading slugs, images and the media
+    files they come from. Lists, tables, notes and fields arrive at M8 through M10 and are
+    skipped until then, which means `w:tbl`, `w:instrText`, `w:fldChar`, the
     note references, `w:sym` and `m:oMath` are all still skipped whole. Underline, highlight, colour and
     size are dropped by policy and always will be (mapping rows 8 and 9).
 
@@ -385,10 +501,10 @@ below.
   and both build clean at `/W3`. No OutDir override. Both configs also define
   `WIN32_LEAN_AND_MEAN;NOMINMAX` — added at M2, when `<windows.h>` first entered the project; neither
   hides a header this project needs, because `winnls.h` (`WideCharToMultiByte`) and `wincon.h`
-  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Sixteen
-  `<ClCompile>`s, all `src\…`, and twenty-two `<ClInclude>`s: the six `include\…` headers and sixteen
+  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Eighteen
+  `<ClCompile>`s, all `src\…`, and twenty-four `<ClInclude>`s: the six `include\…` headers and eighteen
   `src\…` ones.
-- `DOCXtoMD.vcxproj.filters` — lists the sixteen `src\*.cpp` files under Source Files and all twenty-two
+- `DOCXtoMD.vcxproj.filters` — lists the eighteen `src\*.cpp` files under Source Files and all twenty-four
   headers under Header Files, in the same order as the `.vcxproj`. Every `<ClCompile Include="…">` and
   `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character; keep it that way, or
   the IDE tree stops reflecting the build. The tree is deliberately flat — there is no `src` filter
@@ -403,7 +519,7 @@ below.
   because MSBuild's default is `$(SolutionDir)`-relative: without the pin the test binary lands in
   `x64\Release\` when the solution is built and in `tests\x64\Release\` when the project is, and a
   definition-of-done command cannot name a path that moves. The main project still sets no OutDir. It
-  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the eleven files in
+  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the fourteen files in
   `tests\unit\`.
 - Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
   Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
@@ -495,7 +611,7 @@ below.
   `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
   code and the message; `run_golden.py` converts every golden and byte-compares it. All three
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
-  a POSIX host — run them as `python tests/<name>.py`. There are **sixteen** part trees under
+  a POSIX host — run them as `python tests/<name>.py`. There are **nineteen** part trees under
   `fixtures/`: `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`,
   `nostyles` and `wrappers`, `dollars`, which D12 added, and M6's eight — `fragments` (mid-word run
   splits across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting` (a trailing space
@@ -507,11 +623,24 @@ below.
   plain one beside it), `quotes`, `rules`, and the two monospace-baseline pins — `monodefault`, whose
   `w:docDefaults` names Courier, and `monostyle`, whose `w:docDefaults` names a *theme* slot and whose
   default `Normal` paragraph style names Courier, which is what Word actually writes. Neither may turn
-  its document into one fence. Each case has an `expected.md` beside its `src/`, and every one was
+  its document into one fence. M7 adds three more: `links` (every shape a hyperlink comes in — a dangling
+  reference, an empty one, a nested pair, a target needing percent-encoding, a target inside the package,
+  one in a heading and one broken by a hard break), `images` (both markup families, an external target, a
+  chart with no bitmap, a picture inside a link, a part the archive does not hold, an `mc:AlternateContent`
+  that must emit one picture and not two, a part named `.png` and typed `image/jpeg`, a shape whose
+  `a:blipFill` must *not* become the paragraph's picture, and a picture inside a fenced block, which must
+  become its alt text and write no file) and `anchors`
+  (a bookmark in a heading, one mid-paragraph, an unreferenced `_GoBack`, a link to a bookmark nothing
+  defines, two headings that must be numbered apart, and a bookmark between paragraphs).
+  `make_fixtures.py` also synthesises `media-binary.docx`, whose one media part holds every byte value,
+  so that the byte path to disk is proved rather than assumed. Each case has an `expected.md` beside its
+  `src/`, and every one was
   written by hand from the specification before the converter was run at it. The six M6 wrote up front
   all matched on the first run; the two monospace-baseline pins did not, and were not meant to — each
   was authored as the regression pin for a defect a review had just found, so each failed against the
-  build as it stood and passed once its guard landed.
+  build as it stood and passed once its guard landed. Of M7's three, `links` and `images` matched first
+  time and `anchors` did not: it is how `[nowhere]()` — what a link to a bookmark the document does not
+  define was emitting — was found, which is the whole reason for writing one by hand.
   `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
   `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
   `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
@@ -527,17 +656,21 @@ below.
   DEFLATE behaviour, and the sound fixtures are read back with `zipfile` on every run. Output goes to
   `tests/build/`, which is git-ignored.
   The expectation table lives in `make_fixtures.py` and `run_container.py` reads it, so a fixture and
-  the exit code it should produce are declared in one place. Since M4 each row also carries a **`sound`**
+  the exit code it should produce are declared in one place. Since M7 a second table beside it, `MEDIA`,
+  declares which fixture must extract which files and what each must hold, and `run_golden.py` reads that
+  the same way; the bytes come from the fixture's own tree, so a part edited under `tests/fixtures/`
+  changes both sides of the comparison at once. Since M4 each row also carries a **`sound`**
   flag: whether the bytes are a well-formed ZIP an independent reader must read back. That used to be the
   same question as "does it exit 5" and no longer is, because a package can be a perfectly good archive
   and still not be a DOCX — without the flag every new package-level negative would silently drop out of
   the `zipfile` cross-check.
-- `tests/unit/` — **exists** as of M4, doubled at M5 and gained a ninth suite at M6:
+- `tests/unit/` — **exists** as of M4, doubled at M5, gained a ninth suite at M6 and an eleventh at M7:
   `Check.h`/`Check.cpp` (one `CHECK` macro, a
   group heading and a pass/fail summary, over `typedefs.h` and `<stdio.h>` and nothing else — the header
   itself needs only `typedefs.h`, so a suite that includes it pulls in no I/O), `TestMain.cpp`, and one
   suite per module — `TestUtf.cpp`, `TestXmlPull.cpp`, `TestOpcPackage.cpp`, `TestStyleModel.cpp`,
-  `TestDocWalker.cpp`, `TestRunCoalescer.cpp`, `TestMdEscape.cpp`, `TestMdEmitter.cpp`,
+  `TestDocWalker.cpp`, `TestRunCoalescer.cpp`, `TestLinkResolver.cpp`, `TestMediaExtractor.cpp`,
+  `TestMdEscape.cpp`, `TestMdEmitter.cpp`,
   `TestConvert.cpp`. Every case is driven from a string literal;
   nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
   works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
@@ -555,7 +688,14 @@ below.
   than ten assertions. M6 extended that notation rather than inventing one: `c` is a code span, and the
   block letters are `Q` for a blockquote, `C` for a line of a fenced block and `R` for a horizontal
   rule. `TestDocWalker` and `TestRunCoalescer` share it, which is what makes the pair readable: the
-  first shows the fragmentation the walker preserves, the second shows the same document merged.
+  first shows the fragmentation the walker preserves, the second shows the same document merged. M7
+  extended it again rather than inventing one: `L(dest)` opens a link and `L)` closes it, `I(source)[alt]`
+  is an image, `N(name)` is a bookmark anchor and `N-(name)` one that has been muted. The two renderers
+  are independent copies with no shared header, so a kind added to one and not the other makes the pair
+  disagree about the same document — edit both.
+  `TestMdEmitter`'s helper runs every pass `Convert.cpp` runs, in the same order, so what it measures is
+  the shape the program really produces; with no package a relationship resolves to nothing, so a
+  `w:anchor` link is the half of M7 the emitter suite can reach and the rest is the goldens' to prove.
 - **Not yet created** (GCS obligations, see Roadmap): `bench/` and CI. Do not reference them as if they
   exist. Everything else this section names does exist, `tests/run_golden.py` included.
 
@@ -590,8 +730,9 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M6 they return **117**, **65** and **1058** checks, confirmed on Windows on 2026-08-27 and identical
-to what the Linux shim measured beforehand, as they have been at every milestone since M3.
+At M7 they return **125**, **86** and **1188** checks. Those three numbers are the shim's, measured on
+Linux; the M6 numbers they replace -- 117, 65 and 1058 -- were confirmed on Windows on 2026-08-27 and
+were identical to what the shim had measured beforehand, as they have been at every milestone since M3.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -904,6 +1045,28 @@ forbidden; before D6 it was.
   `volatile ui32` with unconditional full barriers — there is no `std::atomic` and no memory-order
   argument to document. Record the locking contract in the prolog instead; adopting `std::atomic`
   anywhere would need a new decision.
+- **M4's coverage gap is still open, and M7 did not close it.** `OpcFindRelById` is exercised on every
+  hyperlink and every picture, but the claim it exists to support -- that relationship ids are scoped
+  per part, so `rId3` in `document.xml` and `rId3` in `footnotes.xml` are unrelated -- still has no
+  test, because M7 loads exactly one part's relationships. It gets one at **M10**, when the footnote
+  walk loads a second part's. Note what M7 did add: `LinkResolver` now builds its id index over one
+  part, taking `partIndex` from the caller, so the scoping is in the *shape* of the code as well as in
+  `OpcPackage`'s -- but a shape is not a test.
+- **Two M7 rules are live and pinned by nothing, and both are stated rather than quietly carried.**
+  `MdFormatAhead` reports `IR_FMT_NONE` for a markup span, which is the same reasoning as
+  `MdEdgeAhead`'s and is right for the same reason -- a `[` between two emphasis spans separates their
+  delimiter runs, so the rule of three does not apply across it. Every case that would distinguish it
+  puts two adjacent asterisk runs on one line, where the *correct* output is itself the open question
+  M6's abutted rule only half answers, so a test would pin an argument rather than a rule. And the
+  fence emitter's "nothing but text reaches a fence" guard can no longer change a byte: the only span
+  kind it dropped that carried any text was an image, and `MediaPlan` now degrades an image inside a
+  fenced block to its alt text before the emitter sees one. The guard stays because the emitter must
+  not depend on a pass that runs before it, but it is defensive code and not a live rule. Both were
+  found by mutation testing, which is the only thing that finds this class. A third mutation survives and
+  is not the same kind of thing: deleting `LinkResolver`'s relationship index changes no byte of any
+  output, because the index is a speed measure whose deliberate fallback is the scan it replaced. What
+  pins *that* is a scale probe rather than a suite, and a scale probe is not something a definition of
+  done can name until `bench/` exists (bd1/bd2).
 
 ## Conversion engine — non-negotiable correctness rules
 
@@ -962,8 +1125,13 @@ implementation session must respect:
 | Quote styles | `> ` blockquote — Quote, Intense Quote, Block Text and LibreOffice's Quotations, by name, never by indent. Two consecutive quote paragraphs are separated by a bare `>` rather than a blank line, so a quotation a producer broke in two stays one blockquote: session-derived at M6, and the one exception to the blank line between blocks |
 | Bullet / numbered lists | `-` / real computed numbers (`3.` honors start); nested by `ilvl` |
 | Tables | GFM pipe tables; header = first row (or `tblHeader`); cell breaks → `<br>`; merged → padded GFM cells (gridSpan: content in first cell + empty pads; vMerge continue: empty cell; HTML `<table>` under `--tables=html-on-merge`); nested → HTML `<table>` fallback |
-| Hyperlinks | `[text](url)` external, `[text](#anchor)` internal (GFM heading slugs) |
+| Hyperlinks | `[text](url)` external, `[text](#anchor)` internal (GFM heading slugs). A slug is github-slugger's rule exactly: lower case, then everything outside Unicode L, M, **Nd** and connector punctuation removed, then each space to a hyphen — over the heading's content with the padding at its two ends stripped, as an ATX heading's own parsing strips it. `Nd` and not all of `N`: the renderer removes the superscripts, the vulgar fractions and the Roman numerals |
+| A hyperlink whose destination resolves to nothing | The text, with no brackets — a dangling `r:id`, a target inside the package, a bookmark the document does not define. Session-derived at M7 and the same shape reference 5.4 gives a dangling numbering reference: degrade, never refuse. A hyperlink with no *content* goes the same way, which 5.6 asks for outright |
+| A bookmark a link points at | The heading's own GFM slug where the bookmark sits in a heading, and `<a id="name"></a>` at the bookmark otherwise (row 22). A bookmark **nothing** points at emits nothing at all: session-derived at M7, and it is what keeps Word's `_GoBack` and `_Toc…` out of every converted document without the code knowing their names |
 | Images | `![alt](media dir/imageN.ext)` — extracted, extension from content type, alt from `docPr/@descr` |
+| A drawing container with no picture in it | Nothing — a chart, a SmartArt diagram, a drawn shape. Reference 2.6 leaves it to policy between a placeholder and a skip; skipping is session-derived at M7, because a placeholder invents content the document does not have and `docPr/@name` is "Chart 1" rather than a description |
+| An image whose part the archive does not hold | Its alt text, as plain text, exactly as `--no-images` renders every picture. Session-derived at M7: a picture that cannot be found is a defect in the document, not in the conversion, so it is not a refusal |
+| EMF and WMF | Extracted and linked like any other picture, which reference 1.2 leaves to policy between that and a warning. Session-derived at M7: no Markdown renderer will display one, but the file is what the document had and dropping it loses more than linking it does |
 | Footnotes/endnotes | `[^n]` refs + definitions at end, renumbered 1..n |
 | Horizontal rule (`pBdr` bottom on empty ¶) | `---` with blank lines around |
 | `w:br` (textWrapping) / page break | Backslash hard break (`<br>` in cells) / nothing |
@@ -976,23 +1144,32 @@ implementation session must respect:
 | A `$` on a line that holds two or more of them | `\$` — GitHub reads `$...$` as inline math and `$$...$$` as display math (D12). A line holding one `$` keeps it bare: a span needs two delimiters, and a price is the common case |
 | Two hard breaks with nothing between them | Collapse to one, and a hard break with nothing after it is dropped. A Markdown line that is empty ends the paragraph, so neither `--hard-break` spelling can carry an empty continuation line |
 | A hard break inside a heading | One space. An ATX heading is a single line by construction |
+| A hard break inside a hyperlink | The link closes at the end of its line and opens again on the next — two clickable halves of one destination, because Markdown cannot spell a link that spans a line. A break at the very *edge* of one leaves a half with nothing between the brackets, and that bracket is unwound rather than closed: `[](url)` is a link a reader can neither see nor click. Session-derived at M7 |
+| An exclamation mark immediately in front of an emitted link | `\!` — the pair `![` is an image marker, so "see this!" followed by a link renders as a broken picture with the link text gone (CONVERSION_REFERENCE 4.2's pitfall 7). `MdEscape` leaves the mark alone by design: it is only dangerous next to a bracket the emitter itself writes |
+| A picture inside a fenced code block | Its alt text, as literal text of the fence, and no file extracted. A fence emits its text and nothing else, so an extracted picture would be one no line of the document refers to. Session-derived at M7 |
+| `#`, `%` or `?` in a **generated** media path | Percent-encoded. The three bytes `MD_CONTEXT_LINK_DEST` leaves alone in a producer's own target, because that target arrives already encoded far more often than it arrives holding a literal one — which is not true of a name derived from `draft #2.docx` |
 
-## Planned architecture (`docs/`, `include/`, `tests/` and seventeen `src/` modules exist — build the rest by Roadmap)
+## Planned architecture (`docs/`, `include/`, `tests/` and nineteen `src/` modules exist — build the rest by Roadmap)
 
-**Written so far (M2 + M3 + M4 + M5 + M6)**: `src/main.cpp`, `src/BuildGuards.h`,
+**Written so far (M2 + M3 + M4 + M5 + M6 + M7)**: `src/main.cpp`, `src/BuildGuards.h`,
 `src/CliOptions.h`/`.cpp`, `src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`,
 `src/ZipReader.h`/`.cpp`, `src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp`, `src/OpcPackage.h`/`.cpp`,
 `src/StyleModel.h`/`.cpp`, `src/Ir.h`/`.cpp`, `src/DocWalker.h`/`.cpp`, `src/RunCoalescer.h`/`.cpp`,
+`src/LinkResolver.h`/`.cpp`, `src/MediaExtractor.h`/`.cpp`,
 `src/MdEscape.h`/`.cpp`, `src/MdEmitter.h`/`.cpp` and `src/Convert.h`/`.cpp`, plus everything already in
 `docs/`, `include/` and `tests/`. Every other entry below is still to be written — do not reference one
 as if it exists.
 
-Two entries below are **not** in the list `docs/CONVERSION_REFERENCE.md` 6.3 maps the stages onto, and
-both are session-derived rather than ruled. `Ir.cpp` exists because the representation needs growable
+Three entries below are **not** in the list `docs/CONVERSION_REFERENCE.md` 6.3 maps the stages onto, and
+all three are session-derived rather than ruled. `Ir.cpp` exists because the representation needs growable
 arrays, and growable arrays need real functions rather than a header full of `inline` the p1 rule does
 not license. `Convert` exists because the per-file pipeline is M13's worker body: it has to be callable
 from something other than `wmain` before M13 arrives, and putting the output-path derivation there is
 what lets the unit suite drive it — the test project compiles every `src\*.cpp` but `main.cpp`.
+`LinkResolver` exists because a heading's GFM slug is numbered over the whole document, so the pass has
+to see all of it at once — which neither the streaming walker nor the per-block emitter can do. 6.3 puts
+that work in stage [9] and maps it onto `RunCoalescer`/`MdEmitter`; giving it a module of its own is a
+divergence, recorded here and in the module's own header rather than left to be discovered.
 
 ```
 src/
@@ -1019,29 +1196,36 @@ src/
    NumberingModel.h/.cpp numbering.xml → per-numId levels with overrides; runtime counters
    Ir.h/.cpp             intermediate representation (blocks/spans) — the walker never emits Markdown
                          [written at M5; the .cpp is a session addition, see above]
-   DocWalker.h/.cpp      document walk → IR (tracked changes, sdt, AlternateContent) [written at M5];
-                         the footnote walk and the field state machine arrive at M10
+   DocWalker.h/.cpp      document walk → IR (tracked changes, sdt, AlternateContent) [written at M5;
+                         hyperlinks, pictures and bookmarks at M7]; the footnote walk and the field
+                         state machine arrive at M10
    RunCoalescer.h/.cpp   adjacent-run merging + whitespace hoisting  [written at M6]. The effective
                          format is resolved one stage earlier, in DocWalker, which is where the run
                          properties are — a divergence from CONVERSION_REFERENCE 6.2's [7]+[8], noted
                          there and in the module's own header
+   LinkResolver.h/.cpp   relationship ids → destinations; bookmarks → GFM heading slugs or <a id>
+                         anchors; the anchors nothing points at muted  [written at M7; a session
+                         addition, see above]
    MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)  [written at M5]
    MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing  [written at M5;
                          the delimiters, the block kinds and the flanking fallback at M6]
-   Convert.h/.cpp        one file end to end: container → package → styles → walk → emit → write, and
-                         D7b's output-path derivation. M13's Batch calls this per worker
+   Convert.h/.cpp        one file end to end: container → package → styles → walk → coalesce → resolve
+                         → plan → emit → write → extract, plus D7b's output-path derivation and M7's
+                         media-directory derivation. M13's Batch calls this per worker
                          [written at M5; a session addition, see above]
    MediaExtractor.h/.cpp referenced media parts → disk; content-type extensions; dedup; safe names
+                         [written at M7, in two halves: MediaPlan names and rewrites without touching
+                         the filesystem, MediaWrite writes after the document is safely out]
    Diag.h/.cpp           error codes/messages → stderr, and the --stdout document → stdout;
                          exit-code mapping. MT-safe from M13: every worker reports through this one
                          sink, so it locks then (D6). Reentrant at M2
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
-                         run_container.py [make_fixtures.py written at M3 and extended at M4, M5 and
-                         M6; run_container.py written at M3 and extended at M4]; run_golden.py
-                         [written at M5];
+                         run_container.py [make_fixtures.py written at M3 and extended at M4, M5, M6
+                         and M7; run_container.py written at M3 and extended at M4]; run_golden.py
+                         [written at M5, with the media table and the media options at M7];
                          unit/ holds the CHECK header and one suite per module, built by
                          tests/DOCXtoMD.Tests.vcxproj [written at M4, five more suites at M5, a
-                         ninth at M6]
+                         ninth at M6, an eleventh at M7]
 bench/                   GCS p4 microbenches (create with the first performance claim)
 docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
 include/                 the six owner-authored shared headers (already here); on the include path
@@ -1054,11 +1238,13 @@ code plus the CRT/Win32 and the six shared headers in `include/`, which every mo
 Allocation-conscious modules (GCS p2 hot set): `Inflate`, `ZipReader`, `XmlPull` (zero-allocation
 steady state), `DocWalker`, `RunCoalescer`, `MdEmitter` (single growable buffer), `Utf` — all
 allocating through `memory management.h`. The parsed-once models (`StyleModel`, `NumberingModel`,
-`OpcPackage`, `CliOptions`) use the same allocators but are not hot.
+`OpcPackage`, `CliOptions`) use the same allocators but are not hot, and so do the two M7 passes:
+`LinkResolver` allocates one name index and one slug index per document, and `MediaExtractor` one plan.
 
 Under D6, **`Batch` and `Diag` are the only `MT-safe` modules**. Everything that converts a document
 — `Utf`, `Inflate`, `Crc32`, `ZipReader`, `XmlPull`, `OpcPackage`, `StyleModel`, `NumberingModel`,
-`Ir`, `DocWalker`, `RunCoalescer`, `MdEscape`, `MdEmitter`, `MediaExtractor`, `Convert` — is
+`Ir`, `DocWalker`, `RunCoalescer`, `LinkResolver`, `MdEscape`, `MdEmitter`, `MediaExtractor`,
+`Convert` — is
 instantiated once per worker, holds no cross-file state and is never shared, so it needs no lock.
 `Convert` is the whole of one worker's body from M13: everything it opens, it opens on its own stack. `CliOptions` holds
 the input **list** (D7b) plus the worker count, is parsed once before any worker starts and is then
@@ -1668,12 +1854,69 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     path needs rather than faulting the way MSVC would, which is stricter but is not the same code. All
     of it is now covered: both configurations build warning-free and every suite passes against the real
     binary.
-- **M7 `[todo]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs. M6 leaves
-  three things waiting here by name: `MD_CONTEXT_LINK_TEXT`, `MD_CONTEXT_LINK_DEST` and
-  `MD_CONTEXT_ALT_TEXT` still have no caller and are still provisional; `RunCoalescer` merges across a
-  `w:hyperlink` boundary, which 5.1 says it must not once the brackets exist; and `MdEdgeAhead` reads
-  the next span's own first byte, which is right while every neighbour is text and needs re-reading once
-  a `[` can stand between two spans.
+- **M7 `[done-unverified]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs.
+  M6 left three things waiting here by name and all three are settled: `MD_CONTEXT_LINK_TEXT`,
+  `MD_CONTEXT_LINK_DEST` and `MD_CONTEXT_ALT_TEXT` have callers and were re-cut against real hyperlinks
+  (which changed none of them, and `MdEscape.h` records why); `RunCoalescer` no longer merges across a
+  `w:hyperlink` boundary, because a link start blocks a merge while an anchor is transparent to one; and
+  `MdEdgeAhead` reads the markup rather than the text beyond it, so a `[` standing between two spans is
+  punctuation to the flanking test.
+  **Status**: the code landed from Linux on 2026-08-27 and **nothing has been run on Windows**, so the
+  marker is `[done-unverified]` and the next Windows session verifies rather than reimplements it. The
+  three unrun commands are the whole of the definition of done: `msbuild DOCXtoMD.sln /m
+  /p:Configuration=Release /p:Platform=x64` (and the Debug configuration), `python tests\run_container.py`,
+  `python tests\run_golden.py` and `tests\x64\Release\DOCXtoMD.Tests.exe`.
+  - **What was verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII
+    only, CRLF and ≤150 columns on all thirty-six `src/` files and all fourteen `tests/unit/` ones;
+    `clang-format --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs
+    well-formed XML, mutually byte-identical in their `Include=` paths, and every listed file on disk.
+  - **What was verified on Linux, behaviourally, against the shim build**: the unit suite passes all
+    **1188** checks, `tests/run_golden.py` all **86** and `tests/run_container.py` all **125**, every one
+    of them under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no
+    diagnostic. Those numbers are the shim's; whether the real MSVC binary returns the same three is
+    exactly what the Windows run is for, and for the four milestones before this one it has.
+  - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`,
+    M4 from expat and M5 and M6 from `markdown-it-py`. M7's claim is about *references*, so the oracle
+    compares the link and image structure `markdown-it-py` parses back out of the emitted Markdown
+    against an independent Python model of the walk, the resolution and the slugger. The slugger is
+    checked the harder way the punctuation table was at M6: all **1,112,064** code points agree with
+    Python's `unicodedata` under the keep rule, and the keep rule itself is pinned against
+    github-slugger's own removal class rather than against a guess -- see the Nd entry below. Every
+    harness is scratch and **the commit does not carry one**; what they leave behind is the fixtures and
+    the unit cases they motivated.
+  - **What that oracle and the reviews found, none of it reachable from the fixtures as they stood.**
+    Two were about scale rather than correctness and both are M5's `StyleModel` lesson arriving again: a
+    paragraph of N bookmarks between N word fragments was quadratic in the coalescer, and N hyperlinks
+    against N relationships was quadratic in `OpcFindRelById` -- **2.34 seconds** at 32,000 links, now
+    0.10, through an index `LinkResolver` builds once. Of the rest, the ones that lost a document's
+    meaning: an `a:blip` was matched wherever it stood, so a drawn shape's *fill* was emitted as the
+    figure the paragraph shows; an image inside a fenced block was dropped from the output and extracted
+    to disk anyway; an exclamation mark in front of a link turned it into a broken picture (pitfall 7);
+    a hard break at the edge of a link emitted `[](url)`; a generated media path did not encode `#`, `%`
+    or `?`, so a document called `draft #2.docx` linked its pictures to a fragment of itself; a
+    `--media-dir` ending in a separator doubled it; a heading's slug carried the padding a renderer
+    strips, so `# Intro ` reached `-intro-`; and the slug keep set was the whole of category N where the
+    renderer's is `Nd`, so a vulgar fraction or a Roman numeral in a heading resolved to nothing.
+    `CHANGELOG.md` carries the whole list; each is pinned by a unit case, a fixture, or both.
+  - **The Nd question is settled against the renderer's own class, not against a reading of it**:
+    github-slugger's removal regex takes out U+00B2, U+00B3, U+00B9 and U+00BC..U+00BE -- the
+    superscripts and the vulgar fractions, every one of them No -- while leaving U+00AA, U+00B5 and
+    U+00BA, every one of them a letter, standing in the gaps between those ranges. Bengali says it twice
+    over: the digits U+09E6..U+09EF are kept and the currency numerators U+09F4..U+09F9 beside them are
+    not. Comparing that Latin-1 class against both candidate rules leaves `L | M | Nd | Pc` matching
+    exactly and `L | M | N | Pc` wrong in six places.
+  - **Every rule this milestone introduced was mutation-tested**, the way M6's third review established:
+    each of forty is deleted or inverted in turn and all three suites are run, and a rule no suite
+    notices is a rule covered by nothing. Two rounds of that found six rules covered by nothing, and
+    every one of the six now fails under mutation. What is *not* pinned is stated rather than hidden --
+    see the entries under Known gaps.
+  - **The mutation harness's own verdicts were then re-checked by hand, and two of them were wrong.**
+    Running the forty twice gave different answers for four rules: the padding trim and `--no-images`
+    reported as unpinned in the second round are both caught by a suite when the mutation is applied and
+    run by hand, and the fence guard reported as caught in the second round is not. The harness is a
+    scratch tool and the commit does not carry it; what it is for is finding candidates, and a candidate
+    it names is not a finding until the mutation has been applied and the suites run over it directly.
+    That is M6's own lesson about pinning claims turned on the tool that checks them.
 - **M8 `[todo]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne numPr).
 - **M9 `[todo]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.
   `MD_CONTEXT_TABLE_CELL` is the last escaping context with no caller, and it is still provisional. Two
@@ -1715,7 +1958,9 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
 
 D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19, and D8–D11 on 2026-08-24, the day M4
 raised them: the owner accepted all four session recommendations as written. **D12 was raised by M5 on 2026-08-25
-and ruled on 2026-08-26**, the owner again accepting the recommendation as written, so no decision is open. Keep the
+and ruled on 2026-08-26**, the owner again accepting the recommendation as written. **D13 was raised by M7 on
+2026-08-27 and is `Open — owner call`**: the code implements the recommendation meanwhile, because a milestone cannot
+ship without doing *something*, and the row says exactly what would change if the owner rules the other way. Keep the
 IDs stable — `docs/CONVERSION_REFERENCE.md` cites D1, D2, D8 and D10 by name — and keep a ruled row's question and
 the reasoning that was put to the owner rather than trimming it to the answer, because a ruling records what was
 asked as much as what was decided. New questions get the next free ID (D13, D14, …) with the same
@@ -1735,6 +1980,7 @@ question/recommendation/status shape, and stay `Open — owner call` until the o
 | D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | **Leave it as it is until M11** and decide there with the producer-variance corpus in hand. Nothing is exposed meanwhile: part names are only ever compared in memory and no path reaches disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Deferred to M11 by the ruling** — that milestone owns the decision and must not close without recording it |
 | D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | **Yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it earlier would oblige every future file to pass a session-authored checker with no CI behind it. | M12 |
 | D12 | GitHub renders `$...$` and `$$...$$` as LaTeX math, and has since 2022. `docs/CONVERSION_REFERENCE.md` 4.1 predates that and does not list `$` among the characters to escape, so today a paragraph reading `costs $5 and $10` is emitted verbatim and github.com renders `5 and ` in math font, losing both dollar signs. Should `$` join the unconditional inline escape set, join it conditionally (only where a closing `$` could pair with it), or stay unescaped? Note the cost of each: unconditional puts a backslash in front of every price in every document, conditional needs a lookahead the line-assembly pass can do but the reference does not describe, and leaving it corrupts a real and common shape on the one renderer this converter names in its own mapping table. The same question reaches `docs/CONVERSION_REFERENCE.md`, which would gain the row either way. | **Escape `$` conditionally**, adopting the session recommendation in full; ruled 2026-08-26. Unconditional escaping is the safe direction but it is visible on every ordinary document, and math is not a CommonMark feature -- it is one renderer's extension, so paying for it everywhere is out of proportion. *(Consequence, session-derived: "conditionally" is implemented as **at most one unescaped `$` per assembled line** -- a line holding two or more has every one of them escaped, a line holding one keeps it bare. A span needs two delimiters under every renderer's reading, so a count is safe without reproducing GitHub's exact opener and closer conditions, which this project cannot verify. All-or-none was preferred over leaving one bare per line because it also narrows the one residual: a line that pairs internally contributes no live dollar to the next line.)* | **done** (the rule, the reference row and `tests/fixtures/dollars` landed 2026-08-26, after M5's verification) |
+| D13 | `--stdout` and the media files. `--stdout` is single-input only (D7d) and writes the document to a pipe; M7 gives a document pictures, which are files and cannot go down a pipe. Three readings are available. **Extract anyway**, into the media directory beside where the `.md` *would* have gone, so the piped document and a written one are the same bytes and the pictures are on disk for whatever consumes the pipe. **Extract nothing**, on the reading that `--stdout` means "write no files", which makes the piped document name pictures that do not exist unless the reader also passes `--no-images`. **Refuse the combination**, which is the strictest and costs the shell pipeline that wants both. Note what the second and third cost beyond the obvious: `tests/run_golden.py` converts every fixture twice, once to a file and once through `--stdout`, and byte-compares both against one `expected.md` -- that is the check that has caught a `--stdout`-only defect before, and either of them ends it. | **Recommendation (not yet ruled): extract anyway.** `--stdout` is about where the *document* goes, and the media directory is derived from `-o` or from the input either way, so nothing about it is ambiguous. It is also the only reading under which the two output paths produce the same document, which is the property the golden runner exists to prove. The strict direction stays open: extract-anyway to refuse is a change a user notices, but so is every other pair, and no producer or consumer has a stake in this one yet. | **Implemented as recommended at M7**, and `tests/run_golden.py` compares the two paths byte for byte. If the owner rules otherwise, the change is in `ConvertFile` alone -- the pipeline below it does not know which path it is on. |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the

@@ -128,6 +128,14 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       22 asks for. A span LinkResolve muted emits nothing at all -- a link with no destination or no
 ///       content, an anchor nothing points at -- and a link that runs over a hard break is closed at the
 ///       end of its line and opened again on the next, because Markdown cannot spell one that does.
+/// @note Two rules follow from a link needing to see more than the span it stands on. A hard break at the
+///       very *edge* of a link leaves one of its two halves with nothing between the brackets, and
+///       "[](url)" is a link a reader can neither see nor click, so that bracket is unwound rather than
+///       closed. And an exclamation mark immediately in front of a link's '[' is escaped: the pair is an
+///       image marker, so "see this!" followed by a link renders as a broken picture with the link text
+///       gone. That is CONVERSION_REFERENCE 4.2's pitfall 7, and MdEscape leaves the mark alone on
+///       purpose -- it is only dangerous next to a bracket this module itself writes, which is knowledge
+///       a run does not have.
 cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document);
 
 /// The emitted bytes.

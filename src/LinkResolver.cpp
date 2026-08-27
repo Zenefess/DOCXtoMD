@@ -60,112 +60,114 @@ struct LINK_FOLD {
 typedef const LINK_RANGE cLINK_RANGE;
 typedef const LINK_FOLD  cLINK_FOLD;
 
-// Every range of code points a GFM slug keeps: the Unicode general categories L, M and N, plus connector
-// punctuation, which is what github-slugger's removal regex leaves behind. The table is generated from
-// the Unicode character database and sorted, so a reader who doubts a row can regenerate it and diff --
-// and the reason it is not a hand-picked subset is M6's, one milestone on: a letter called punctuation
-// and a punctuation character called a letter are both wrong, and here either writes a link that scrolls
-// nowhere. Everything outside these ranges is dropped, except the space, which becomes a hyphen, and the
-// hyphen itself, which is kept. A code point the database does not assign is kept rather than dropped,
-// because the renderer's own table is generated from whichever Unicode version it was built against and
-// no answer here can be right for all of them.
+// Every range of code points a GFM slug keeps: the Unicode general categories L, M and Nd, plus
+// connector punctuation, which is what github-slugger's removal regex leaves behind. Nd and not N is the
+// whole of the category question and the regex settles it in Latin-1 alone: it removes U+00B2, U+00B3,
+// U+00B9 and U+00BC..U+00BE -- the superscripts and the vulgar fractions, every one of them No -- while
+// leaving U+00AA, U+00B5 and U+00BA, every one of them a letter, standing in the gaps between those
+// ranges. Bengali says the same thing twice over: the digits U+09E6..U+09EF are kept and the currency
+// numerators U+09F4..U+09F9 beside them are not.
+//
+// The table is generated from the Unicode character database and sorted, so a reader who doubts a row can
+// regenerate it and diff -- and the reason it is not a hand-picked subset is M6's, one milestone on: a
+// letter called punctuation and a punctuation character called a letter are both wrong, and here either
+// writes a link that scrolls nowhere. Everything outside these ranges is dropped, except the space, which
+// becomes a hyphen, and the hyphen itself, which is kept. A code point the database does not assign is
+// kept rather than dropped, because the renderer's own table is generated from whichever Unicode version
+// it was built against and no answer here can be right for all of them.
 static constexpr LINK_RANGE LINK_SLUG_KEEP[] = {
     {0x0030u, 0x0039u},   {0x0041u, 0x005Au},   {0x005Fu, 0x005Fu},   {0x0061u, 0x007Au},   // Digit Zero
-    {0x00AAu, 0x00AAu},   {0x00B2u, 0x00B3u},   {0x00B5u, 0x00B5u},   {0x00B9u, 0x00BAu},   // Feminine Ordinal Indicator
-    {0x00BCu, 0x00BEu},   {0x00C0u, 0x00D6u},   {0x00D8u, 0x00F6u},   {0x00F8u, 0x02C1u},   // Vulgar Fraction One Quarter
-    {0x02C6u, 0x02D1u},   {0x02E0u, 0x02E4u},   {0x02ECu, 0x02ECu},   {0x02EEu, 0x02EEu},   // Modifier Letter Circumflex Accent
-    {0x0300u, 0x0374u},   {0x0376u, 0x0377u},   {0x037Au, 0x037Du},   {0x037Fu, 0x037Fu},   // Combining Grave Accent
-    {0x0386u, 0x0386u},   {0x0388u, 0x038Au},   {0x038Cu, 0x038Cu},   {0x038Eu, 0x03A1u},   // Greek Capital Letter Alpha With Tonos
-    {0x03A3u, 0x03F5u},   {0x03F7u, 0x0481u},   {0x0483u, 0x052Fu},   {0x0531u, 0x0556u},   // Greek Capital Letter Sigma
-    {0x0559u, 0x0559u},   {0x0560u, 0x0588u},   {0x0591u, 0x05BDu},   {0x05BFu, 0x05BFu},   // Armenian Modifier Letter Left Half Ring
-    {0x05C1u, 0x05C2u},   {0x05C4u, 0x05C5u},   {0x05C7u, 0x05C7u},   {0x05D0u, 0x05EAu},   // Hebrew Point Shin Dot
-    {0x05EFu, 0x05F2u},   {0x0610u, 0x061Au},   {0x0620u, 0x0669u},   {0x066Eu, 0x06D3u},   // Hebrew Yod Triangle
-    {0x06D5u, 0x06DCu},   {0x06DFu, 0x06E8u},   {0x06EAu, 0x06FCu},   {0x06FFu, 0x06FFu},   // Arabic Letter Ae
-    {0x0710u, 0x074Au},   {0x074Du, 0x07B1u},   {0x07C0u, 0x07F5u},   {0x07FAu, 0x07FAu},   // Syriac Letter Alaph
-    {0x07FDu, 0x07FDu},   {0x0800u, 0x082Du},   {0x0840u, 0x085Bu},   {0x0860u, 0x086Au},   // Nko Dantayalan
-    {0x0870u, 0x0887u},   {0x0889u, 0x088Eu},   {0x0898u, 0x08E1u},   {0x08E3u, 0x0963u},   // Arabic Letter Alef With Attached Fatha
-    {0x0966u, 0x096Fu},   {0x0971u, 0x0983u},   {0x0985u, 0x098Cu},   {0x098Fu, 0x0990u},   // Devanagari Digit Zero
-    {0x0993u, 0x09A8u},   {0x09AAu, 0x09B0u},   {0x09B2u, 0x09B2u},   {0x09B6u, 0x09B9u},   // Bengali Letter O
-    {0x09BCu, 0x09C4u},   {0x09C7u, 0x09C8u},   {0x09CBu, 0x09CEu},   {0x09D7u, 0x09D7u},   // Bengali Sign Nukta
-    {0x09DCu, 0x09DDu},   {0x09DFu, 0x09E3u},   {0x09E6u, 0x09F1u},   {0x09F4u, 0x09F9u},   // Bengali Letter Rra
-    {0x09FCu, 0x09FCu},   {0x09FEu, 0x09FEu},   {0x0A01u, 0x0A03u},   {0x0A05u, 0x0A0Au},   // Bengali Letter Vedic Anusvara
-    {0x0A0Fu, 0x0A10u},   {0x0A13u, 0x0A28u},   {0x0A2Au, 0x0A30u},   {0x0A32u, 0x0A33u},   // Gurmukhi Letter Ee
-    {0x0A35u, 0x0A36u},   {0x0A38u, 0x0A39u},   {0x0A3Cu, 0x0A3Cu},   {0x0A3Eu, 0x0A42u},   // Gurmukhi Letter Va
-    {0x0A47u, 0x0A48u},   {0x0A4Bu, 0x0A4Du},   {0x0A51u, 0x0A51u},   {0x0A59u, 0x0A5Cu},   // Gurmukhi Vowel Sign Ee
-    {0x0A5Eu, 0x0A5Eu},   {0x0A66u, 0x0A75u},   {0x0A81u, 0x0A83u},   {0x0A85u, 0x0A8Du},   // Gurmukhi Letter Fa
-    {0x0A8Fu, 0x0A91u},   {0x0A93u, 0x0AA8u},   {0x0AAAu, 0x0AB0u},   {0x0AB2u, 0x0AB3u},   // Gujarati Letter E
-    {0x0AB5u, 0x0AB9u},   {0x0ABCu, 0x0AC5u},   {0x0AC7u, 0x0AC9u},   {0x0ACBu, 0x0ACDu},   // Gujarati Letter Va
-    {0x0AD0u, 0x0AD0u},   {0x0AE0u, 0x0AE3u},   {0x0AE6u, 0x0AEFu},   {0x0AF9u, 0x0AFFu},   // Gujarati Om
-    {0x0B01u, 0x0B03u},   {0x0B05u, 0x0B0Cu},   {0x0B0Fu, 0x0B10u},   {0x0B13u, 0x0B28u},   // Oriya Sign Candrabindu
-    {0x0B2Au, 0x0B30u},   {0x0B32u, 0x0B33u},   {0x0B35u, 0x0B39u},   {0x0B3Cu, 0x0B44u},   // Oriya Letter Pa
-    {0x0B47u, 0x0B48u},   {0x0B4Bu, 0x0B4Du},   {0x0B55u, 0x0B57u},   {0x0B5Cu, 0x0B5Du},   // Oriya Vowel Sign E
-    {0x0B5Fu, 0x0B63u},   {0x0B66u, 0x0B6Fu},   {0x0B71u, 0x0B77u},   {0x0B82u, 0x0B83u},   // Oriya Letter Yya
-    {0x0B85u, 0x0B8Au},   {0x0B8Eu, 0x0B90u},   {0x0B92u, 0x0B95u},   {0x0B99u, 0x0B9Au},   // Tamil Letter A
-    {0x0B9Cu, 0x0B9Cu},   {0x0B9Eu, 0x0B9Fu},   {0x0BA3u, 0x0BA4u},   {0x0BA8u, 0x0BAAu},   // Tamil Letter Ja
-    {0x0BAEu, 0x0BB9u},   {0x0BBEu, 0x0BC2u},   {0x0BC6u, 0x0BC8u},   {0x0BCAu, 0x0BCDu},   // Tamil Letter Ma
-    {0x0BD0u, 0x0BD0u},   {0x0BD7u, 0x0BD7u},   {0x0BE6u, 0x0BF2u},   {0x0C00u, 0x0C0Cu},   // Tamil Om
-    {0x0C0Eu, 0x0C10u},   {0x0C12u, 0x0C28u},   {0x0C2Au, 0x0C39u},   {0x0C3Cu, 0x0C44u},   // Telugu Letter E
-    {0x0C46u, 0x0C48u},   {0x0C4Au, 0x0C4Du},   {0x0C55u, 0x0C56u},   {0x0C58u, 0x0C5Au},   // Telugu Vowel Sign E
-    {0x0C5Du, 0x0C5Du},   {0x0C60u, 0x0C63u},   {0x0C66u, 0x0C6Fu},   {0x0C78u, 0x0C7Eu},   // Telugu Letter Nakaara Pollu
+    {0x00AAu, 0x00AAu},   {0x00B5u, 0x00B5u},   {0x00BAu, 0x00BAu},   {0x00C0u, 0x00D6u},   // Feminine Ordinal Indicator
+    {0x00D8u, 0x00F6u},   {0x00F8u, 0x02C1u},   {0x02C6u, 0x02D1u},   {0x02E0u, 0x02E4u},   // Latin Capital Letter O With Stroke
+    {0x02ECu, 0x02ECu},   {0x02EEu, 0x02EEu},   {0x0300u, 0x0374u},   {0x0376u, 0x0377u},   // Modifier Letter Voicing
+    {0x037Au, 0x037Du},   {0x037Fu, 0x037Fu},   {0x0386u, 0x0386u},   {0x0388u, 0x038Au},   // Greek Ypogegrammeni
+    {0x038Cu, 0x038Cu},   {0x038Eu, 0x03A1u},   {0x03A3u, 0x03F5u},   {0x03F7u, 0x0481u},   // Greek Capital Letter Omicron With Tonos
+    {0x0483u, 0x052Fu},   {0x0531u, 0x0556u},   {0x0559u, 0x0559u},   {0x0560u, 0x0588u},   // Combining Cyrillic Titlo
+    {0x0591u, 0x05BDu},   {0x05BFu, 0x05BFu},   {0x05C1u, 0x05C2u},   {0x05C4u, 0x05C5u},   // Hebrew Accent Etnahta
+    {0x05C7u, 0x05C7u},   {0x05D0u, 0x05EAu},   {0x05EFu, 0x05F2u},   {0x0610u, 0x061Au},   // Hebrew Point Qamats Qatan
+    {0x0620u, 0x0669u},   {0x066Eu, 0x06D3u},   {0x06D5u, 0x06DCu},   {0x06DFu, 0x06E8u},   // Arabic Letter Kashmiri Yeh
+    {0x06EAu, 0x06FCu},   {0x06FFu, 0x06FFu},   {0x0710u, 0x074Au},   {0x074Du, 0x07B1u},   // Arabic Empty Centre Low Stop
+    {0x07C0u, 0x07F5u},   {0x07FAu, 0x07FAu},   {0x07FDu, 0x07FDu},   {0x0800u, 0x082Du},   // Nko Digit Zero
+    {0x0840u, 0x085Bu},   {0x0860u, 0x086Au},   {0x0870u, 0x0887u},   {0x0889u, 0x088Eu},   // Mandaic Letter Halqa
+    {0x0898u, 0x08E1u},   {0x08E3u, 0x0963u},   {0x0966u, 0x096Fu},   {0x0971u, 0x0983u},   // Arabic Small High Word Al-Juz
+    {0x0985u, 0x098Cu},   {0x098Fu, 0x0990u},   {0x0993u, 0x09A8u},   {0x09AAu, 0x09B0u},   // Bengali Letter A
+    {0x09B2u, 0x09B2u},   {0x09B6u, 0x09B9u},   {0x09BCu, 0x09C4u},   {0x09C7u, 0x09C8u},   // Bengali Letter La
+    {0x09CBu, 0x09CEu},   {0x09D7u, 0x09D7u},   {0x09DCu, 0x09DDu},   {0x09DFu, 0x09E3u},   // Bengali Vowel Sign O
+    {0x09E6u, 0x09F1u},   {0x09FCu, 0x09FCu},   {0x09FEu, 0x09FEu},   {0x0A01u, 0x0A03u},   // Bengali Digit Zero
+    {0x0A05u, 0x0A0Au},   {0x0A0Fu, 0x0A10u},   {0x0A13u, 0x0A28u},   {0x0A2Au, 0x0A30u},   // Gurmukhi Letter A
+    {0x0A32u, 0x0A33u},   {0x0A35u, 0x0A36u},   {0x0A38u, 0x0A39u},   {0x0A3Cu, 0x0A3Cu},   // Gurmukhi Letter La
+    {0x0A3Eu, 0x0A42u},   {0x0A47u, 0x0A48u},   {0x0A4Bu, 0x0A4Du},   {0x0A51u, 0x0A51u},   // Gurmukhi Vowel Sign Aa
+    {0x0A59u, 0x0A5Cu},   {0x0A5Eu, 0x0A5Eu},   {0x0A66u, 0x0A75u},   {0x0A81u, 0x0A83u},   // Gurmukhi Letter Khha
+    {0x0A85u, 0x0A8Du},   {0x0A8Fu, 0x0A91u},   {0x0A93u, 0x0AA8u},   {0x0AAAu, 0x0AB0u},   // Gujarati Letter A
+    {0x0AB2u, 0x0AB3u},   {0x0AB5u, 0x0AB9u},   {0x0ABCu, 0x0AC5u},   {0x0AC7u, 0x0AC9u},   // Gujarati Letter La
+    {0x0ACBu, 0x0ACDu},   {0x0AD0u, 0x0AD0u},   {0x0AE0u, 0x0AE3u},   {0x0AE6u, 0x0AEFu},   // Gujarati Vowel Sign O
+    {0x0AF9u, 0x0AFFu},   {0x0B01u, 0x0B03u},   {0x0B05u, 0x0B0Cu},   {0x0B0Fu, 0x0B10u},   // Gujarati Letter Zha
+    {0x0B13u, 0x0B28u},   {0x0B2Au, 0x0B30u},   {0x0B32u, 0x0B33u},   {0x0B35u, 0x0B39u},   // Oriya Letter O
+    {0x0B3Cu, 0x0B44u},   {0x0B47u, 0x0B48u},   {0x0B4Bu, 0x0B4Du},   {0x0B55u, 0x0B57u},   // Oriya Sign Nukta
+    {0x0B5Cu, 0x0B5Du},   {0x0B5Fu, 0x0B63u},   {0x0B66u, 0x0B6Fu},   {0x0B71u, 0x0B71u},   // Oriya Letter Rra
+    {0x0B82u, 0x0B83u},   {0x0B85u, 0x0B8Au},   {0x0B8Eu, 0x0B90u},   {0x0B92u, 0x0B95u},   // Tamil Sign Anusvara
+    {0x0B99u, 0x0B9Au},   {0x0B9Cu, 0x0B9Cu},   {0x0B9Eu, 0x0B9Fu},   {0x0BA3u, 0x0BA4u},   // Tamil Letter Nga
+    {0x0BA8u, 0x0BAAu},   {0x0BAEu, 0x0BB9u},   {0x0BBEu, 0x0BC2u},   {0x0BC6u, 0x0BC8u},   // Tamil Letter Na
+    {0x0BCAu, 0x0BCDu},   {0x0BD0u, 0x0BD0u},   {0x0BD7u, 0x0BD7u},   {0x0BE6u, 0x0BEFu},   // Tamil Vowel Sign O
+    {0x0C00u, 0x0C0Cu},   {0x0C0Eu, 0x0C10u},   {0x0C12u, 0x0C28u},   {0x0C2Au, 0x0C39u},   // Telugu Sign Combining Candrabindu Above
+    {0x0C3Cu, 0x0C44u},   {0x0C46u, 0x0C48u},   {0x0C4Au, 0x0C4Du},   {0x0C55u, 0x0C56u},   // Telugu Sign Nukta
+    {0x0C58u, 0x0C5Au},   {0x0C5Du, 0x0C5Du},   {0x0C60u, 0x0C63u},   {0x0C66u, 0x0C6Fu},   // Telugu Letter Tsa
     {0x0C80u, 0x0C83u},   {0x0C85u, 0x0C8Cu},   {0x0C8Eu, 0x0C90u},   {0x0C92u, 0x0CA8u},   // Kannada Sign Spacing Candrabindu
     {0x0CAAu, 0x0CB3u},   {0x0CB5u, 0x0CB9u},   {0x0CBCu, 0x0CC4u},   {0x0CC6u, 0x0CC8u},   // Kannada Letter Pa
     {0x0CCAu, 0x0CCDu},   {0x0CD5u, 0x0CD6u},   {0x0CDDu, 0x0CDEu},   {0x0CE0u, 0x0CE3u},   // Kannada Vowel Sign O
     {0x0CE6u, 0x0CEFu},   {0x0CF1u, 0x0CF2u},   {0x0D00u, 0x0D0Cu},   {0x0D0Eu, 0x0D10u},   // Kannada Digit Zero
-    {0x0D12u, 0x0D44u},   {0x0D46u, 0x0D48u},   {0x0D4Au, 0x0D4Eu},   {0x0D54u, 0x0D63u},   // Malayalam Letter O
-    {0x0D66u, 0x0D78u},   {0x0D7Au, 0x0D7Fu},   {0x0D81u, 0x0D83u},   {0x0D85u, 0x0D96u},   // Malayalam Digit Zero
-    {0x0D9Au, 0x0DB1u},   {0x0DB3u, 0x0DBBu},   {0x0DBDu, 0x0DBDu},   {0x0DC0u, 0x0DC6u},   // Sinhala Letter Alpapraana Kayanna
-    {0x0DCAu, 0x0DCAu},   {0x0DCFu, 0x0DD4u},   {0x0DD6u, 0x0DD6u},   {0x0DD8u, 0x0DDFu},   // Sinhala Sign Al-Lakuna
-    {0x0DE6u, 0x0DEFu},   {0x0DF2u, 0x0DF3u},   {0x0E01u, 0x0E3Au},   {0x0E40u, 0x0E4Eu},   // Sinhala Lith Digit Zero
-    {0x0E50u, 0x0E59u},   {0x0E81u, 0x0E82u},   {0x0E84u, 0x0E84u},   {0x0E86u, 0x0E8Au},   // Thai Digit Zero
-    {0x0E8Cu, 0x0EA3u},   {0x0EA5u, 0x0EA5u},   {0x0EA7u, 0x0EBDu},   {0x0EC0u, 0x0EC4u},   // Lao Letter Pali Jha
-    {0x0EC6u, 0x0EC6u},   {0x0EC8u, 0x0ECDu},   {0x0ED0u, 0x0ED9u},   {0x0EDCu, 0x0EDFu},   // Lao Ko La
-    {0x0F00u, 0x0F00u},   {0x0F18u, 0x0F19u},   {0x0F20u, 0x0F33u},   {0x0F35u, 0x0F35u},   // Tibetan Syllable Om
-    {0x0F37u, 0x0F37u},   {0x0F39u, 0x0F39u},   {0x0F3Eu, 0x0F47u},   {0x0F49u, 0x0F6Cu},   // Tibetan Mark Ngas Bzung Sgor Rtags
-    {0x0F71u, 0x0F84u},   {0x0F86u, 0x0F97u},   {0x0F99u, 0x0FBCu},   {0x0FC6u, 0x0FC6u},   // Tibetan Vowel Sign Aa
-    {0x1000u, 0x1049u},   {0x1050u, 0x109Du},   {0x10A0u, 0x10C5u},   {0x10C7u, 0x10C7u},   // Myanmar Letter Ka
-    {0x10CDu, 0x10CDu},   {0x10D0u, 0x10FAu},   {0x10FCu, 0x1248u},   {0x124Au, 0x124Du},   // Georgian Capital Letter Aen
-    {0x1250u, 0x1256u},   {0x1258u, 0x1258u},   {0x125Au, 0x125Du},   {0x1260u, 0x1288u},   // Ethiopic Syllable Qha
-    {0x128Au, 0x128Du},   {0x1290u, 0x12B0u},   {0x12B2u, 0x12B5u},   {0x12B8u, 0x12BEu},   // Ethiopic Syllable Xwi
-    {0x12C0u, 0x12C0u},   {0x12C2u, 0x12C5u},   {0x12C8u, 0x12D6u},   {0x12D8u, 0x1310u},   // Ethiopic Syllable Kxwa
-    {0x1312u, 0x1315u},   {0x1318u, 0x135Au},   {0x135Du, 0x135Fu},   {0x1369u, 0x137Cu},   // Ethiopic Syllable Gwi
+    {0x0D12u, 0x0D44u},   {0x0D46u, 0x0D48u},   {0x0D4Au, 0x0D4Eu},   {0x0D54u, 0x0D57u},   // Malayalam Letter O
+    {0x0D5Fu, 0x0D63u},   {0x0D66u, 0x0D6Fu},   {0x0D7Au, 0x0D7Fu},   {0x0D81u, 0x0D83u},   // Malayalam Letter Archaic Ii
+    {0x0D85u, 0x0D96u},   {0x0D9Au, 0x0DB1u},   {0x0DB3u, 0x0DBBu},   {0x0DBDu, 0x0DBDu},   // Sinhala Letter Ayanna
+    {0x0DC0u, 0x0DC6u},   {0x0DCAu, 0x0DCAu},   {0x0DCFu, 0x0DD4u},   {0x0DD6u, 0x0DD6u},   // Sinhala Letter Vayanna
+    {0x0DD8u, 0x0DDFu},   {0x0DE6u, 0x0DEFu},   {0x0DF2u, 0x0DF3u},   {0x0E01u, 0x0E3Au},   // Sinhala Vowel Sign Gaetta-Pilla
+    {0x0E40u, 0x0E4Eu},   {0x0E50u, 0x0E59u},   {0x0E81u, 0x0E82u},   {0x0E84u, 0x0E84u},   // Thai Character Sara E
+    {0x0E86u, 0x0E8Au},   {0x0E8Cu, 0x0EA3u},   {0x0EA5u, 0x0EA5u},   {0x0EA7u, 0x0EBDu},   // Lao Letter Pali Gha
+    {0x0EC0u, 0x0EC4u},   {0x0EC6u, 0x0EC6u},   {0x0EC8u, 0x0ECDu},   {0x0ED0u, 0x0ED9u},   // Lao Vowel Sign E
+    {0x0EDCu, 0x0EDFu},   {0x0F00u, 0x0F00u},   {0x0F18u, 0x0F19u},   {0x0F20u, 0x0F29u},   // Lao Ho No
+    {0x0F35u, 0x0F35u},   {0x0F37u, 0x0F37u},   {0x0F39u, 0x0F39u},   {0x0F3Eu, 0x0F47u},   // Tibetan Mark Ngas Bzung Nyi Zla
+    {0x0F49u, 0x0F6Cu},   {0x0F71u, 0x0F84u},   {0x0F86u, 0x0F97u},   {0x0F99u, 0x0FBCu},   // Tibetan Letter Nya
+    {0x0FC6u, 0x0FC6u},   {0x1000u, 0x1049u},   {0x1050u, 0x109Du},   {0x10A0u, 0x10C5u},   // Tibetan Symbol Padma Gdan
+    {0x10C7u, 0x10C7u},   {0x10CDu, 0x10CDu},   {0x10D0u, 0x10FAu},   {0x10FCu, 0x1248u},   // Georgian Capital Letter Yn
+    {0x124Au, 0x124Du},   {0x1250u, 0x1256u},   {0x1258u, 0x1258u},   {0x125Au, 0x125Du},   // Ethiopic Syllable Qwi
+    {0x1260u, 0x1288u},   {0x128Au, 0x128Du},   {0x1290u, 0x12B0u},   {0x12B2u, 0x12B5u},   // Ethiopic Syllable Ba
+    {0x12B8u, 0x12BEu},   {0x12C0u, 0x12C0u},   {0x12C2u, 0x12C5u},   {0x12C8u, 0x12D6u},   // Ethiopic Syllable Kxa
+    {0x12D8u, 0x1310u},   {0x1312u, 0x1315u},   {0x1318u, 0x135Au},   {0x135Du, 0x135Fu},   // Ethiopic Syllable Za
     {0x1380u, 0x138Fu},   {0x13A0u, 0x13F5u},   {0x13F8u, 0x13FDu},   {0x1401u, 0x166Cu},   // Ethiopic Syllable Sebatbeit Mwa
-    {0x166Fu, 0x167Fu},   {0x1681u, 0x169Au},   {0x16A0u, 0x16EAu},   {0x16EEu, 0x16F8u},   // Canadian Syllabics Qai
+    {0x166Fu, 0x167Fu},   {0x1681u, 0x169Au},   {0x16A0u, 0x16EAu},   {0x16F1u, 0x16F8u},   // Canadian Syllabics Qai
     {0x1700u, 0x1715u},   {0x171Fu, 0x1734u},   {0x1740u, 0x1753u},   {0x1760u, 0x176Cu},   // Tagalog Letter A
     {0x176Eu, 0x1770u},   {0x1772u, 0x1773u},   {0x1780u, 0x17D3u},   {0x17D7u, 0x17D7u},   // Tagbanwa Letter La
-    {0x17DCu, 0x17DDu},   {0x17E0u, 0x17E9u},   {0x17F0u, 0x17F9u},   {0x180Bu, 0x180Du},   // Khmer Sign Avakrahasanya
-    {0x180Fu, 0x1819u},   {0x1820u, 0x1878u},   {0x1880u, 0x18AAu},   {0x18B0u, 0x18F5u},   // Mongolian Free Variation Selector Four
-    {0x1900u, 0x191Eu},   {0x1920u, 0x192Bu},   {0x1930u, 0x193Bu},   {0x1946u, 0x196Du},   // Limbu Vowel-Carrier Letter
-    {0x1970u, 0x1974u},   {0x1980u, 0x19ABu},   {0x19B0u, 0x19C9u},   {0x19D0u, 0x19DAu},   // Tai Le Letter Tone-2
-    {0x1A00u, 0x1A1Bu},   {0x1A20u, 0x1A5Eu},   {0x1A60u, 0x1A7Cu},   {0x1A7Fu, 0x1A89u},   // Buginese Letter Ka
-    {0x1A90u, 0x1A99u},   {0x1AA7u, 0x1AA7u},   {0x1AB0u, 0x1ACEu},   {0x1B00u, 0x1B4Cu},   // Tai Tham Tham Digit Zero
-    {0x1B50u, 0x1B59u},   {0x1B6Bu, 0x1B73u},   {0x1B80u, 0x1BF3u},   {0x1C00u, 0x1C37u},   // Balinese Digit Zero
-    {0x1C40u, 0x1C49u},   {0x1C4Du, 0x1C7Du},   {0x1C80u, 0x1C88u},   {0x1C90u, 0x1CBAu},   // Lepcha Digit Zero
-    {0x1CBDu, 0x1CBFu},   {0x1CD0u, 0x1CD2u},   {0x1CD4u, 0x1CFAu},   {0x1D00u, 0x1F15u},   // Georgian Mtavruli Capital Letter Aen
-    {0x1F18u, 0x1F1Du},   {0x1F20u, 0x1F45u},   {0x1F48u, 0x1F4Du},   {0x1F50u, 0x1F57u},   // Greek Capital Letter Epsilon With Psili
-    {0x1F59u, 0x1F59u},   {0x1F5Bu, 0x1F5Bu},   {0x1F5Du, 0x1F5Du},   {0x1F5Fu, 0x1F7Du},   // Greek Capital Letter Upsilon With Dasia
-    {0x1F80u, 0x1FB4u},   {0x1FB6u, 0x1FBCu},   {0x1FBEu, 0x1FBEu},   {0x1FC2u, 0x1FC4u},   // Greek Small Letter Alpha With Psili And Ypogegramme
-    {0x1FC6u, 0x1FCCu},   {0x1FD0u, 0x1FD3u},   {0x1FD6u, 0x1FDBu},   {0x1FE0u, 0x1FECu},   // Greek Small Letter Eta With Perispomeni
-    {0x1FF2u, 0x1FF4u},   {0x1FF6u, 0x1FFCu},   {0x203Fu, 0x2040u},   {0x2054u, 0x2054u},   // Greek Small Letter Omega With Varia And Ypogegramme
-    {0x2070u, 0x2071u},   {0x2074u, 0x2079u},   {0x207Fu, 0x2089u},   {0x2090u, 0x209Cu},   // Superscript Zero
-    {0x20D0u, 0x20F0u},   {0x2102u, 0x2102u},   {0x2107u, 0x2107u},   {0x210Au, 0x2113u},   // Combining Left Harpoon Above
-    {0x2115u, 0x2115u},   {0x2119u, 0x211Du},   {0x2124u, 0x2124u},   {0x2126u, 0x2126u},   // Double-Struck Capital N
-    {0x2128u, 0x2128u},   {0x212Au, 0x212Du},   {0x212Fu, 0x2139u},   {0x213Cu, 0x213Fu},   // Black-Letter Capital Z
-    {0x2145u, 0x2149u},   {0x214Eu, 0x214Eu},   {0x2150u, 0x2189u},   {0x2460u, 0x249Bu},   // Double-Struck Italic Capital D
-    {0x24EAu, 0x24FFu},   {0x2776u, 0x2793u},   {0x2C00u, 0x2CE4u},   {0x2CEBu, 0x2CF3u},   // Circled Digit Zero
-    {0x2CFDu, 0x2CFDu},   {0x2D00u, 0x2D25u},   {0x2D27u, 0x2D27u},   {0x2D2Du, 0x2D2Du},   // Coptic Fraction One Half
-    {0x2D30u, 0x2D67u},   {0x2D6Fu, 0x2D6Fu},   {0x2D7Fu, 0x2D96u},   {0x2DA0u, 0x2DA6u},   // Tifinagh Letter Ya
-    {0x2DA8u, 0x2DAEu},   {0x2DB0u, 0x2DB6u},   {0x2DB8u, 0x2DBEu},   {0x2DC0u, 0x2DC6u},   // Ethiopic Syllable Cca
-    {0x2DC8u, 0x2DCEu},   {0x2DD0u, 0x2DD6u},   {0x2DD8u, 0x2DDEu},   {0x2DE0u, 0x2DFFu},   // Ethiopic Syllable Kya
-    {0x2E2Fu, 0x2E2Fu},   {0x3005u, 0x3007u},   {0x3021u, 0x302Fu},   {0x3031u, 0x3035u},   // Vertical Tilde
-    {0x3038u, 0x303Cu},   {0x3041u, 0x3096u},   {0x3099u, 0x309Au},   {0x309Du, 0x309Fu},   // Hangzhou Numeral Ten
-    {0x30A1u, 0x30FAu},   {0x30FCu, 0x30FFu},   {0x3105u, 0x312Fu},   {0x3131u, 0x318Eu},   // Katakana Letter Small A
-    {0x3192u, 0x3195u},   {0x31A0u, 0x31BFu},   {0x31F0u, 0x31FFu},   {0x3220u, 0x3229u},   // Ideographic Annotation One Mark
-    {0x3248u, 0x324Fu},   {0x3251u, 0x325Fu},   {0x3280u, 0x3289u},   {0x32B1u, 0x32BFu},   // Circled Number Ten On Black Square
+    {0x17DCu, 0x17DDu},   {0x17E0u, 0x17E9u},   {0x180Bu, 0x180Du},   {0x180Fu, 0x1819u},   // Khmer Sign Avakrahasanya
+    {0x1820u, 0x1878u},   {0x1880u, 0x18AAu},   {0x18B0u, 0x18F5u},   {0x1900u, 0x191Eu},   // Mongolian Letter A
+    {0x1920u, 0x192Bu},   {0x1930u, 0x193Bu},   {0x1946u, 0x196Du},   {0x1970u, 0x1974u},   // Limbu Vowel Sign A
+    {0x1980u, 0x19ABu},   {0x19B0u, 0x19C9u},   {0x19D0u, 0x19D9u},   {0x1A00u, 0x1A1Bu},   // New Tai Lue Letter High Qa
+    {0x1A20u, 0x1A5Eu},   {0x1A60u, 0x1A7Cu},   {0x1A7Fu, 0x1A89u},   {0x1A90u, 0x1A99u},   // Tai Tham Letter High Ka
+    {0x1AA7u, 0x1AA7u},   {0x1AB0u, 0x1ACEu},   {0x1B00u, 0x1B4Cu},   {0x1B50u, 0x1B59u},   // Tai Tham Sign Mai Yamok
+    {0x1B6Bu, 0x1B73u},   {0x1B80u, 0x1BF3u},   {0x1C00u, 0x1C37u},   {0x1C40u, 0x1C49u},   // Balinese Musical Symbol Combining Tegeh
+    {0x1C4Du, 0x1C7Du},   {0x1C80u, 0x1C88u},   {0x1C90u, 0x1CBAu},   {0x1CBDu, 0x1CBFu},   // Lepcha Letter Tta
+    {0x1CD0u, 0x1CD2u},   {0x1CD4u, 0x1CFAu},   {0x1D00u, 0x1F15u},   {0x1F18u, 0x1F1Du},   // Vedic Tone Karshana
+    {0x1F20u, 0x1F45u},   {0x1F48u, 0x1F4Du},   {0x1F50u, 0x1F57u},   {0x1F59u, 0x1F59u},   // Greek Small Letter Eta With Psili
+    {0x1F5Bu, 0x1F5Bu},   {0x1F5Du, 0x1F5Du},   {0x1F5Fu, 0x1F7Du},   {0x1F80u, 0x1FB4u},   // Greek Capital Letter Upsilon With Dasia And Varia
+    {0x1FB6u, 0x1FBCu},   {0x1FBEu, 0x1FBEu},   {0x1FC2u, 0x1FC4u},   {0x1FC6u, 0x1FCCu},   // Greek Small Letter Alpha With Perispomeni
+    {0x1FD0u, 0x1FD3u},   {0x1FD6u, 0x1FDBu},   {0x1FE0u, 0x1FECu},   {0x1FF2u, 0x1FF4u},   // Greek Small Letter Iota With Vrachy
+    {0x1FF6u, 0x1FFCu},   {0x203Fu, 0x2040u},   {0x2054u, 0x2054u},   {0x2071u, 0x2071u},   // Greek Small Letter Omega With Perispomeni
+    {0x207Fu, 0x207Fu},   {0x2090u, 0x209Cu},   {0x20D0u, 0x20F0u},   {0x2102u, 0x2102u},   // Superscript Latin Small Letter N
+    {0x2107u, 0x2107u},   {0x210Au, 0x2113u},   {0x2115u, 0x2115u},   {0x2119u, 0x211Du},   // Euler Constant
+    {0x2124u, 0x2124u},   {0x2126u, 0x2126u},   {0x2128u, 0x2128u},   {0x212Au, 0x212Du},   // Double-Struck Capital Z
+    {0x212Fu, 0x2139u},   {0x213Cu, 0x213Fu},   {0x2145u, 0x2149u},   {0x214Eu, 0x214Eu},   // Script Small E
+    {0x2183u, 0x2184u},   {0x2C00u, 0x2CE4u},   {0x2CEBu, 0x2CF3u},   {0x2D00u, 0x2D25u},   // Roman Numeral Reversed One Hundred
+    {0x2D27u, 0x2D27u},   {0x2D2Du, 0x2D2Du},   {0x2D30u, 0x2D67u},   {0x2D6Fu, 0x2D6Fu},   // Georgian Small Letter Yn
+    {0x2D7Fu, 0x2D96u},   {0x2DA0u, 0x2DA6u},   {0x2DA8u, 0x2DAEu},   {0x2DB0u, 0x2DB6u},   // Tifinagh Consonant Joiner
+    {0x2DB8u, 0x2DBEu},   {0x2DC0u, 0x2DC6u},   {0x2DC8u, 0x2DCEu},   {0x2DD0u, 0x2DD6u},   // Ethiopic Syllable Ccha
+    {0x2DD8u, 0x2DDEu},   {0x2DE0u, 0x2DFFu},   {0x2E2Fu, 0x2E2Fu},   {0x3005u, 0x3006u},   // Ethiopic Syllable Gya
+    {0x302Au, 0x302Fu},   {0x3031u, 0x3035u},   {0x303Bu, 0x303Cu},   {0x3041u, 0x3096u},   // Ideographic Level Tone Mark
+    {0x3099u, 0x309Au},   {0x309Du, 0x309Fu},   {0x30A1u, 0x30FAu},   {0x30FCu, 0x30FFu},   // Combining Katakana-Hiragana Voiced Sound Mark
+    {0x3105u, 0x312Fu},   {0x3131u, 0x318Eu},   {0x31A0u, 0x31BFu},   {0x31F0u, 0x31FFu},   // Bopomofo Letter B
     {0x3400u, 0x4DBFu},   {0x4E00u, 0xA48Cu},   {0xA4D0u, 0xA4FDu},   {0xA500u, 0xA60Cu},   // Cjk Unified Ideograph-3400
-    {0xA610u, 0xA62Bu},   {0xA640u, 0xA672u},   {0xA674u, 0xA67Du},   {0xA67Fu, 0xA6F1u},   // Vai Syllable Ndole Fa
-    {0xA717u, 0xA71Fu},   {0xA722u, 0xA788u},   {0xA78Bu, 0xA7CAu},   {0xA7D0u, 0xA7D1u},   // Modifier Letter Dot Vertical Bar
-    {0xA7D3u, 0xA7D3u},   {0xA7D5u, 0xA7D9u},   {0xA7F2u, 0xA827u},   {0xA82Cu, 0xA82Cu},   // Latin Small Letter Double Thorn
-    {0xA830u, 0xA835u},   {0xA840u, 0xA873u},   {0xA880u, 0xA8C5u},   {0xA8D0u, 0xA8D9u},   // North Indic Fraction One Quarter
+    {0xA610u, 0xA62Bu},   {0xA640u, 0xA672u},   {0xA674u, 0xA67Du},   {0xA67Fu, 0xA6E5u},   // Vai Syllable Ndole Fa
+    {0xA6F0u, 0xA6F1u},   {0xA717u, 0xA71Fu},   {0xA722u, 0xA788u},   {0xA78Bu, 0xA7CAu},   // Bamum Combining Mark Koqndon
+    {0xA7D0u, 0xA7D1u},   {0xA7D3u, 0xA7D3u},   {0xA7D5u, 0xA7D9u},   {0xA7F2u, 0xA827u},   // Latin Capital Letter Closed Insular G
+    {0xA82Cu, 0xA82Cu},   {0xA840u, 0xA873u},   {0xA880u, 0xA8C5u},   {0xA8D0u, 0xA8D9u},   // Syloti Nagri Sign Alternate Hasanta
     {0xA8E0u, 0xA8F7u},   {0xA8FBu, 0xA8FBu},   {0xA8FDu, 0xA92Du},   {0xA930u, 0xA953u},   // Combining Devanagari Digit Zero
     {0xA960u, 0xA97Cu},   {0xA980u, 0xA9C0u},   {0xA9CFu, 0xA9D9u},   {0xA9E0u, 0xA9FEu},   // Hangul Choseong Tikeut-Mieum
     {0xAA00u, 0xAA36u},   {0xAA40u, 0xAA4Du},   {0xAA50u, 0xAA59u},   {0xAA60u, 0xAA76u},   // Cham Letter A
@@ -182,65 +184,62 @@ static constexpr LINK_RANGE LINK_SLUG_KEEP[] = {
     {0xFF3Fu, 0xFF3Fu},   {0xFF41u, 0xFF5Au},   {0xFF66u, 0xFFBEu},   {0xFFC2u, 0xFFC7u},   // Fullwidth Low Line
     {0xFFCAu, 0xFFCFu},   {0xFFD2u, 0xFFD7u},   {0xFFDAu, 0xFFDCu},   {0x10000u, 0x1000Bu}, // Halfwidth Hangul Letter Yeo
     {0x1000Du, 0x10026u}, {0x10028u, 0x1003Au}, {0x1003Cu, 0x1003Du}, {0x1003Fu, 0x1004Du}, // Linear B Syllable B036 Jo
-    {0x10050u, 0x1005Du}, {0x10080u, 0x100FAu}, {0x10107u, 0x10133u}, {0x10140u, 0x10178u}, // Linear B Symbol B018
-    {0x1018Au, 0x1018Bu}, {0x101FDu, 0x101FDu}, {0x10280u, 0x1029Cu}, {0x102A0u, 0x102D0u}, // Greek Zero Sign
-    {0x102E0u, 0x102FBu}, {0x10300u, 0x10323u}, {0x1032Du, 0x1034Au}, {0x10350u, 0x1037Au}, // Coptic Epact Thousands Mark
-    {0x10380u, 0x1039Du}, {0x103A0u, 0x103C3u}, {0x103C8u, 0x103CFu}, {0x103D1u, 0x103D5u}, // Ugaritic Letter Alpa
-    {0x10400u, 0x1049Du}, {0x104A0u, 0x104A9u}, {0x104B0u, 0x104D3u}, {0x104D8u, 0x104FBu}, // Deseret Capital Letter Long I
-    {0x10500u, 0x10527u}, {0x10530u, 0x10563u}, {0x10570u, 0x1057Au}, {0x1057Cu, 0x1058Au}, // Elbasan Letter A
-    {0x1058Cu, 0x10592u}, {0x10594u, 0x10595u}, {0x10597u, 0x105A1u}, {0x105A3u, 0x105B1u}, // Vithkuqi Capital Letter Se
-    {0x105B3u, 0x105B9u}, {0x105BBu, 0x105BCu}, {0x10600u, 0x10736u}, {0x10740u, 0x10755u}, // Vithkuqi Small Letter Se
-    {0x10760u, 0x10767u}, {0x10780u, 0x10785u}, {0x10787u, 0x107B0u}, {0x107B2u, 0x107BAu}, // Linear A Sign A800
-    {0x10800u, 0x10805u}, {0x10808u, 0x10808u}, {0x1080Au, 0x10835u}, {0x10837u, 0x10838u}, // Cypriot Syllable A
-    {0x1083Cu, 0x1083Cu}, {0x1083Fu, 0x10855u}, {0x10858u, 0x10876u}, {0x10879u, 0x1089Eu}, // Cypriot Syllable Za
-    {0x108A7u, 0x108AFu}, {0x108E0u, 0x108F2u}, {0x108F4u, 0x108F5u}, {0x108FBu, 0x1091Bu}, // Nabataean Number One
-    {0x10920u, 0x10939u}, {0x10980u, 0x109B7u}, {0x109BCu, 0x109CFu}, {0x109D2u, 0x10A03u}, // Lydian Letter A
+    {0x10050u, 0x1005Du}, {0x10080u, 0x100FAu}, {0x101FDu, 0x101FDu}, {0x10280u, 0x1029Cu}, // Linear B Symbol B018
+    {0x102A0u, 0x102D0u}, {0x102E0u, 0x102E0u}, {0x10300u, 0x1031Fu}, {0x1032Du, 0x10340u}, // Carian Letter A
+    {0x10342u, 0x10349u}, {0x10350u, 0x1037Au}, {0x10380u, 0x1039Du}, {0x103A0u, 0x103C3u}, // Gothic Letter Raida
+    {0x103C8u, 0x103CFu}, {0x10400u, 0x1049Du}, {0x104A0u, 0x104A9u}, {0x104B0u, 0x104D3u}, // Old Persian Sign Auramazdaa
+    {0x104D8u, 0x104FBu}, {0x10500u, 0x10527u}, {0x10530u, 0x10563u}, {0x10570u, 0x1057Au}, // Osage Small Letter A
+    {0x1057Cu, 0x1058Au}, {0x1058Cu, 0x10592u}, {0x10594u, 0x10595u}, {0x10597u, 0x105A1u}, // Vithkuqi Capital Letter Ha
+    {0x105A3u, 0x105B1u}, {0x105B3u, 0x105B9u}, {0x105BBu, 0x105BCu}, {0x10600u, 0x10736u}, // Vithkuqi Small Letter Ha
+    {0x10740u, 0x10755u}, {0x10760u, 0x10767u}, {0x10780u, 0x10785u}, {0x10787u, 0x107B0u}, // Linear A Sign A701 A
+    {0x107B2u, 0x107BAu}, {0x10800u, 0x10805u}, {0x10808u, 0x10808u}, {0x1080Au, 0x10835u}, // Modifier Letter Small Capital Y
+    {0x10837u, 0x10838u}, {0x1083Cu, 0x1083Cu}, {0x1083Fu, 0x10855u}, {0x10860u, 0x10876u}, // Cypriot Syllable Xa
+    {0x10880u, 0x1089Eu}, {0x108E0u, 0x108F2u}, {0x108F4u, 0x108F5u}, {0x10900u, 0x10915u}, // Nabataean Letter Final Aleph
+    {0x10920u, 0x10939u}, {0x10980u, 0x109B7u}, {0x109BEu, 0x109BFu}, {0x10A00u, 0x10A03u}, // Lydian Letter A
     {0x10A05u, 0x10A06u}, {0x10A0Cu, 0x10A13u}, {0x10A15u, 0x10A17u}, {0x10A19u, 0x10A35u}, // Kharoshthi Vowel Sign E
-    {0x10A38u, 0x10A3Au}, {0x10A3Fu, 0x10A48u}, {0x10A60u, 0x10A7Eu}, {0x10A80u, 0x10A9Fu}, // Kharoshthi Sign Bar Above
-    {0x10AC0u, 0x10AC7u}, {0x10AC9u, 0x10AE6u}, {0x10AEBu, 0x10AEFu}, {0x10B00u, 0x10B35u}, // Manichaean Letter Aleph
-    {0x10B40u, 0x10B55u}, {0x10B58u, 0x10B72u}, {0x10B78u, 0x10B91u}, {0x10BA9u, 0x10BAFu}, // Inscriptional Parthian Letter Aleph
-    {0x10C00u, 0x10C48u}, {0x10C80u, 0x10CB2u}, {0x10CC0u, 0x10CF2u}, {0x10CFAu, 0x10D27u}, // Old Turkic Letter Orkhon A
-    {0x10D30u, 0x10D39u}, {0x10E60u, 0x10E7Eu}, {0x10E80u, 0x10EA9u}, {0x10EABu, 0x10EACu}, // Hanifi Rohingya Digit Zero
-    {0x10EB0u, 0x10EB1u}, {0x10F00u, 0x10F27u}, {0x10F30u, 0x10F54u}, {0x10F70u, 0x10F85u}, // Yezidi Letter Lam With Dot Above
-    {0x10FB0u, 0x10FCBu}, {0x10FE0u, 0x10FF6u}, {0x11000u, 0x11046u}, {0x11052u, 0x11075u}, // Chorasmian Letter Aleph
-    {0x1107Fu, 0x110BAu}, {0x110C2u, 0x110C2u}, {0x110D0u, 0x110E8u}, {0x110F0u, 0x110F9u}, // Brahmi Number Joiner
-    {0x11100u, 0x11134u}, {0x11136u, 0x1113Fu}, {0x11144u, 0x11147u}, {0x11150u, 0x11173u}, // Chakma Sign Candrabindu
-    {0x11176u, 0x11176u}, {0x11180u, 0x111C4u}, {0x111C9u, 0x111CCu}, {0x111CEu, 0x111DAu}, // Mahajani Ligature Shri
-    {0x111DCu, 0x111DCu}, {0x111E1u, 0x111F4u}, {0x11200u, 0x11211u}, {0x11213u, 0x11237u}, // Sharada Headstroke
-    {0x1123Eu, 0x1123Eu}, {0x11280u, 0x11286u}, {0x11288u, 0x11288u}, {0x1128Au, 0x1128Du}, // Khojki Sign Sukun
-    {0x1128Fu, 0x1129Du}, {0x1129Fu, 0x112A8u}, {0x112B0u, 0x112EAu}, {0x112F0u, 0x112F9u}, // Multani Letter Nya
-    {0x11300u, 0x11303u}, {0x11305u, 0x1130Cu}, {0x1130Fu, 0x11310u}, {0x11313u, 0x11328u}, // Grantha Sign Combining Anusvara Above
-    {0x1132Au, 0x11330u}, {0x11332u, 0x11333u}, {0x11335u, 0x11339u}, {0x1133Bu, 0x11344u}, // Grantha Letter Pa
-    {0x11347u, 0x11348u}, {0x1134Bu, 0x1134Du}, {0x11350u, 0x11350u}, {0x11357u, 0x11357u}, // Grantha Vowel Sign Ee
-    {0x1135Du, 0x11363u}, {0x11366u, 0x1136Cu}, {0x11370u, 0x11374u}, {0x11400u, 0x1144Au}, // Grantha Sign Pluta
-    {0x11450u, 0x11459u}, {0x1145Eu, 0x11461u}, {0x11480u, 0x114C5u}, {0x114C7u, 0x114C7u}, // Newa Digit Zero
-    {0x114D0u, 0x114D9u}, {0x11580u, 0x115B5u}, {0x115B8u, 0x115C0u}, {0x115D8u, 0x115DDu}, // Tirhuta Digit Zero
-    {0x11600u, 0x11640u}, {0x11644u, 0x11644u}, {0x11650u, 0x11659u}, {0x11680u, 0x116B8u}, // Modi Letter A
-    {0x116C0u, 0x116C9u}, {0x11700u, 0x1171Au}, {0x1171Du, 0x1172Bu}, {0x11730u, 0x1173Bu}, // Takri Digit Zero
-    {0x11740u, 0x11746u}, {0x11800u, 0x1183Au}, {0x118A0u, 0x118F2u}, {0x118FFu, 0x11906u}, // Ahom Letter Ca
-    {0x11909u, 0x11909u}, {0x1190Cu, 0x11913u}, {0x11915u, 0x11916u}, {0x11918u, 0x11935u}, // Dives Akuru Letter O
-    {0x11937u, 0x11938u}, {0x1193Bu, 0x11943u}, {0x11950u, 0x11959u}, {0x119A0u, 0x119A7u}, // Dives Akuru Vowel Sign Ai
-    {0x119AAu, 0x119D7u}, {0x119DAu, 0x119E1u}, {0x119E3u, 0x119E4u}, {0x11A00u, 0x11A3Eu}, // Nandinagari Letter E
-    {0x11A47u, 0x11A47u}, {0x11A50u, 0x11A99u}, {0x11A9Du, 0x11A9Du}, {0x11AB0u, 0x11AF8u}, // Zanabazar Square Subjoiner
-    {0x11C00u, 0x11C08u}, {0x11C0Au, 0x11C36u}, {0x11C38u, 0x11C40u}, {0x11C50u, 0x11C6Cu}, // Bhaiksuki Letter A
-    {0x11C72u, 0x11C8Fu}, {0x11C92u, 0x11CA7u}, {0x11CA9u, 0x11CB6u}, {0x11D00u, 0x11D06u}, // Marchen Letter Ka
-    {0x11D08u, 0x11D09u}, {0x11D0Bu, 0x11D36u}, {0x11D3Au, 0x11D3Au}, {0x11D3Cu, 0x11D3Du}, // Masaram Gondi Letter Ai
-    {0x11D3Fu, 0x11D47u}, {0x11D50u, 0x11D59u}, {0x11D60u, 0x11D65u}, {0x11D67u, 0x11D68u}, // Masaram Gondi Vowel Sign Au
-    {0x11D6Au, 0x11D8Eu}, {0x11D90u, 0x11D91u}, {0x11D93u, 0x11D98u}, {0x11DA0u, 0x11DA9u}, // Gunjala Gondi Letter Oo
-    {0x11EE0u, 0x11EF6u}, {0x11FB0u, 0x11FB0u}, {0x11FC0u, 0x11FD4u}, {0x12000u, 0x12399u}, // Makasar Letter Ka
-    {0x12400u, 0x1246Eu}, {0x12480u, 0x12543u}, {0x12F90u, 0x12FF0u}, {0x13000u, 0x1342Eu}, // Cuneiform Numeric Sign Two Ash
-    {0x14400u, 0x14646u}, {0x16800u, 0x16A38u}, {0x16A40u, 0x16A5Eu}, {0x16A60u, 0x16A69u}, // Anatolian Hieroglyph A001
-    {0x16A70u, 0x16ABEu}, {0x16AC0u, 0x16AC9u}, {0x16AD0u, 0x16AEDu}, {0x16AF0u, 0x16AF4u}, // Tangsa Letter Oz
-    {0x16B00u, 0x16B36u}, {0x16B40u, 0x16B43u}, {0x16B50u, 0x16B59u}, {0x16B5Bu, 0x16B61u}, // Pahawh Hmong Vowel Keeb
-    {0x16B63u, 0x16B77u}, {0x16B7Du, 0x16B8Fu}, {0x16E40u, 0x16E96u}, {0x16F00u, 0x16F4Au}, // Pahawh Hmong Sign Vos Lub
-    {0x16F4Fu, 0x16F87u}, {0x16F8Fu, 0x16F9Fu}, {0x16FE0u, 0x16FE1u}, {0x16FE3u, 0x16FE4u}, // Miao Sign Consonant Modifier Bar
-    {0x16FF0u, 0x16FF1u}, {0x17000u, 0x187F7u}, {0x18800u, 0x18CD5u}, {0x18D00u, 0x18D08u}, // Vietnamese Alternate Reading Mark Ca
-    {0x1AFF0u, 0x1AFF3u}, {0x1AFF5u, 0x1AFFBu}, {0x1AFFDu, 0x1AFFEu}, {0x1B000u, 0x1B122u}, // Katakana Letter Minnan Tone-2
-    {0x1B150u, 0x1B152u}, {0x1B164u, 0x1B167u}, {0x1B170u, 0x1B2FBu}, {0x1BC00u, 0x1BC6Au}, // Hiragana Letter Small Wi
-    {0x1BC70u, 0x1BC7Cu}, {0x1BC80u, 0x1BC88u}, {0x1BC90u, 0x1BC99u}, {0x1BC9Du, 0x1BC9Eu}, // Duployan Affix Left Horizontal Secant
-    {0x1CF00u, 0x1CF2Du}, {0x1CF30u, 0x1CF46u}, {0x1D165u, 0x1D169u}, {0x1D16Du, 0x1D172u}, // Znamenny Combining Mark Gorazdo Nizko S Kryzhem O
-    {0x1D17Bu, 0x1D182u}, {0x1D185u, 0x1D18Bu}, {0x1D1AAu, 0x1D1ADu}, {0x1D242u, 0x1D244u}, // Musical Symbol Combining Accent
-    {0x1D2E0u, 0x1D2F3u}, {0x1D360u, 0x1D378u}, {0x1D400u, 0x1D454u}, {0x1D456u, 0x1D49Cu}, // Mayan Numeral Zero
+    {0x10A38u, 0x10A3Au}, {0x10A3Fu, 0x10A3Fu}, {0x10A60u, 0x10A7Cu}, {0x10A80u, 0x10A9Cu}, // Kharoshthi Sign Bar Above
+    {0x10AC0u, 0x10AC7u}, {0x10AC9u, 0x10AE6u}, {0x10B00u, 0x10B35u}, {0x10B40u, 0x10B55u}, // Manichaean Letter Aleph
+    {0x10B60u, 0x10B72u}, {0x10B80u, 0x10B91u}, {0x10C00u, 0x10C48u}, {0x10C80u, 0x10CB2u}, // Inscriptional Pahlavi Letter Aleph
+    {0x10CC0u, 0x10CF2u}, {0x10D00u, 0x10D27u}, {0x10D30u, 0x10D39u}, {0x10E80u, 0x10EA9u}, // Old Hungarian Small Letter A
+    {0x10EABu, 0x10EACu}, {0x10EB0u, 0x10EB1u}, {0x10F00u, 0x10F1Cu}, {0x10F27u, 0x10F27u}, // Yezidi Combining Hamza Mark
+    {0x10F30u, 0x10F50u}, {0x10F70u, 0x10F85u}, {0x10FB0u, 0x10FC4u}, {0x10FE0u, 0x10FF6u}, // Sogdian Letter Aleph
+    {0x11000u, 0x11046u}, {0x11066u, 0x11075u}, {0x1107Fu, 0x110BAu}, {0x110C2u, 0x110C2u}, // Brahmi Sign Candrabindu
+    {0x110D0u, 0x110E8u}, {0x110F0u, 0x110F9u}, {0x11100u, 0x11134u}, {0x11136u, 0x1113Fu}, // Sora Sompeng Letter Sah
+    {0x11144u, 0x11147u}, {0x11150u, 0x11173u}, {0x11176u, 0x11176u}, {0x11180u, 0x111C4u}, // Chakma Letter Lhaa
+    {0x111C9u, 0x111CCu}, {0x111CEu, 0x111DAu}, {0x111DCu, 0x111DCu}, {0x11200u, 0x11211u}, // Sharada Sandhi Mark
+    {0x11213u, 0x11237u}, {0x1123Eu, 0x1123Eu}, {0x11280u, 0x11286u}, {0x11288u, 0x11288u}, // Khojki Letter Nya
+    {0x1128Au, 0x1128Du}, {0x1128Fu, 0x1129Du}, {0x1129Fu, 0x112A8u}, {0x112B0u, 0x112EAu}, // Multani Letter Ca
+    {0x112F0u, 0x112F9u}, {0x11300u, 0x11303u}, {0x11305u, 0x1130Cu}, {0x1130Fu, 0x11310u}, // Khudawadi Digit Zero
+    {0x11313u, 0x11328u}, {0x1132Au, 0x11330u}, {0x11332u, 0x11333u}, {0x11335u, 0x11339u}, // Grantha Letter Oo
+    {0x1133Bu, 0x11344u}, {0x11347u, 0x11348u}, {0x1134Bu, 0x1134Du}, {0x11350u, 0x11350u}, // Combining Bindu Below
+    {0x11357u, 0x11357u}, {0x1135Du, 0x11363u}, {0x11366u, 0x1136Cu}, {0x11370u, 0x11374u}, // Grantha Au Length Mark
+    {0x11400u, 0x1144Au}, {0x11450u, 0x11459u}, {0x1145Eu, 0x11461u}, {0x11480u, 0x114C5u}, // Newa Letter A
+    {0x114C7u, 0x114C7u}, {0x114D0u, 0x114D9u}, {0x11580u, 0x115B5u}, {0x115B8u, 0x115C0u}, // Tirhuta Om
+    {0x115D8u, 0x115DDu}, {0x11600u, 0x11640u}, {0x11644u, 0x11644u}, {0x11650u, 0x11659u}, // Siddham Letter Three-Circle Alternate I
+    {0x11680u, 0x116B8u}, {0x116C0u, 0x116C9u}, {0x11700u, 0x1171Au}, {0x1171Du, 0x1172Bu}, // Takri Letter A
+    {0x11730u, 0x11739u}, {0x11740u, 0x11746u}, {0x11800u, 0x1183Au}, {0x118A0u, 0x118E9u}, // Ahom Digit Zero
+    {0x118FFu, 0x11906u}, {0x11909u, 0x11909u}, {0x1190Cu, 0x11913u}, {0x11915u, 0x11916u}, // Warang Citi Om
+    {0x11918u, 0x11935u}, {0x11937u, 0x11938u}, {0x1193Bu, 0x11943u}, {0x11950u, 0x11959u}, // Dives Akuru Letter Dda
+    {0x119A0u, 0x119A7u}, {0x119AAu, 0x119D7u}, {0x119DAu, 0x119E1u}, {0x119E3u, 0x119E4u}, // Nandinagari Letter A
+    {0x11A00u, 0x11A3Eu}, {0x11A47u, 0x11A47u}, {0x11A50u, 0x11A99u}, {0x11A9Du, 0x11A9Du}, // Zanabazar Square Letter A
+    {0x11AB0u, 0x11AF8u}, {0x11C00u, 0x11C08u}, {0x11C0Au, 0x11C36u}, {0x11C38u, 0x11C40u}, // Canadian Syllabics Nattilik Hi
+    {0x11C50u, 0x11C59u}, {0x11C72u, 0x11C8Fu}, {0x11C92u, 0x11CA7u}, {0x11CA9u, 0x11CB6u}, // Bhaiksuki Digit Zero
+    {0x11D00u, 0x11D06u}, {0x11D08u, 0x11D09u}, {0x11D0Bu, 0x11D36u}, {0x11D3Au, 0x11D3Au}, // Masaram Gondi Letter A
+    {0x11D3Cu, 0x11D3Du}, {0x11D3Fu, 0x11D47u}, {0x11D50u, 0x11D59u}, {0x11D60u, 0x11D65u}, // Masaram Gondi Vowel Sign Ai
+    {0x11D67u, 0x11D68u}, {0x11D6Au, 0x11D8Eu}, {0x11D90u, 0x11D91u}, {0x11D93u, 0x11D98u}, // Gunjala Gondi Letter Ee
+    {0x11DA0u, 0x11DA9u}, {0x11EE0u, 0x11EF6u}, {0x11FB0u, 0x11FB0u}, {0x12000u, 0x12399u}, // Gunjala Gondi Digit Zero
+    {0x12480u, 0x12543u}, {0x12F90u, 0x12FF0u}, {0x13000u, 0x1342Eu}, {0x14400u, 0x14646u}, // Cuneiform Sign Ab Times Nun Tenu
+    {0x16800u, 0x16A38u}, {0x16A40u, 0x16A5Eu}, {0x16A60u, 0x16A69u}, {0x16A70u, 0x16ABEu}, // Bamum Letter Phase-A Ngkue Mfon
+    {0x16AC0u, 0x16AC9u}, {0x16AD0u, 0x16AEDu}, {0x16AF0u, 0x16AF4u}, {0x16B00u, 0x16B36u}, // Tangsa Digit Zero
+    {0x16B40u, 0x16B43u}, {0x16B50u, 0x16B59u}, {0x16B63u, 0x16B77u}, {0x16B7Du, 0x16B8Fu}, // Pahawh Hmong Sign Vos Seev
+    {0x16E40u, 0x16E7Fu}, {0x16F00u, 0x16F4Au}, {0x16F4Fu, 0x16F87u}, {0x16F8Fu, 0x16F9Fu}, // Medefaidrin Capital Letter M
+    {0x16FE0u, 0x16FE1u}, {0x16FE3u, 0x16FE4u}, {0x16FF0u, 0x16FF1u}, {0x17000u, 0x187F7u}, // Tangut Iteration Mark
+    {0x18800u, 0x18CD5u}, {0x18D00u, 0x18D08u}, {0x1AFF0u, 0x1AFF3u}, {0x1AFF5u, 0x1AFFBu}, // Tangut Component-001
+    {0x1AFFDu, 0x1AFFEu}, {0x1B000u, 0x1B122u}, {0x1B150u, 0x1B152u}, {0x1B164u, 0x1B167u}, // Katakana Letter Minnan Nasalized Tone-7
+    {0x1B170u, 0x1B2FBu}, {0x1BC00u, 0x1BC6Au}, {0x1BC70u, 0x1BC7Cu}, {0x1BC80u, 0x1BC88u}, // Nushu Character-1B170
+    {0x1BC90u, 0x1BC99u}, {0x1BC9Du, 0x1BC9Eu}, {0x1CF00u, 0x1CF2Du}, {0x1CF30u, 0x1CF46u}, // Duployan Affix Low Acute
+    {0x1D165u, 0x1D169u}, {0x1D16Du, 0x1D172u}, {0x1D17Bu, 0x1D182u}, {0x1D185u, 0x1D18Bu}, // Musical Symbol Combining Stem
+    {0x1D1AAu, 0x1D1ADu}, {0x1D242u, 0x1D244u}, {0x1D400u, 0x1D454u}, {0x1D456u, 0x1D49Cu}, // Musical Symbol Combining Down Bow
     {0x1D49Eu, 0x1D49Fu}, {0x1D4A2u, 0x1D4A2u}, {0x1D4A5u, 0x1D4A6u}, {0x1D4A9u, 0x1D4ACu}, // Mathematical Script Capital C
     {0x1D4AEu, 0x1D4B9u}, {0x1D4BBu, 0x1D4BBu}, {0x1D4BDu, 0x1D4C3u}, {0x1D4C5u, 0x1D505u}, // Mathematical Script Capital S
     {0x1D507u, 0x1D50Au}, {0x1D50Du, 0x1D514u}, {0x1D516u, 0x1D51Cu}, {0x1D51Eu, 0x1D539u}, // Mathematical Fraktur Capital D
@@ -254,19 +253,18 @@ static constexpr LINK_RANGE LINK_SLUG_KEEP[] = {
     {0x1E026u, 0x1E02Au}, {0x1E100u, 0x1E12Cu}, {0x1E130u, 0x1E13Du}, {0x1E140u, 0x1E149u}, // Combining Glagolitic Letter Yo
     {0x1E14Eu, 0x1E14Eu}, {0x1E290u, 0x1E2AEu}, {0x1E2C0u, 0x1E2F9u}, {0x1E7E0u, 0x1E7E6u}, // Nyiakeng Puachue Hmong Logogram Nyaj
     {0x1E7E8u, 0x1E7EBu}, {0x1E7EDu, 0x1E7EEu}, {0x1E7F0u, 0x1E7FEu}, {0x1E800u, 0x1E8C4u}, // Ethiopic Syllable Gurage Hhwa
-    {0x1E8C7u, 0x1E8D6u}, {0x1E900u, 0x1E94Bu}, {0x1E950u, 0x1E959u}, {0x1EC71u, 0x1ECABu}, // Mende Kikakui Digit One
-    {0x1ECADu, 0x1ECAFu}, {0x1ECB1u, 0x1ECB4u}, {0x1ED01u, 0x1ED2Du}, {0x1ED2Fu, 0x1ED3Du}, // Indic Siyaq Fraction One Quarter
-    {0x1EE00u, 0x1EE03u}, {0x1EE05u, 0x1EE1Fu}, {0x1EE21u, 0x1EE22u}, {0x1EE24u, 0x1EE24u}, // Arabic Mathematical Alef
-    {0x1EE27u, 0x1EE27u}, {0x1EE29u, 0x1EE32u}, {0x1EE34u, 0x1EE37u}, {0x1EE39u, 0x1EE39u}, // Arabic Mathematical Initial Hah
-    {0x1EE3Bu, 0x1EE3Bu}, {0x1EE42u, 0x1EE42u}, {0x1EE47u, 0x1EE47u}, {0x1EE49u, 0x1EE49u}, // Arabic Mathematical Initial Ghain
-    {0x1EE4Bu, 0x1EE4Bu}, {0x1EE4Du, 0x1EE4Fu}, {0x1EE51u, 0x1EE52u}, {0x1EE54u, 0x1EE54u}, // Arabic Mathematical Tailed Lam
-    {0x1EE57u, 0x1EE57u}, {0x1EE59u, 0x1EE59u}, {0x1EE5Bu, 0x1EE5Bu}, {0x1EE5Du, 0x1EE5Du}, // Arabic Mathematical Tailed Khah
-    {0x1EE5Fu, 0x1EE5Fu}, {0x1EE61u, 0x1EE62u}, {0x1EE64u, 0x1EE64u}, {0x1EE67u, 0x1EE6Au}, // Arabic Mathematical Tailed Dotless Qaf
-    {0x1EE6Cu, 0x1EE72u}, {0x1EE74u, 0x1EE77u}, {0x1EE79u, 0x1EE7Cu}, {0x1EE7Eu, 0x1EE7Eu}, // Arabic Mathematical Stretched Meem
-    {0x1EE80u, 0x1EE89u}, {0x1EE8Bu, 0x1EE9Bu}, {0x1EEA1u, 0x1EEA3u}, {0x1EEA5u, 0x1EEA9u}, // Arabic Mathematical Looped Alef
-    {0x1EEABu, 0x1EEBBu}, {0x1F100u, 0x1F10Cu}, {0x1FBF0u, 0x1FBF9u}, {0x20000u, 0x2A6DFu}, // Arabic Mathematical Double-Struck Lam
-    {0x2A700u, 0x2B738u}, {0x2B740u, 0x2B81Du}, {0x2B820u, 0x2CEA1u}, {0x2CEB0u, 0x2EBE0u}, // Cjk Unified Ideograph-2A700
-    {0x2F800u, 0x2FA1Du}, {0x30000u, 0x3134Au}, {0xE0100u, 0xE01EFu}                        // Cjk Compatibility Ideograph-2F800
+    {0x1E8D0u, 0x1E8D6u}, {0x1E900u, 0x1E94Bu}, {0x1E950u, 0x1E959u}, {0x1EE00u, 0x1EE03u}, // Mende Kikakui Combining Number Teens
+    {0x1EE05u, 0x1EE1Fu}, {0x1EE21u, 0x1EE22u}, {0x1EE24u, 0x1EE24u}, {0x1EE27u, 0x1EE27u}, // Arabic Mathematical Waw
+    {0x1EE29u, 0x1EE32u}, {0x1EE34u, 0x1EE37u}, {0x1EE39u, 0x1EE39u}, {0x1EE3Bu, 0x1EE3Bu}, // Arabic Mathematical Initial Yeh
+    {0x1EE42u, 0x1EE42u}, {0x1EE47u, 0x1EE47u}, {0x1EE49u, 0x1EE49u}, {0x1EE4Bu, 0x1EE4Bu}, // Arabic Mathematical Tailed Jeem
+    {0x1EE4Du, 0x1EE4Fu}, {0x1EE51u, 0x1EE52u}, {0x1EE54u, 0x1EE54u}, {0x1EE57u, 0x1EE57u}, // Arabic Mathematical Tailed Noon
+    {0x1EE59u, 0x1EE59u}, {0x1EE5Bu, 0x1EE5Bu}, {0x1EE5Du, 0x1EE5Du}, {0x1EE5Fu, 0x1EE5Fu}, // Arabic Mathematical Tailed Dad
+    {0x1EE61u, 0x1EE62u}, {0x1EE64u, 0x1EE64u}, {0x1EE67u, 0x1EE6Au}, {0x1EE6Cu, 0x1EE72u}, // Arabic Mathematical Stretched Beh
+    {0x1EE74u, 0x1EE77u}, {0x1EE79u, 0x1EE7Cu}, {0x1EE7Eu, 0x1EE7Eu}, {0x1EE80u, 0x1EE89u}, // Arabic Mathematical Stretched Sheen
+    {0x1EE8Bu, 0x1EE9Bu}, {0x1EEA1u, 0x1EEA3u}, {0x1EEA5u, 0x1EEA9u}, {0x1EEABu, 0x1EEBBu}, // Arabic Mathematical Looped Lam
+    {0x1FBF0u, 0x1FBF9u}, {0x20000u, 0x2A6DFu}, {0x2A700u, 0x2B738u}, {0x2B740u, 0x2B81Du}, // Segmented Digit Zero
+    {0x2B820u, 0x2CEA1u}, {0x2CEB0u, 0x2EBE0u}, {0x2F800u, 0x2FA1Du}, {0x30000u, 0x3134Au}, // Cjk Unified Ideograph-2B820
+    {0xE0100u, 0xE01EFu}                                                                    // Variation Selector-17
 };
 
 // Every simple one-to-one lower-case mapping in the character database, as runs. GitHub lower-cases with
@@ -422,12 +420,29 @@ static cbool LinkPutPoint(chptrc dest, cui64 destBytes, ui64ptrc used, cui32 poi
    return true;
 }
 
+// How far through a heading a slug has got. It exists for the padding at the two ends of the heading
+// and for nothing else: a renderer strips those before it slugs anything, so a slug built from the
+// untrimmed text is one no reader can reach.
+struct LINK_SLUG_STATE {
+   ui64 pending; ///< Spaces seen since the last character that was not padding
+   bool leading; ///< Whether every character so far has been padding
+};
+
+typedef LINK_SLUG_STATE *const LINK_SLUG_STATEptrc;
+
 // Slugs one run of text onto the end of a buffer, and reports whether all of it fitted.
 //
-// The transformation is per character and carries no state at all, which is what lets a heading be
-// slugged span by span rather than assembled first: lower-casing and the keep test each answer about one
-// code point, and github-slugger's own rule is exactly those two in that order.
-static cbool LinkSlugAppend(cchptr text, cui64 byteCount, chptrc dest, cui64 destBytes, ui64ptrc used) {
+// The transformation is per character but for the padding, which is what lets a heading be slugged span
+// by span rather than assembled first: lower-casing and the keep test each answer about one code point,
+// and github-slugger's own rule is exactly those two in that order.
+//
+// The padding is the exception because it cannot be judged one character at a time. An ATX heading's
+// content is its line stripped of leading and trailing whitespace, so "# Intro " is the heading "Intro"
+// and a renderer slugs it to "intro" -- while the untrimmed text slugs to "-intro-", an anchor the
+// document points at and the page does not have. Interior padding is *not* dropped: each space becomes
+// its own hyphen, so "A  B" is "a--b", and a character the keep test drops does not interrupt the run --
+// "A ! B" is "a--b" as well, because the renderer removes the mark and leaves the two spaces adjacent.
+static cbool LinkSlugAppend(cchptr text, cui64 byteCount, chptrc dest, cui64 destBytes, ui64ptrc used, LINK_SLUG_STATEptrc state) {
    ui64 at = 0;
 
    while(at < byteCount) {
@@ -436,14 +451,21 @@ static cbool LinkSlugAppend(cchptr text, cui64 byteCount, chptrc dest, cui64 des
 
       if(!width) return false; // Not well-formed UTF-8, which OpcLoadXmlPart has already ruled out
       at += width;
-      // A space becomes a hyphen and a hyphen stays one; everything else is folded and then kept or
-      // dropped by its category, in that order, because that is the order github-slugger uses.
-      if(point == ' ') {
-         point = '-';
-      } else {
-         point = LinkSlugFold(point);
-         if(point != '-' && !LinkSlugKeeps(point)) continue;
+      // The two bytes MdEmitter trims off a heading's ends. A tab is transparent rather than a space:
+      // the keep test drops it wherever it stands, so it neither becomes a hyphen nor breaks a run.
+      if(point == ' ' || point == '\t') {
+         if(!state->leading && point == ' ') state->pending += 1u;
+         continue;
       }
+      state->leading = false;
+      while(state->pending) {
+         if(!LinkPutPoint(dest, destBytes, used, '-')) return false;
+         state->pending -= 1u;
+      }
+      // A hyphen stays one; everything else is folded and then kept or dropped by its category, in
+      // that order, because that is the order github-slugger uses.
+      point = LinkSlugFold(point);
+      if(point != '-' && !LinkSlugKeeps(point)) continue;
       if(!LinkPutPoint(dest, destBytes, used, point)) return false;
    }
    return true;
@@ -558,7 +580,7 @@ static cbool LinkFail(LINK_INDEXptrc byName, LINK_INDEXptrc bySlug) {
    return false;
 }
 
-//-- Reference resolution
+//-- The relationship index
 
 // The length of a NUL-terminated string, bounded so a malformed one cannot run away.
 static cui64 LinkLength(cchptr text, cui64 limit) {
@@ -567,6 +589,99 @@ static cui64 LinkLength(cchptr text, cui64 limit) {
    while(length < limit && text[length]) ++length;
    return length;
 }
+
+// One relationship id, and the relationship it names. A free slot holds a null id.
+struct LINK_REL {
+   cchptr id;       ///< The Id attribute, in the package's own heap, which outlives this index
+   si32   relation; ///< The package-wide relationship index it names
+};
+
+typedef LINK_REL       *LINK_RELptr;
+typedef const LINK_REL *cLINK_RELptr;
+
+// An open-addressed index over one part's relationship ids.
+//
+// OpcFindRelById is a scan, and it is the right shape for the handful of lookups every milestone before
+// this one made. M7 makes one per hyperlink and one per picture, against a part that declares one
+// relationship for each of them, so the pair is quadratic: a document of 32,000 links -- a bibliography,
+// an index, a table of authorities -- took 2.34 seconds where 8,000 took 0.17, on a 280 KB file that
+// produces under a megabyte of Markdown. It is M5's StyleModel lesson arriving one milestone on, and the
+// answer is the same one: index once, look up in constant time, and leave the scan where it is for the
+// callers that make three lookups and would pay more to build a table than to walk one.
+//
+// The ids are borrowed rather than copied. They live in the package's heap, which outlives the whole
+// conversion, and unlike the document's destination arena nothing here can grow it -- so a pointer is
+// safe where LINK_INDEX's offsets are not.
+struct LINK_REL_INDEX {
+   LINK_RELptr slots; ///< Power-of-two table, zeroed on allocation, or null when there is none
+   ui64        mask;  ///< One less than the slot count
+};
+
+typedef LINK_REL_INDEX *const LINK_REL_INDEXptrc;
+
+// Whether two NUL-terminated relationship ids are the same. An Id is an XML name, so this is a byte
+// comparison and not the ASCII fold a part name gets: OPC folds part names and nothing else.
+static cbool LinkSameId(cchptr left, cchptr right) {
+   ui64 at = 0;
+
+   while(at < LINK_MAX_REF_BYTES && left[at] && left[at] == right[at]) ++at;
+   return at < LINK_MAX_REF_BYTES && left[at] == right[at];
+}
+
+// Builds the index over one part's relationships. A failed allocation is not a failure of the
+// conversion: the index is a speed measure, so the scan behind it stands in and the document still
+// converts, which is why this returns nothing.
+static void LinkRelsOpen(LINK_REL_INDEXptrc index, OPC_PACKAGEptrc package, csi32 partIndex) {
+   cui32 count = (package ? OpcRelCount(package, partIndex) : 0);
+   cui64 slots = LinkIndexSlots(count);
+   cui64 bytes = slots * sizeof(LINK_REL);
+
+   index->slots = nullptr;
+   index->mask  = slots - 1u;
+   if(!count) return;
+   index->slots = (LINK_RELptr)amalloc(bytes, 32u);
+   if(!index->slots) return;
+   mzero(index->slots, bytes);
+   for(ui32 at = 0; at < count; ++at) {
+      csi32 relation = OpcRelAt(package, partIndex, at);
+
+      if(relation < 0) continue;
+
+      cOPC_REL_VIEW view = OpcRel(package, relation);
+
+      if(!view.id || !view.id[0]) continue;
+
+      ui64 slot = LinkHash(view.id, LinkLength(view.id, LINK_MAX_REF_BYTES)) & index->mask;
+
+      // A part declaring one id twice is malformed, and OpcFindRelById answers with the first record.
+      // Keeping the first here is what makes the index and the scan the same function.
+      while(index->slots[slot].id && !LinkSameId(index->slots[slot].id, view.id)) slot = (slot + 1u) & index->mask;
+      if(index->slots[slot].id) continue;
+      index->slots[slot].id       = view.id;
+      index->slots[slot].relation = relation;
+   }
+}
+
+// Releases the index, and leaves it safe to release again.
+static void LinkRelsClose(LINK_REL_INDEXptrc index) {
+   mdealloc(index->slots);
+   index->slots = nullptr;
+}
+
+// Finds one relationship by its id, falling back to the package's own scan when there is no index.
+static csi32 LinkRelsFind(LINK_REL_INDEXptrc index, OPC_PACKAGEptrc package, csi32 partIndex, cchptr id) {
+   if(!index->slots) return OpcFindRelById(package, partIndex, id);
+
+   ui64 slot = LinkHash(id, LinkLength(id, LINK_MAX_REF_BYTES)) & index->mask;
+
+   while(index->slots[slot].id) {
+      if(LinkSameId(index->slots[slot].id, id)) return index->slots[slot].relation;
+      slot = (slot + 1u) & index->mask;
+   }
+   return -1;
+}
+
+//-- Reference resolution
 
 // Appends a range to a buffer that is being built, and reports whether it fitted.
 static cbool LinkAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr bytes, cui64 byteCount) {
@@ -581,7 +696,7 @@ static cbool LinkAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr byte
 // A reference that names nothing leaves an empty destination behind, which every later stage reads as
 // "no link": the text stays and the brackets go, which is what CONVERSION_REFERENCE 5.4's "dangling refs
 // degrade gracefully" means applied to a reference rather than to numbering.
-static cbool LinkResolveOne(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, csi32 partIndex, cui32 spanIndex) {
+static cbool LinkResolveOne(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, csi32 partIndex, cui32 spanIndex, LINK_REL_INDEXptrc rels) {
    IR_SPANptr span = IrSpanMutable(document, spanIndex);
 
    if(!span) return true;
@@ -603,7 +718,7 @@ static cbool LinkResolveOne(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, c
    for(ui32 at = 0; at < idBytes; ++at) reference[at] = recorded[at];
    reference[idBytes] = 0;
 
-   csi32 relation = OpcFindRelById(package, partIndex, reference);
+   csi32 relation = LinkRelsFind(rels, package, partIndex, reference);
 
    if(relation < 0) return IrSetDest(document, spanIndex, "", 0);
 
@@ -698,14 +813,15 @@ static void LinkMuteEmptyLinks(IR_DOCUMENTptrc document) {
 // The numbering is github-slugger's own and it is a loop rather than a counter, because a heading may
 // literally be called "Introduction 1" and collide with the "-1" a second "Introduction" would take.
 static csi64 LinkHeadingSlug(IR_DOCUMENTptrc document, cIR_BLOCKptr block, LINK_INDEXptrc slugs, ui32ptrc slugBytes) {
-   char text[LINK_MAX_NAME_BYTES];
-   ui64 used = 0;
+   char            text[LINK_MAX_NAME_BYTES];
+   LINK_SLUG_STATE state = {0, true};
+   ui64            used  = 0;
 
    for(ui32 index = 0; index < block->spanCount; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
       if(!span || span->kind != IR_SPAN_TEXT) continue;
-      if(!LinkSlugAppend(IrText(document, span->textAt), span->textBytes, text, sizeof(text), &used)) break;
+      if(!LinkSlugAppend(IrText(document, span->textAt), span->textBytes, text, sizeof(text), &used, &state)) break;
    }
    *slugBytes = 0;
    if(!used) return -1;
@@ -754,6 +870,9 @@ static csi64 LinkHeadingSlug(IR_DOCUMENTptrc document, cIR_BLOCKptr block, LINK_
 //== Entry points
 
 cbool LinkResolveRefs(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, csi32 partIndex) {
+   LINK_REL_INDEX rels;
+
+   LinkRelsOpen(&rels, package, partIndex);
    for(ui32 index = 0; index < IrSpanCount(document); ++index) {
       cIR_SPANptr span = IrSpanAt(document, index);
 
@@ -765,11 +884,18 @@ cbool LinkResolveRefs(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, csi32 p
          IR_SPANptr blank = IrSpanMutable(document, index);
 
          if(blank) blank->flags = IR_SPAN_FLAG_NONE;
-         if(!IrSetDest(document, index, "", 0)) return false;
+         if(!IrSetDest(document, index, "", 0)) {
+            LinkRelsClose(&rels);
+            return false;
+         }
          continue;
       }
-      if(!LinkResolveOne(document, package, partIndex, index)) return false;
+      if(!LinkResolveOne(document, package, partIndex, index, &rels)) {
+         LinkRelsClose(&rels);
+         return false;
+      }
    }
+   LinkRelsClose(&rels);
    return true;
 }
 
@@ -890,11 +1016,12 @@ cbool LinkResolveAnchors(IR_DOCUMENTptrc document) {
 }
 
 cui64 LinkSlug(cchptr text, cui64 byteCount, chptrc dest, cui64 destBytes) {
-   ui64 used = 0;
+   LINK_SLUG_STATE state = {0, true};
+   ui64            used  = 0;
 
    if(!destBytes) return 0;
    dest[0] = 0;
-   if(text) LinkSlugAppend(text, byteCount, dest, destBytes, &used);
+   if(text) LinkSlugAppend(text, byteCount, dest, destBytes, &used, &state);
    dest[used] = 0;
    return used;
 }

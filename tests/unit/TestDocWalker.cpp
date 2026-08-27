@@ -621,6 +621,23 @@ void TestDocWalker(void) {
                   "<w:p><w:r><w:t>a</w:t></w:r>" DRAWING_OPEN "descr=\"A chart\"/></wp:inline></w:drawing></w:r>"
                   "<w:r><w:t>b</w:t></w:r></w:p>",
                   "P{[a][b]}"));
+   // A blip counts only under a pic:blipFill, which is the DrawingML *picture* vocabulary. The same
+   // element under an a:blipFill is the bitmap a drawn shape is painted with, and taking it would emit
+   // a shape's wallpaper as the figure the paragraph shows -- and contradict the rule above, since a
+   // drawn shape is exactly what "comes to nothing" names.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:t>a</w:t></w:r><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" descr=\"A shape\"/>"
+                  "<a:graphic><a:graphicData><a:sp><a:spPr><a:blipFill><a:blip r:embed=\"rId2\"/></a:blipFill>"
+                  "</a:spPr></a:sp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"
+                  "<w:r><w:t>b</w:t></w:r></w:p>",
+                  "P{[a][b]}"));
+   // A blip that is not the fill's own child is not the picture either: pic:blipFill holds one blip,
+   // and anything deeper belongs to an effect, a duotone or a vocabulary this build has not heard of.
+   CHECK(TracedAs(nullptr,
+                  "<w:p>" DRAWING_OPEN "descr=\"A cat\"/><a:graphic><a:graphicData><pic:pic><pic:blipFill>"
+                  "<a:duotone><a:blip r:embed=\"rId2\"/></a:duotone></pic:blipFill></pic:pic>"
+                  "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>",
+                  ""));
    // CONVERSION_REFERENCE 5.8's double-emit: both branches of an mc:AlternateContent describe the same
    // picture, so reading both and keeping the first reference emits it exactly once.
    CHECK(TracedAs(nullptr,

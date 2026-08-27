@@ -196,6 +196,25 @@ def check_media_options(exe, failures):
         print("      %s" % err.strip().replace("\n", "\n      "))
     else:
         print("ok    %-28s --media-dir puts the files where it says and links them there" % "--media-dir")
+
+    # A media path is generated, so the three bytes MD_CONTEXT_LINK_DEST leaves alone in a producer's own
+    # target are ordinary bytes of a file name here: unencoded, "sh#ots/image1.png" is a fragment of the
+    # document rather than a path to a picture. A trailing separator is trimmed for the same reason -- the
+    # emitted path joins with one of its own -- so both are asserted from the one run.
+    odd = os.path.join(make_fixtures.BUILD, "sh#ots")
+    into = os.path.join(make_fixtures.BUILD, "odd-media.md")
+    clear_dir(odd)
+    if os.path.exists(into):
+        os.remove(into)
+    code, out, err = run(exe, ["--media-dir", "sh#ots/", "-o", "odd-media.md", "images.docx"], cwd=make_fixtures.BUILD)
+    checks += 1
+    produced = open(into, "rb").read() if os.path.exists(into) else b""
+    if code != 0 or not os.path.exists(os.path.join(odd, "image1.png")) or b"](sh%23ots/image1.png)" not in produced:
+        failures.append(("--media-dir #", "exit %s" % code, "encoded directory"))
+        print("FAIL  %-28s --media-dir did not encode '#' or trimmed nothing" % "--media-dir #")
+        print("      %s" % err.strip().replace("\n", "\n      "))
+    else:
+        print("ok    %-28s --media-dir encodes a '#' and drops a trailing separator" % "--media-dir #")
     return checks
 
 

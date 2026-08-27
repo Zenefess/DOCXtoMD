@@ -15,4 +15,8 @@
     <w:name w:val="heading 2"/>
     <w:basedOn w:val="Normal"/>
   </w:style>
+  <w:style w:type="paragraph" w:styleId="SourceCode">
+    <w:name w:val="Source Code"/>
+    <w:basedOn w:val="Normal"/>
+  </w:style>
 </w:styles>

@@ -82,6 +82,14 @@ void MediaClose(MEDIA_SETptrc set);
 /// @note An image whose part the archive does not hold, and one whose reference resolved to nothing,
 ///       degrades to its alt text exactly as --no-images does. Neither is a refusal: a picture that
 ///       cannot be found is a defect in the document, not in the conversion.
+/// @note So does an image inside a fenced code block, and that one is decided here rather than left to
+///       the emitter. A fence emits its text and nothing else, so planning the picture would put a file
+///       on disk that no line of the document refers to -- and drop the alt text with it.
+/// @note The path written into the document percent-encodes '#', '%' and '?'. MD_CONTEXT_LINK_DEST
+///       leaves those three alone deliberately, because a producer's own target arrives already encoded
+///       far more often than it arrives holding a literal one; none of that holds for a name derived
+///       here, where all three are ordinary bytes of a file name and a document called "draft #2.docx"
+///       would otherwise link its pictures to a fragment of itself.
 cbool MediaPlan(MEDIA_SETptrc set, IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cchptr linkPrefix, cbool emitImages);
 
 /// Writes every planned file into the media directory, creating it if it is not there.
@@ -90,8 +98,12 @@ cbool MediaPlan(MEDIA_SETptrc set, IR_DOCUMENTptrc document, OPC_PACKAGEptrc pac
 /// @param mediaDir   Where the files go, as a path Win32 will accept. It is created if absent.
 /// @return EXIT_ALL_CONVERTED, or EXIT_OUTPUT when a file could not be written, or EXIT_NOT_DOCX when a
 ///         part could not be inflated. Every failure has already been reported.
-/// @note Called after the document itself has been written, so a conversion that fails leaves no files
-///       behind at all. A half-written picture is deleted the way a half-written .md is.
+/// @note Called after the document itself has been written, so a conversion that fails *before this
+///       point* leaves no files behind at all. A half-written picture is deleted the way a half-written
+///       .md is. The other order is not promised and should not be read into the first: a media
+///       directory that cannot be created leaves the .md beside pictures it names and does not have,
+///       which is the right way round -- the text is what the conversion was for -- and the caller still
+///       reports the run as failed.
 /// @note The plan owns its file names rather than borrowing the document's arena, which is what lets
 ///       the intermediate representation be released the moment the Markdown is out of it.
 cEXIT_CODE MediaWrite(cMEDIA_SETptr set, OPC_PACKAGEptrc package, cwchptr mediaDir);

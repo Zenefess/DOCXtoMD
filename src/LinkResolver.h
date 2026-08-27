@@ -70,13 +70,25 @@ cbool LinkResolveAnchors(IR_DOCUMENTptrc document);
 /// @return How many bytes the slug occupies, not counting the terminator.
 /// @note This has to agree with the renderer, because the heading's own anchor is the renderer's to
 ///       generate: we write the link and GitHub writes the target. The rule is github-slugger's -- lower
-///       case, then every character that is not a letter, a mark, a number or connector punctuation
-///       removed, then each space turned into a hyphen, with a literal hyphen kept. Both halves come
-///       from the Unicode character database rather than from a guess, for the reason M6 recorded about
-///       its punctuation table: a hand-picked subset is wrong in both directions, and here being wrong
-///       means a link that scrolls nowhere. An apostrophe is the case that makes it matter -- "Don't
-///       Panic" is "dont-panic", and a converter that kept the right single quotation mark would write a
-///       fragment no heading answers to.
+///       case, then every character that is not a letter, a mark, a decimal digit or connector
+///       punctuation removed, then each space turned into a hyphen, with a literal hyphen kept. Both
+///       halves come from the Unicode character database rather than from a guess, for the reason M6
+///       recorded about its punctuation table: a hand-picked subset is wrong in both directions, and here
+///       being wrong means a link that scrolls nowhere. An apostrophe is the case that makes it matter --
+///       "Don't Panic" is "dont-panic", and a converter that kept the right single quotation mark would
+///       write a fragment no heading answers to.
+/// @note A decimal digit and not every number, which is the one place a plausible reading of the rule is
+///       wrong. github-slugger's removal class settles it inside Latin-1 by itself: it takes out U+00B2,
+///       U+00B3, U+00B9 and U+00BC..U+00BE -- the superscripts and the vulgar fractions, every one of
+///       them category No -- while leaving U+00AA, U+00B5 and U+00BA, every one of them a letter,
+///       standing in the gaps between those ranges. Bengali says it twice over, with the digits
+///       U+09E6..U+09EF kept and the currency numerators U+09F4..U+09F9 beside them dropped.
+/// @note The padding at the two ends of a heading is dropped before any of that, and the padding inside
+///       it is not. An ATX heading's content is its line stripped of leading and trailing whitespace, so
+///       "# Intro " is the heading "Intro" and a renderer slugs "intro" where the untrimmed text gives
+///       "-intro-" -- an anchor the page does not have. Interior padding becomes one hyphen per space,
+///       and a character the keep test drops does not interrupt the run: "A ! B" is "a--b", because the
+///       renderer removes the mark and leaves the two spaces adjacent.
 /// @note Pure: it touches no document and allocates nothing, which is what makes it the piece the unit
 ///       tests can hammer directly.
 cui64 LinkSlug(cchptr text, cui64 byteCount, chptrc dest, cui64 destBytes);

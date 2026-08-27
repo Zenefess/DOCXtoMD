@@ -597,6 +597,29 @@ void TestMdEmitter(void) {
                 "<w:p><w:pPr><w:pStyle w:val=\"H1\"/></w:pPr>"
                 "<w:hyperlink w:anchor=\"m\"><w:r><w:t>one</w:t><w:br/><w:t>two</w:t></w:r></w:hyperlink></w:p>",
                 "<a id=\"m\"></a>t\n\n# [one two](#m)\n"));
+   // What stands after a span, for the flanking test, is the markup and not the text beyond it: a '['
+   // is punctuation, so a closing "**" behind punctuation and in front of one still parses. Reading
+   // past the bracket to the word after it would take the HTML fallback for no reason.
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>t</w:t></w:r></w:p>"
+                  "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>(a)</w:t></w:r>"
+                  "<w:hyperlink w:anchor=\"m\"><w:r><w:t>go</w:t></w:r></w:hyperlink></w:p>",
+                  "<a id=\"m\"></a>t\n\n**(a)**[go](#m)\n"));
+   // CONVERSION_REFERENCE 4.2's pitfall 7. An exclamation mark in front of a link's '[' makes the pair
+   // an image marker, so the sentence loses its link and gains a broken picture. MdEscape leaves the
+   // mark alone by design -- it is only dangerous next to a bracket the emitter itself writes.
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>t</w:t></w:r></w:p>"
+                  "<w:p><w:r><w:t>wow!</w:t></w:r><w:hyperlink w:anchor=\"m\"><w:r><w:t>go</w:t></w:r></w:hyperlink></w:p>",
+                  "<a id=\"m\"></a>t\n\nwow\\![go](#m)\n"));
+   // A hard break at the very edge of a link leaves one of its two halves with nothing between the
+   // brackets. "[](#m)" is a link a reader can neither see nor click, so the bracket is unwound.
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>t</w:t></w:r></w:p>"
+                  "<w:p><w:r><w:t>a</w:t></w:r><w:hyperlink w:anchor=\"m\">"
+                  "<w:r><w:br/><w:t>two</w:t></w:r></w:hyperlink></w:p>",
+                  "<a id=\"m\"></a>t\n\na\\\n[two](#m)\n"));
+   CHECK(Converts("<w:p><w:bookmarkStart w:id=\"1\" w:name=\"m\"/><w:r><w:t>t</w:t></w:r></w:p>"
+                  "<w:p><w:hyperlink w:anchor=\"m\"><w:r><w:t>one</w:t><w:br/></w:r></w:hyperlink>"
+                  "<w:r><w:t>b</w:t></w:r></w:p>",
+                  "<a id=\"m\"></a>t\n\n[one](#m)\\\nb\n"));
    // Nothing but text reaches a fence: a link inside one has no brackets to write, because the content
    // of a code block is literal.
    CHECK(Styled(STYLE_CODE,

@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: Line assembly, inline delimiters, the blank-line discipline and every block kind's shape.
  * To Do: 1) Keep a per-line prefix stack when list items nest at M8 and a quote holds one at M8 or M9.
  *        2) Emit a table's pipe rows through MD_CONTEXT_TABLE_CELL at M9, which has no caller yet.
@@ -504,6 +504,7 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
 // of the line and opens it again on the next -- two links to one destination, which is what the
 // document showed and what a reader can click.
 struct MD_LINK {
+   ui64 contentAt; ///< Where the content begins in the line buffer, one past the '['
    ui32 destAt;    ///< Destination-arena offset of the link's destination
    ui32 destBytes; ///< How many bytes it is
    bool open;      ///< Whether a '[' has been written and not yet closed
@@ -519,6 +520,13 @@ typedef MD_LINK *const MD_LINKptrc;
 static cbool MdCloseLink(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, MD_LINKptrc link) {
    if(!link->open) return true;
    link->open = false;
+   // Nothing was written between the brackets. LinkResolve mutes a link whose content is empty, but a
+   // hard break at the very edge of one leaves that content on the *other* line, and "[](url)" is a
+   // link a reader cannot see and cannot click. Unwind the bracket instead of closing it.
+   if(emitter->lineUsed <= link->contentAt) {
+      emitter->lineUsed = (link->contentAt ? link->contentAt - 1u : 0);
+      return true;
+   }
    if(!MdLineText(emitter, "](")) return false;
    if(!MdLineEscaped(emitter, IrDest(document, link->destAt), link->destBytes, MD_CONTEXT_LINK_DEST, false)) return false;
    return MdLineText(emitter, ")");
@@ -533,10 +541,22 @@ static cbool MdCloseLink(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, MD_LI
 static cbool MdWriteMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_SPANptr span, MD_LINKptrc link, cbool dollars) {
    if(span->kind == IR_SPAN_LINK_START) {
       if(!MdCloseLink(emitter, document, link)) return false;
+      // An exclamation mark immediately in front of a link's '[' makes the pair an *image* marker, so
+      // "see this!" followed by a link renders as a broken picture and the link text disappears. This
+      // is CONVERSION_REFERENCE 4.2's pitfall 7, and MdEscape leaves it here on purpose: the mark is
+      // only dangerous next to a bracket the emitter itself writes, which is knowledge a run does not
+      // have. A '\' before the mark cannot be an escape of it -- nothing escapes an exclamation mark
+      // into this buffer -- so the last byte being '!' is the whole test.
+      if(emitter->lineUsed && emitter->line[emitter->lineUsed - 1u] == '!') {
+         emitter->lineUsed -= 1u;
+         if(!MdLineText(emitter, "\\!")) return false;
+      }
+      if(!MdLineText(emitter, "[")) return false;
+      link->contentAt = emitter->lineUsed;
       link->destAt    = span->destAt;
       link->destBytes = span->destBytes;
       link->open      = true;
-      return MdLineText(emitter, "[");
+      return true;
    }
    if(span->kind == IR_SPAN_LINK_END) return MdCloseLink(emitter, document, link);
    if(span->kind == IR_SPAN_ANCHOR) {
@@ -640,7 +660,8 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
    // break reaches the reader as two clickable halves rather than as one bracket with no partner.
    if(link->open) {
       if(!MdLineText(emitter, "[")) return false;
-      started = true;
+      link->contentAt = emitter->lineUsed;
+      started         = true;
    }
    for(ui32 index = from; index < to; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
@@ -683,7 +704,7 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
 // the whole block one scope for D12's dollar count, and tests/fixtures/dollars pins that it is.
 static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block) {
    cbool   dollars = MdDollarPair(document, block, 0, block->spanCount);
-   MD_LINK link    = {0, 0, false};
+   MD_LINK link    = {0, 0, 0, false};
    bool    started = false;
    bool    pending = false;
 
@@ -754,7 +775,7 @@ static cbool MdBreakLine(MD_EMITTERptrc emitter) {
 // Emits a paragraph or a blockquote: one line per range of spans between hard breaks, each carrying the
 // block's prefix, and each put through the line-start pass so it cannot open a block it should not.
 static cbool MdEmitLines(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block, cchptr prefix) {
-   MD_LINK link  = {0, 0, false};
+   MD_LINK link  = {0, 0, 0, false};
    ui32    index = 0;
    bool    wrote = false;
 

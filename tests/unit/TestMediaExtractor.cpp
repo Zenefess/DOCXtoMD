@@ -103,4 +103,12 @@ void TestMediaExtractor(void) {
    CHECK(SitesAt(L"report.md", L"../shared", L"../shared", "../shared"));
    // A name that is nothing but an extension keeps its whole name, exactly as the output path does.
    CHECK(SitesAt(L".docx", nullptr, L".docx_media", ".docx_media"));
+   // A trailing separator is how a person spells "a directory", and every path built from the prefix
+   // joins with a separator of its own -- so keeping it writes "pics//image1.png" into the document.
+   CHECK(SitesAt(L"report.md", L"pics\\", L"pics", "pics"));
+   CHECK(SitesAt(L"report.md", L"pics/", L"pics", "pics"));
+   CHECK(SitesAt(L"report.md", L"out\\pics\\\\", L"out\\pics", "out/pics"));
+   // A drive letter is the one place the separator is part of the name: trimming "C:\\" would put the
+   // pictures in whatever the working directory on C: happens to be.
+   CHECK(SitesAt(L"report.md", L"C:\\", L"C:\\", "C:/"));
 }

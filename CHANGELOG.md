@@ -8,6 +8,76 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M7, hyperlinks and images.** The converter now resolves references. `src/LinkResolver.h`/`.cpp` and
+  `src/MediaExtractor.h`/`.cpp` are two new modules; `LinkResolver` turns a relationship id into a
+  destination and a bookmark into a GFM anchor, and `MediaExtractor` writes the image parts the document
+  draws from beside the `.md`. `LinkResolver` is not in the architecture list and is a session addition,
+  for the same reason `Ir.cpp` and `Convert` are: heading slugs are numbered over the whole document, so
+  the pass needs to see all of it at once, which neither the streaming walker nor the per-block emitter
+  can do. `MediaExtractor` is the list's stage [11] as written.
+- External hyperlinks (mapping row 21): `w:hyperlink r:id` becomes `[text](url)` with the formatting
+  inside the brackets, which is CONVERSION_REFERENCE 5.6. A `w:hyperlink` carrying both an `r:id` and a
+  `w:anchor` is a link into another document and the anchor becomes the fragment of what the
+  relationship resolves to. A link to a part inside the package keeps its text and loses its brackets,
+  because Markdown can address a file and not a part; so does a link whose relationship is dangling, and
+  one whose content is empty, which is 5.6's skipped hyperlink.
+- Internal hyperlinks and bookmark anchors (row 22). A bookmark that sits in a heading resolves to that
+  heading's own GFM slug, so the link needs no markup at all; one that sits anywhere else resolves to
+  its own sanitised name and is emitted as an `<a id>` element where it stands. An anchor nothing points
+  at is muted rather than emitted, which is what keeps Word's generated bookmarks -- `_GoBack` in every
+  saved document, a `_Toc` target in every heading -- out of the output without the code having to know
+  their names; a paragraph that held nothing else goes with it.
+- **The slugger is generated from the Unicode character database, not guessed**, for the reason M6
+  recorded about its punctuation table one milestone earlier. The anchor a link points at is the
+  *renderer's* to generate: we write `#dont-panic` and GitHub writes the heading's own id, so a slug
+  that differs by one apostrophe is a link that scrolls nowhere. github-slugger's rule is lower case,
+  then everything that is not a letter, a mark, a decimal digit or connector punctuation removed, then
+  each space to a hyphen -- so both halves need the database, the lower-casing as much as the keep set,
+  or a Cyrillic or a Greek heading reaches a fragment that does not exist. A decimal digit and not every
+  number: github-slugger's own removal class settles that inside Latin-1, where it removes the
+  superscripts and the vulgar fractions -- every one of them category No -- while leaving the feminine
+  ordinal, the micro sign and the masculine ordinal standing in the gaps between those ranges. Two
+  tables carry it: 753 ranges of code points a slug keeps, and 181 runs of simple lower-case mappings.
+  All **1,112,064** code points agree with Python's `unicodedata`. A heading's leading and trailing
+  padding is dropped before any of it, because an ATX heading's content is its line stripped of the
+  whitespace at both ends and a renderer never sees the padding a producer left there. Duplicate slugs
+  are numbered by github-slugger's own loop rather than by a counter, because a heading may literally be
+  called "Introduction 1".
+- Images (row 23), in all four shapes one arrives in: `w:drawing`, `w:pict`, `w:object`, and an
+  `mc:AlternateContent` standing in for one. One scan serves all four, because a picture is identified
+  by the markers inside it rather than by the element it arrived in, and both markup families are looked
+  for at once -- which is what makes `mc:AlternateContent` right here with no branch selector: its
+  `mc:Choice` and its `mc:Fallback` describe the *same* picture in two vocabularies, so reading both and
+  keeping the first reference emits it exactly once. That closes the double-emit 5.8 warns about by
+  arithmetic rather than by understanding the branches. A container holding no picture reference at all
+  -- a chart, a SmartArt diagram, a drawn shape -- comes to nothing, because none of them has a bitmap
+  the document could show. Alt text is `wp:docPr`'s `descr`, then `title`, then `name` (2.6), with every
+  line end folded to one space.
+- Media extraction. Each distinct part becomes `imageN.ext` in the order the document first draws it,
+  and a part drawn twice keeps one file (5.8). The extension comes from `[Content_Types].xml` and never
+  from the entry name, which producers get wrong -- the fixture pins a part named `mystery.png` typed
+  `image/jpeg`, which is the Google Docs trap 1.2 names. No archive entry name ever reaches disk, which
+  is correctness rule 10's other half. The files are written *after* the document, so a conversion that
+  fails before that point leaves nothing behind, and a half-written picture is deleted the way a
+  half-written `.md` is. The other order is not promised and says so in the code: a media directory that
+  cannot be created leaves the document beside a picture it names and does not have, which is the right
+  way round -- the text is what the conversion was for -- and the run still reports a failure.
+  `--media-dir` and `--no-images` are consumed for the first time: M2 parsed both and nothing read them.
+- A second arena on the intermediate representation, for destinations and anchor names. That is
+  load-bearing rather than tidy. Every text span of a block lies end to end in the text arena, which is
+  the invariant `RunCoalescer` merges on; a destination written between two runs would put a gap in the
+  middle of it, and a bookmark -- which 5.1 says a merge must see straight through, because Word writes
+  `_GoBack` in the middle of a paragraph -- would then stop the two halves of a word ever coming back
+  together. `IR_SPAN` grows from sixteen bytes to twenty-four.
+- `XML_NS_O` for the Office drawing extensions, which is where VML carries its `o:title` alt text.
+- Three golden fixture cases -- `links`, `images` and `anchors` -- plus `media-binary`, whose one media
+  part holds every byte value so that the byte path is proved rather than assumed. Every `expected.md`
+  was written by hand from the specification before the converter was run at it; `links` and `images`
+  matched on the first run and `anchors` did not, which is how `[nowhere]()` -- what a link to a
+  bookmark the document does not define emitted -- was found. Two new unit suites, `TestLinkResolver`
+  and `TestMediaExtractor`, and new cases in `TestDocWalker`, `TestRunCoalescer`, `TestMdEmitter` and
+  `TestMdEscape`. `tests/run_golden.py` gains a media table and the `--no-images` and `--media-dir`
+  checks; the three tallies move to **125**, **85** and **1164**.
 - **M6, inline formatting.** The converter now emits delimiters. `src/RunCoalescer.h`/`.cpp` is the new
   module the architecture list has been holding a place for: it merges adjacent spans carrying equal
   formatting (CONVERSION_REFERENCE 5.1) and then hoists leading and trailing whitespace out of every
@@ -75,6 +145,35 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   nothing.
 
 ### Changed
+- **`RunCoalescer` no longer merges across a link's brackets, and no rule in it says so.** 5.1 asks that
+  runs be coalesced *within* a hyperlink; M7's link markers are spans, so the two text spans on either
+  side of one are simply not adjacent, and the only thing the pass ever merges is a text span with the
+  text span immediately before it. An image and an anchor separate two runs for the same reason -- and
+  an anchor must not, which is why it is the one kind a merge reads straight through. The merge target
+  is carried rather than searched for: anchors pile up behind the span every later run merges into, so
+  stepping back over them would be quadratic in a paragraph's own length, which a paragraph of 32,000
+  bookmarks between 32,000 fragments of one word showed at one second against nine hundredths.
+- `MdEdgeAhead` and `MdFormatAhead` were re-cut, which M7's roadmap entry asks for by name. Both used to
+  read past a non-text span to the text behind it, which was right while every neighbour *was* text;
+  now a link start writes `[`, a link end `]`, an image `!` and an anchor `<`, and every one of those is
+  punctuation, so reading past one would report a letter where a bracket stands. A delimiter run cannot
+  merge with one on the far side of a bracket either, so anything but text ahead is reported as no
+  formatting at all.
+- `MD_CONTEXT_LINK_TEXT`, `MD_CONTEXT_LINK_DEST` and `MD_CONTEXT_ALT_TEXT` have callers, which is the
+  other thing M7's entry asks for by name, and re-cutting them against real hyperlinks changed none of
+  them: what 4.1 asks of link text and alt text beyond the inline set is that a closing bracket may not
+  appear unescaped, and the inline set escapes both brackets unconditionally already. One thing about
+  the destination rule is now recorded rather than left to be discovered: a byte above ASCII is left as
+  it stands, because CommonMark takes a raw UTF-8 destination and every renderer encodes it itself.
+  `MD_CONTEXT_TABLE_CELL` is the one context still waiting, and M9 is expected to re-cut it the same way.
+- `ConvertPackage` runs four passes between the coalescer and the emitter, in the one order that works:
+  references resolve against the part they were read in, anchors resolve once every reference is a
+  destination (a heading's slug is numbered over the whole document), the media plan turns a part name
+  into a path and can turn a picture back into its alt text, and dropping the emptied blocks last is
+  what restores the invariant the emitter rests on -- that every block it is handed produces a byte.
+- One existing golden changes: `wrappers`, whose hyperlink was plain text at M6 and is now a link. Every
+  other case is byte-identical, which is what says the second arena, the re-cut lookahead and the four
+  new passes cost nothing they should not.
 - `MdEscapeMeasure` and `MdEscapeWrite` take the D12 dollar verdict as an argument rather than counting
   it themselves, and `MdEscapeCountDollars` is what a caller counts with. This is the obligation D12
   left for M6 in writing: a line is escaped span by span now, because there is markup between the spans,
@@ -92,6 +191,56 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   type-qualified style roles cost nothing they should not.
 
 ### Fixed
+- **A document with tens of thousands of hyperlinks no longer spends minutes resolving them.**
+  `OpcFindRelById` is a scan, which is the right shape for the handful of lookups every milestone before
+  this one made; M7 makes one per hyperlink and one per picture against a part that declares one
+  relationship for each, so the pair is quadratic. A generated document of 32,000 external links took
+  **2.34 seconds** where 8,000 took 0.17 -- on a 280 KB file producing under a megabyte of Markdown --
+  and it is M5's `StyleModel` lesson arriving one milestone on. `LinkResolver` now builds an
+  open-addressed index over the one part's relationship ids and looks up in constant time: the same
+  document takes **0.10 seconds**, and the curve is linear from 4,000 to 32,000. The scan stays where it
+  is for the callers that make three lookups, and a failed index allocation falls back to it rather than
+  failing the conversion.
+- **A picture *fill* is no longer emitted as the document's picture.** An `a:blip` was matched wherever
+  it stood, and the same element under an `a:blipFill` is the bitmap a drawn shape, a chart wall or a
+  table cell is painted with. A shape's wallpaper came out as the figure the paragraph shows -- and it
+  contradicted the walk's own documented rule that a drawn shape comes to nothing. A blip now counts
+  only as the direct child of a `pic:blipFill`, which is the DrawingML *picture* vocabulary.
+- **An image inside a fenced code block no longer writes a file nothing refers to.** A fence emits its
+  text and nothing else, so the picture was dropped from the output and extracted to disk anyway. It
+  degrades to its alt text before anything is planned, which also stops the alt text being lost.
+- **An exclamation mark in front of a link no longer turns it into an image.** "see this!" followed by a
+  hyperlink renders as a broken picture with the link text gone, which is CONVERSION_REFERENCE 4.2's
+  pitfall 7. `MdEscape` leaves the mark alone on purpose -- it is only dangerous next to a bracket the
+  emitter itself writes -- so the emitter escapes it, where it can see one.
+- **A hard break at the edge of a hyperlink no longer emits `[](url)`.** A link that runs over a break
+  is closed at the end of its line and opened again on the next, and a break at the very first or last
+  position of one leaves a half with nothing between its brackets. The bracket is unwound instead.
+- **A generated media path now percent-encodes `#`, `%` and `?`.** `MD_CONTEXT_LINK_DEST` leaves those
+  three alone deliberately, because a *target* arrives already encoded far more often than it arrives
+  holding a literal one -- but none of that holds for a path this converter generates, where all three
+  are ordinary bytes of a file name. A document called `draft #2.docx` linked its pictures to a fragment
+  of itself.
+- **A `--media-dir` ending in a separator no longer doubles it.** A trailing separator is how a person
+  spells "a directory", and every emitted path joins with a separator of its own. A drive letter is the
+  one place the separator is part of the name and is left alone.
+- **A heading's slug no longer carries the padding a renderer strips.** `# Intro ` was slugged
+  `-intro-`, so the link the document wrote reached an anchor the page does not have.
+- **A slug no longer keeps the numbers github-slugger removes.** The keep set was the whole of category
+  N; the renderer's is `Nd` alone, so a heading holding a vulgar fraction or a Roman numeral resolved to
+  a fragment that does not exist. The regex settles it in Latin-1 by itself, and Bengali says it twice
+  over: the digits U+09E6..U+09EF are kept and the currency numerators U+09F4..U+09F9 beside them are
+  not.
+- **A link to a bookmark the document does not define no longer emits `[nowhere]()`.** Muting an empty
+  link ran before the anchors were resolved, and resolution is itself a way for a link to lose its
+  destination; it runs again afterwards, so a dangling internal reference degrades to plain text exactly
+  as a dangling relationship does. `tests/fixtures/anchors` was written by hand before the converter was
+  run at it and failed on this, which is the whole reason for writing one that way.
+- **A pass that appended arena bytes onto the same arena read freed memory.** `LinkResolver` copies a
+  heading's slug onto the destination of the anchor that reaches it, and both live in the destination
+  arena; growing it frees the block the source pointer is in. AddressSanitizer found it on the `anchors`
+  fixture. `IrStore` now remembers an interior source as an offset across the growth, so no later caller
+  can hit the same thing.
 - **A strikethrough that wraps another delimiter no longer disappears.** `word~~**x**~~` emits four
   literal tildes and no strikethrough at all: CommonMark refuses a delimiter run that is both preceded
   by a letter and followed by punctuation, and a `~~` in front of a `**` is always followed by

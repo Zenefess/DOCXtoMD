@@ -181,6 +181,10 @@ cbool ConvertMediaDir(cwchptr documentPath, cwchptr named, wchptrc dir, cui64 di
    prefix[0] = 0;
    if(named) {
       if(!ConvertPutRun(dir, dirChars, &used, named, ConvertLength(named))) return false;
+      // A trailing separator is how a person spells "a directory", and every path built from the prefix
+      // below joins with one of its own -- so keeping it writes "shots//image1.png" into the document.
+      // The drive-letter guard is what stops "C:\\" being trimmed to the working directory on C:.
+      while(used > 1u && (dir[used - 1u] == L'\\' || dir[used - 1u] == L'/') && dir[used - 2u] != L':') --used;
       dir[used] = 0;
       return used > 0 && ConvertPathToUtf8(dir, prefix, prefixChars);
    }
@@ -392,6 +396,11 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
 
    MdOpen(&emitter, options->hardBreak);
    MediaOpen(&media);
+   // Both are read below whatever the short circuit on the next line does, so neither may be left
+   // indeterminate: --no-images skips the derivation, and MediaPlan still measures the prefix it was
+   // handed. MSVC's /RTCu is what would have found this on Windows; the Linux sanitizers do not.
+   mediaDir[0]    = 0;
+   mediaPrefix[0] = 0;
 
    // Decision D13, recommended and not yet ruled: --stdout extracts its pictures too, beside the input,
    // where the document itself would have gone. The alternative -- writing nothing to disk, which is
@@ -435,8 +444,11 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
          DiagNoteText(note, outputPath);
       }
    }
-   // The pictures go out after the document, so a conversion that failed leaves nothing behind at all.
-   // They need the package still open, which is why it is closed here rather than above.
+   // The pictures go out after the document, so a conversion that failed before this point leaves nothing
+   // behind at all. What it cannot promise is the other order: the .md is written first, so a media
+   // directory that cannot be created leaves the document beside a picture it refers to and does not
+   // have. That is the right way round -- the text is what the conversion was for -- and the exit code
+   // says the run failed. They need the package still open, which is why it is closed here, not above.
    if(verdict == EXIT_ALL_CONVERTED) verdict = MediaWrite(&media, &package, mediaDir);
    if(verdict == EXIT_ALL_CONVERTED && media.count && !options->quiet) {
       char note[64];
