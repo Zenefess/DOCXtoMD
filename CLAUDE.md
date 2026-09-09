@@ -745,9 +745,11 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M7 they return **125**, **86** and **1195** checks. Those three numbers are the shim's, measured on
-Linux; the M6 numbers they replace -- 117, 65 and 1058 -- were confirmed on Windows on 2026-08-27 and
-were identical to what the shim had measured beforehand, as they have been at every milestone since M3.
+At M7 they return **125**, **86** and **1195** checks, over the **67** fixtures `make_fixtures.py`
+builds. All four were confirmed on Windows on 2026-09-09. The three check counts are the interesting
+ones: they are what the shim had measured on Linux beforehand, exactly, as they have been at every
+milestone since M3. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
+on both platforms -- and is recorded only so a run that builds a different number is noticed.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -1872,18 +1874,33 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     path needs rather than faulting the way MSVC would, which is stricter but is not the same code. All
     of it is now covered: both configurations build warning-free and every suite passes against the real
     binary.
-- **M7 `[done-unverified]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs.
+- **M7 `[done]` Hyperlinks & images** — rels resolution, `MediaExtractor`, anchors/slugs.
   M6 left three things waiting here by name and all three are settled: `MD_CONTEXT_LINK_TEXT`,
   `MD_CONTEXT_LINK_DEST` and `MD_CONTEXT_ALT_TEXT` have callers and were re-cut against real hyperlinks
   (which changed none of them, and `MdEscape.h` records why); `RunCoalescer` no longer merges across a
   `w:hyperlink` boundary, because a link start blocks a merge while an anchor is transparent to one; and
   `MdEdgeAhead` reads the markup rather than the text beyond it, so a `[` standing between two spans is
   punctuation to the flanking test.
-  **Status**: the code landed from Linux on 2026-08-27 and **nothing has been run on Windows**, so the
-  marker is `[done-unverified]` and the next Windows session verifies rather than reimplements it. The
-  three unrun commands are the whole of the definition of done: `msbuild DOCXtoMD.sln /m
-  /p:Configuration=Release /p:Platform=x64` (and the Debug configuration), `python tests\run_container.py`,
-  `python tests\run_golden.py` and `tests\x64\Release\DOCXtoMD.Tests.exe`.
+  **Status**: the code landed from Linux on 2026-08-27 as `[done-unverified]`, and the owner verified it
+  on Windows on 2026-09-09. Both x64 configurations build with **no errors and no warnings**;
+  `python tests\make_fixtures.py` builds all **67** fixtures; `python tests\run_container.py` passes all
+  **125** checks against `x64\Release` and all **125** again against `x64\Debug`;
+  `python tests\run_golden.py` passes all **86**; and `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
+  **1195**. That discharges the milestone's own definition of done -- `run_golden.py` is what
+  byte-compares the `links`, `images` and `anchors` fixtures, and `check_media` is what compares the
+  extracted files byte for byte -- **and the global one**, so the marker is `[done]` with nothing
+  outstanding.
+  - **The three tallies are the shim's, exactly.** 125, 86 and 1195, the same three numbers in the same
+    order a Linux session measured before any of this reached a Windows machine. That is the fifth
+    milestone running where the shim predicted the real MSVC binary rather than only itself -- and it is
+    worth what it costs precisely because it proves nothing about `/W3`, `/sdl`, `/arch:AVX2` or the real
+    `include/` headers, which is what the owner's run covers instead. Two things this milestone made the
+    Debug run matter more than usual for. `/RTCu` is what catches an indeterminate read, and M7 shipped
+    one -- `MediaPlan` measuring a `--no-images` prefix `ConvertMediaDir` had short-circuited past --
+    which the Linux sanitizers do not report and which a review found by reading rather than by running.
+    And `/sdl` puts `/GS` on both configurations, which is what would have turned the slug counter's
+    stack-buffer overflow into a `__report_gsfailure` on a heading 511 characters long. Both are fixed;
+    the clean Debug run is the evidence that neither left anything behind.
   - **What was verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII
     only, CRLF and ≤150 columns on all thirty-six `src/` files and all fourteen `tests/unit/` ones;
     `clang-format --style=file` a verified no-op on every one of them; both `.vcxproj`/`.filters` pairs
@@ -1891,8 +1908,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   - **What was verified on Linux, behaviourally, against the shim build**: the unit suite passes all
     **1195** checks, `tests/run_golden.py` all **86** and `tests/run_container.py` all **125**, every one
     of them under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on and no
-    diagnostic. Those numbers are the shim's; whether the real MSVC binary returns the same three is
-    exactly what the Windows run is for, and for the four milestones before this one it has.
+    diagnostic. Those numbers are the shim's, and the sanitizers behind them are what it is for -- see
+    the closing bullet for what each half of the pair covers that the other cannot.
   - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`,
     M4 from expat and M5 and M6 from `markdown-it-py`. M7's claim is about *references*, so the oracle
     compares the link and image structure `markdown-it-py` parses back out of the emitted Markdown
@@ -1932,7 +1949,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     not. Comparing that Latin-1 class against both candidate rules leaves `L | M | Nd | Pc` matching
     exactly and `L | M | N | Pc` wrong in six places.
   - **Every rule this milestone introduced was mutation-tested**, the way M6's third review established:
-    each of forty is deleted or inverted in turn and all three suites are run, and a rule no suite
+    each rule is deleted or inverted in turn and all three suites are run over it, and a rule no suite
     notices is a rule covered by nothing. Two rounds of that found six rules covered by nothing, and
     every one of the six now fails under mutation. What is *not* pinned is stated rather than hidden --
     see the entries under Known gaps.
@@ -1945,12 +1962,26 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     running one: the first round's six dimensions were the same six, and the defect needs a heading 511
     characters long to reach, which no fixture and no generated document had.
   - **The mutation harness's own verdicts were then re-checked by hand, and two of them were wrong.**
-    Running the forty twice gave different answers for four rules: the padding trim and `--no-images`
+    Running the set twice gave different answers for four rules: the padding trim and `--no-images`
     reported as unpinned in the second round are both caught by a suite when the mutation is applied and
     run by hand, and the fence guard reported as caught in the second round is not. The harness is a
     scratch tool and the commit does not carry it; what it is for is finding candidates, and a candidate
     it names is not a finding until the mutation has been applied and the suites run over it directly.
     That is M6's own lesson about pinning claims turned on the tool that checks them.
+  - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/W3` and
+    its zero-warnings requirement, `/sdl` and the `/GS` cookie that turns the slug overflow into a
+    fast-fail, `/RTCu` and the indeterminate read it catches, `/arch:AVX2`, the real `include/` headers,
+    and whether `mzero`'s aligned 256-bit path behaves over the one `al32` structure this milestone added
+    and the two it grew -- `MEDIA_SET`, `IR_DOCUMENT`'s destination arena and `OPC_PACKAGE`'s part-name
+    index, each pinned by its own `static_assert`. All of it is now covered: both
+    configurations build warning-free and all four commands return what the shim returned. What stays
+    Linux-only is the other half of the pair, and it is not a gap in the verification but the reason for
+    keeping the shim. MSVC v143 does ship `/fsanitize=address`, so the heap-use-after-free this
+    milestone's `IrStore` carried is in principle reachable there; it has no UndefinedBehaviorSanitizer
+    at all, so the out-of-bounds index the slug counter produced is not. Neither is switched on in
+    `DOCXtoMD.vcxproj`, which is the honest statement of it: the suites run under both sanitizers on
+    Linux and under neither on Windows, and turning `/fsanitize=address` on for a Debug build would be
+    worth a decision of its own rather than a quiet edit.
 - **M8 `[todo]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne numPr).
 - **M9 `[todo]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.
   `MD_CONTEXT_TABLE_CELL` is the last escaping context with no caller, and it is still provisional. Two
