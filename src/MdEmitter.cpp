@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-09
  * Description: Line assembly, inline delimiters, the blank-line discipline and every block kind's shape.
  * To Do: 1) Keep a per-line prefix stack when list items nest at M8 and a quote holds one at M8 or M9.
  *        2) Emit a table's pipe rows through MD_CONTEXT_TABLE_CELL at M9, which has no caller yet.
@@ -442,7 +442,8 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
    // CommonMark reads adjacent runs of the same delimiter character as one run and then matches openers
    // to closers by length -- its rule of three -- so three emphasis spans meeting with no text between
    // them can leave a run that no pairing resolves: "**bo*****th****ree*" comes out as six literal
-   // asterisks with all three spans lost. The flanking test models that merge for the character classes
+   // asterisks in the reader's text, with the middle span lost outright. The flanking test models that
+   // merge for the character classes
    // but not for the length arithmetic, which no character class can express. A span abutted by an
    // identical run on *both* sides is therefore written as an element instead: HTML has neither a run
    // length nor a flanking rule, and an element between two Markdown runs also keeps those two apart.

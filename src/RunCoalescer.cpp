@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-09
  * Description: The merge pass, the whitespace classes it hoists, and the span array it rebuilds.
  * To Do: 1) Reuse the replacement span array between documents once M13 gives a worker several.
  *        2) Fold a zero-width space into the hoisted set if a producer is found putting one in a run.
@@ -124,6 +124,14 @@ static cbool RunJoinable(cIR_SPANptr first, cIR_SPANptr next) {
 // opposite case and must stop one: text on either side of them is not adjacent in the output, and
 // joining it would carry bytes across a boundary the reader can see.
 //
+// A **muted** span is transparent for the same reason an anchor is, and it is the case this pass has
+// to be run a second time to see. LinkResolve mutes a link whose destination came to nothing, and a
+// muted span emits nothing at all -- so the text on either side of it *is* adjacent in the output
+// after all, and the barrier the brackets rightly were stops being one. Left unmerged the two spans
+// emit their delimiters twice, which is "**A****B**" -- the very failure correctness rule 4 exists to
+// prevent, arriving through the back door -- and they defeat MdEscape's entity lookahead, which is a
+// span-local scan that cannot see the "amp;" beginning the span after this one.
+//
 // The target is carried rather than searched for, and that is not tidiness. Anchors accumulate behind
 // the span every later run merges into -- a paragraph of N bookmarks between N fragments of one word
 // leaves N of them there -- so stepping back over them costs a scan per run and the pass becomes
@@ -133,11 +141,15 @@ static cbool RunJoinable(cIR_SPANptr first, cIR_SPANptr next) {
 // is pinned by TestRunCoalescer, where several anchors in a row still leave one merged span.
 static IR_SPANptr RunMergeInto(IR_SPANptr spans, csi64 target) { return (target < 0 ? nullptr : spans + target); }
 
-// Where the target moves when one more span is kept: to the span itself when it is text, nowhere when
-// it is an anchor, and to nothing at all when it is a barrier a merge may not cross.
-static csi64 RunMergeTarget(csi64 target, cIR_SPAN_KIND kind, cui32 at) {
-   if(kind == IR_SPAN_TEXT) return si64(at);
-   return (kind == IR_SPAN_ANCHOR ? target : -1);
+// Where the target moves when one more span is kept: to the span itself when it is text, nowhere when it
+// is an anchor or a muted span, and to nothing at all when it is a barrier a merge may not cross.
+//
+// It takes the whole span rather than its kind because muting is a flag rather than a kind: a muted
+// link start is still an IR_SPAN_LINK_START, and it is the flag that decides whether it reaches the
+// output at all.
+static csi64 RunMergeTarget(csi64 target, cIR_SPANptr span, cui32 at) {
+   if(span->kind == IR_SPAN_TEXT) return si64(at);
+   return (span->kind == IR_SPAN_ANCHOR || (span->flags & IR_SPAN_FLAG_MUTE) ? target : -1);
 }
 
 // Merges each block's adjacent equal-formatting spans in place. Merging only ever shrinks a block, so it
@@ -163,7 +175,7 @@ static void RunMergeBlocks(IR_DOCUMENTptrc document) {
             continue;
          }
          document->spans[block->spanAt + kept] = *span;
-         target                                = RunMergeTarget(target, span->kind, kept);
+         target                                = RunMergeTarget(target, span, kept);
          ++kept;
       }
       block->spanCount = kept;
@@ -195,7 +207,7 @@ static void RunEmit(RUN_REBUILDptrc rebuild, cIR_SPANptr span) {
       return;
    }
    rebuild->spans[rebuild->used] = *span;
-   rebuild->target               = RunMergeTarget(rebuild->target, span->kind, rebuild->used);
+   rebuild->target               = RunMergeTarget(rebuild->target, span, rebuild->used);
    ++rebuild->used;
 }
 

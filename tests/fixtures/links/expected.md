@@ -20,3 +20,7 @@ A part is not a destination: the styles part.
 [a\]b](https://example.invalid/docs)
 
 a hyperlink naming nothing
+
+**Boldface** survives a muted link.
+
+AT&amp;amp;T is one entity split by a muted link.

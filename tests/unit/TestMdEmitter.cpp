@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-09
  * Description: Unit tests for the arena, the blank-line discipline, delimiters and every block kind.
  * To Do: 1) Add the pipe-table cases when M9 gives a cell a line of its own.
  *        2) Drive an image with a real destination once a package can be built without an archive;
@@ -127,6 +127,7 @@ static cbool ConvertsWith(cchptr styleBody, cchptr body, cchptr wanted, cHARD_BR
 
    if(ready) ready = LinkResolveRefs(&document, nullptr, -1);
    if(ready) ready = LinkResolveAnchors(&document);
+   if(ready) ready = RunCoalesce(&document); // Again, because muting makes spans adjacent -- see Convert.cpp
    if(ready) IrDropEmptyBlocks(&document);
    if(ready && MdEmitDocument(&emitter, &document) == MD_OK) {
       matched = EmittedIs(&emitter, wanted);

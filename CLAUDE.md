@@ -174,9 +174,11 @@ below.
     a UTF-16 part in place, and is what M4's definition of done means by "rather than reaching the walker".
     `OpcFindPart` goes through an **open-addressed part-name index built once at `OpcOpen`**, folded the
     way `OpcNameEqual` compares so that OPC's case-insensitive part names land in one slot. That is a
-    scale matter and it was found at M7: the scan it replaced sits on three paths that walk a list and
-    look one part up per element — `OpcOpen`'s own content-type and relationship passes, and `MediaPlan`'s
-    one lookup per picture — so each was quadratic in the archive. A 1.1 MB document drawing 100,000
+    scale matter and it was found at M7. `MediaPlan` looks one part up per picture and nothing caps how
+    many pictures a document draws, so that path was quadratic in the archive; `OpcOpen`'s own
+    content-type and relationship passes look one up per candidate too, but M4 had already capped those
+    at `OPC_MAX_MAIN_CANDIDATES` for this exact reason, so the index makes them cheaper without making
+    them asymptotically better. A 1.1 MB document drawing 100,000
     pictures out of a 9,000-entry package took 5.10 seconds and now takes 0.38, with the part count no
     longer registering at all. A first-wins probe keeps the index answering exactly as the scan did, for
     the same reason `ZipReader` resolves a duplicate name to its first record, and a failed allocation
@@ -232,17 +234,21 @@ below.
     identifier happened to be stored first — a real defect the golden fixtures missed and the unit
     suite caught, because every fixture's first style is the one they would wrongly have inherited.
   - `Ir.h`/`Ir.cpp` — the intermediate representation the walker builds, RunCoalescer rewrites and the
-    emitter reads: blocks and spans as arrays of POD records over one growable byte arena, addressed by
-    offset so a growth invalidates nothing. Five block kinds since M6 — paragraph, heading, quote, code
+    emitter reads: blocks and spans as arrays of POD records over two growable byte arenas -- one for
+    span text and, since M7, a second for destinations and anchor names -- each addressed by offset so a
+    growth invalidates nothing. The split is load-bearing rather than tidy: every text span of a block
+    lies end to end in the text arena, which is the invariant `RunCoalescer` merges on, and a destination
+    written between two runs would put a gap in the middle of it. Five block kinds since M6 — paragraph, heading, quote, code
     and rule — and two of them are exempt from the emptiness test: a rule is an empty paragraph by
     construction, and an empty code paragraph is a blank line inside a fence. `IrEndBlock` trims a
     block's leading and trailing break spans — except inside a fence, where a break *is* a newline and
     no marker is written for it, so the reason to trim one never arises and trimming loses a line — and
     then unwinds the whole block — records, spans and arena — when nothing but ASCII whitespace is left,
     which is
-    what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` exist for one caller:
-    `mc:AlternateContent`, where the first `mc:Choice` is walked speculatively and rewound if an
-    `mc:Fallback` turns out to follow it. A non-breaking space counts as content, per mapping row 35.
+    what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` have two callers, both in
+    `DocWalker`: `mc:AlternateContent`, where the first `mc:Choice` is walked speculatively and rewound
+    if an `mc:Fallback` turns out to follow it, and -- since M7 -- the picture walk, which opens an image
+    span before it knows whether the container holds a reference and rewinds it when none turns up. A non-breaking space counts as content, per mapping row 35.
   - `DocWalker.h`/`DocWalker.cpp` — the body walk, one dispatcher for both block and run level because
     every transparent wrapper appears at both and means the same thing at each. Accept-all revisions
     (correctness rule 8): `w:ins` and `w:moveTo` are transparent, `w:del` and `w:moveFrom` are dropped
@@ -290,8 +296,9 @@ below.
     `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
     than merely unformatted — both are named in `DocWalker.cpp`'s To Do), and anything this build has
     never heard of, which is the OOXML compatibility model. Descended into although their own meaning
-    waits: `w:hyperlink`, `w:fldSimple`, the bidirectional containers `w:dir` and `w:bdo`, and a
-    `w:ruby`'s `w:rubyBase`. `mc:Ignorable` and `mc:ProcessContent` are **attributes**, not elements,
+    waits: `w:fldSimple`, the bidirectional containers `w:dir` and `w:bdo`, and a `w:ruby`'s
+    `w:rubyBase`. `w:hyperlink` was on that list until M7 and is not any more -- it has a handler of its
+    own now, and the paragraph above says what it does. `mc:Ignorable` and `mc:ProcessContent` are **attributes**, not elements,
     and nothing reads either yet — an element in an ignorable namespace is skipped rather than having
     its children promoted, which is a `To Do` and not a claim of MCE conformance.
   - `MdEscape.h`/`MdEscape.cpp` — correctness rule 6's context-aware writer, pure and allocating
@@ -328,6 +335,13 @@ below.
     than trusting an invariant a later milestone could quietly break. Hoisting splits a span in three,
     so the span array is rebuilt rather than rewritten in place, and every block's `spanAt` moves with
     it; that is `IrAdoptSpans`, and it is this module's one privilege.
+    An anchor is transparent to a merge and a link's brackets and an image are not, which is right while
+    those reach the output -- and a **muted** span is transparent too, which is why `Convert` runs this
+    pass a second time after `LinkResolve`. Muting removes a link's brackets *after* the merge decision
+    was taken on the strength of them, so the two spans they separated end up adjacent; left unmerged a
+    bold run either side of one emitted `**A****B**`, and an entity split across the pair went unescaped
+    because `MdEscape`'s lookahead is span-local. That is M7's two coalescer rules -- brackets block a
+    merge, an unresolved link is muted -- each right alone and wrong together.
   - `MdEmitter.h`/`MdEmitter.cpp` — one growable UTF-8 output buffer and one line buffer. Since M6 a
     line is assembled span by span in its **output** form — delimiters and escaped text together —
     rather than raw and escaped in one piece, because there is now markup between the spans and a pass
@@ -352,11 +366,13 @@ below.
     The element also stands in where the flanking classes cannot see the problem at all: CommonMark
     reads adjacent runs of one delimiter character as a single run and then pairs openers to closers by
     *length* — its rule of three — so three emphasis spans meeting with no text between them can leave a
-    run no pairing resolves, and `**bo*****th****ree*` comes out as six literal asterisks with all three
-    spans lost. A span abutted by an identical run on both sides is therefore written as an element,
+    run no pairing resolves, and `**bo*****th****ree*` comes out as
+    `<strong>bo</strong>***th***<em>ree</em>` -- six literal asterisks in the reader's text, and the
+    middle span lost outright. A span abutted by an identical run on both sides is therefore written as an element,
     which has neither a length nor a flanking rule and also keeps the two Markdown runs apart. That
-    fallback is session-derived, not ruled, and it is the one place M6 writes markup the mapping
-    table does not name.
+    fallback is session-derived, not ruled, and it is the one place M6 writes markup no DOCX feature
+    asked for -- the four rows the mapping table carries for it were added to record it, which is why
+    this bullet can point at them.
     M7's four span kinds emit here too: a link is its content between brackets and its destination in
     parentheses, percent-encoded rather than backslash-escaped; an image is that with a `!` in front and
     its alt text between the brackets; an anchor is the raw `<a id>` of mapping row 22; and a muted span
@@ -1138,7 +1154,7 @@ implementation session must respect:
 | Underline, highlight, color, size | **Dropped** (no Markdown equivalent; hyperlink styling suppressed) |
 | A strikethrough that wraps another delimiter | `<del>` — session-derived at M6. `word~~**x**~~` emits four literal tildes and no strikethrough: a `~~` in front of a `**` is followed by punctuation, so it may only open where the character before it is whitespace or punctuation too, and mid-sentence it is a letter. Two `~~` runs that meet fail as completely — `~~a~~~~b~~` is a run of four tildes, which GFM does not recognise at all. Raw HTML has no flanking rule |
 | Emphasis or a strikethrough whose content touches punctuation at the edge, hard against a word character outside | `<strong>` / `<em>` / `<del>` — session-derived at M6, and the same rule as the row above generalised. `word**(a)**after` loses its emphasis entirely. Two delimiter runs that meet are one run to a parser, so the test steps back over an adjacent run before looking at what precedes it. "Punctuation" is CommonMark's own definition exactly — the Unicode P and S categories, as a generated range table `MdEmitter.cpp` binary-searches — so an Arabic full stop and a Devanagari danda are punctuation while a Roman numeral and a CJK ideograph are not |
-| An emphasis span with an identical delimiter run hard against it on **both** sides | `<strong>` / `<em>` — session-derived at M6, and the one trigger that is not a flanking rule. CommonMark merges adjacent runs of one delimiter character into a single run and then pairs openers to closers by *length* — its rule of three — so three emphasis spans meeting with no text between them can leave a run no pairing resolves: `**bo*****th****ree*` is six literal asterisks with all three spans lost, and there is no punctuation anywhere in it for a character class to catch. An element has neither a length nor a flanking rule, and it also keeps the two Markdown runs apart |
+| An emphasis span with an identical delimiter run hard against it on **both** sides | `<strong>` / `<em>` — session-derived at M6, and the one trigger that is not a flanking rule. CommonMark merges adjacent runs of one delimiter character into a single run and then pairs openers to closers by *length* — its rule of three — so three emphasis spans meeting with no text between them can leave a run no pairing resolves: `**bo*****th****ree*` renders as `<strong>bo</strong>***th***<em>ree</em>` -- six literal asterisks in the reader's text with the middle span lost outright, and there is no punctuation anywhere in it for a character class to catch. An element has neither a length nor a flanking rule, and it also keeps the two Markdown runs apart |
 | A code span, wherever it stands | `` ` `` always. A code span has no flanking rule of its own, so it never needs the fallback |
 | Inline code | `` ` `` — via code-named character styles or monospace `rFonts`. Code wins over bold and italic, and the bits are cleared in the **walker** so that two runs coming out as the same code span coalesce; left set, their backtick delimiters would meet and a renderer would read the pair as one span |
 | Code block | Fenced ``` — consecutive all-monospace paragraphs merge into one fence, whose length is one more than the longest backtick run inside it and never fewer than three. No info string: the language is not recoverable. An empty code paragraph is a blank line of the fence, and is trimmed only where it falls at either end of one |
@@ -1890,6 +1906,13 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   byte-compares the `links`, `images` and `anchors` fixtures, and `check_media` is what compares the
   extracted files byte for byte -- **and the global one**, so the marker is `[done]` with nothing
   outstanding.
+  **One fix landed after that verification**, the way D12 landed after M5's: an audit of this file's own
+  claims found that a *muted* link still separated the two runs it stood between, so a bold run either
+  side of one emitted `**A****B**` and an entity split across it went unescaped. The three tallies are
+  unchanged -- the fix adds two paragraphs to an existing fixture and no new check -- so what the owner
+  ran still describes the tree, but the changed `RunCoalescer`, `Convert` and `MdEmitter` have not been
+  through `/W3`. The marker stays `[done]` on M5's precedent: a verification record is of what was run,
+  and a later bug fix does not un-verify a milestone.
   - **The three tallies are the shim's, exactly.** 125, 86 and 1195, the same three numbers in the same
     order a Linux session measured before any of this reached a Windows machine. That is the fifth
     milestone running where the shim predicted the real MSVC binary rather than only itself -- and it is

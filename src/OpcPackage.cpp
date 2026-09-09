@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-09
  * Description: Package model implementation: content types, relationship parsing, target resolution.
  * To Do: 1) Cache a folded copy of each part name if profiling ever shows the comparator mattering.
  *        2) Normalise a backslash in an entry name at M11, which decision D10 gave that question to.
@@ -810,12 +810,14 @@ static cui64 OpcNameHash(cchptr name) {
 
 // Builds the index over the part table, once, before anything looks a part up.
 //
-// OpcFindPart was a scan over every entry in the archive, and it is on three paths that walk a list and
-// look one up per element: OpcOpen's own content-type and relationship passes, and M7's MediaPlan, which
-// resolves one part per picture. Each of those is therefore quadratic in the archive -- an entry count
-// capped at 10,000 against a picture count capped only by the size of document.xml, which measured 4.9
-// seconds on a 1.1 MB input drawing 100,000 pictures out of a 9,000-entry package. Indexing here rather
-// than in each caller fixes all three, and M10's footnote parts inherit it.
+// OpcFindPart was a scan over every entry in the archive, and three paths walk a list and look one up per
+// element: OpcOpen's own content-type and relationship passes, and M7's MediaPlan, which resolves one
+// part per picture. Only MediaPlan's was quadratic in the archive, and the difference is worth stating
+// rather than rounding away -- the other two are bounded by OPC_MAX_MAIN_CANDIDATES, which M4 added for
+// exactly this reason, so an index makes them cheaper without changing what they cost asymptotically.
+// A picture count is capped only by the size of document.xml, and 100,000 of them drawn out of a
+// 9,000-entry package measured 5.10 seconds on a 1.1 MB input. Indexing here rather than in each caller
+// serves all three, and M10's footnote parts inherit it.
 //
 // A slot holds the part index plus one, so a zeroed table means empty and no sentinel pass is needed. A
 // failed allocation is not a failure of the package: the scan below stands in, which is why this returns

@@ -191,6 +191,20 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   type-qualified style roles cost nothing they should not.
 
 ### Fixed
+- **A muted link no longer splits the two runs it stood between.** M7 gave the coalescer two rules that
+  are each right on their own and wrong together: a link's brackets are a barrier a merge may not cross,
+  and a link whose destination resolves to nothing is muted so that its brackets emit nothing. Muting
+  happens in `LinkResolve`, which runs *after* the merge decision, so two spans the brackets had
+  correctly separated ended up adjacent in the output and unmerged. Bold on either side emitted
+  `**A****B**`, which a renderer shows as **A\*\*\*\*B** -- four asterisks the document never had, and the
+  exact `**Hel****lo**` fragmentation defect correctness rule 4 exists to prevent. An entity split across
+  the pair was worse because it is silent: a document reading `AT&amp;T` emitted `AT&amp;T`, which a
+  renderer reads back as the entity and shows as `AT&T`, so the literal text was lost. A **muted span is
+  now transparent to a merge**, exactly as an anchor already was and for the same reason -- it emits
+  nothing, so it separates nothing -- and `Convert` coalesces a second time once the muting is done.
+  `tests/fixtures/links` pins both shapes, and both fail without the rule. Found by auditing this file's
+  own claim that "a split entity can only be separated by markup that stops it being one", which was
+  true when M6 wrote it and stopped being true when M7 added muting.
 - **A heading long enough to fill the slug buffer no longer overruns the stack.** `LinkHeadingSlug`
   appends the base slug and the `-` of a duplicate's counter through a bounds-checked helper and then
   wrote the counter's digits with a raw `candidate[length++]` and no check at all. `LinkSlugAppend`
@@ -203,9 +217,11 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   confirmed against the committed build with AddressSanitizer: a heading of 511 characters repeated twice
   aborts there and is clean here.
 - **A picture-heavy document in a part-heavy package no longer takes seconds per megabyte.**
-  `OpcFindPart` was a scan over every archive entry, and it sits on three paths that walk a list and look
-  one part up per element: `OpcOpen`'s own content-type and relationship passes, and M7's `MediaPlan`,
-  which resolves one part per picture. Each was quadratic in the archive. A 1.1 MB document drawing
+  `OpcFindPart` was a scan over every archive entry, and three paths walk a list and look one part up per
+  element: `OpcOpen`'s own content-type and relationship passes, and M7's `MediaPlan`, which resolves one
+  part per picture. Only `MediaPlan`'s was quadratic in the archive -- the other two are bounded by
+  `OPC_MAX_MAIN_CANDIDATES`, which M4 added for exactly this reason, so the index makes them cheaper
+  without changing what they cost asymptotically. A 1.1 MB document drawing
   100,000 pictures out of a 9,000-entry package took **5.10 seconds**, against 0.35 for the same
   pictures in a package with one media part -- a 15x cost for the part table alone. `OpcPackage` now
   builds an open-addressed part-name index once, at `OpcOpen`, folded the way `OpcNameEqual` compares:
@@ -309,7 +325,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   produced a byte which is neither a space nor a tab -- a space renders identically in every face.
 - **Three adjacent asterisk spans no longer lose all three.** CommonMark reads adjacent runs of one
   delimiter character as a single run and pairs openers to closers by length -- its rule of three -- so
-  `**bo*****th****ree*` came out as six literal asterisks. That is arithmetic no character class can
+  `**bo*****th****ree*` came out as six literal asterisks with the middle span lost. That is arithmetic
+  no character class can
   express, so the flanking test could not see it; a span abutted by an identical run on both sides now
   takes the element form, which has neither a length nor a flanking rule and also keeps the two
   Markdown runs apart.

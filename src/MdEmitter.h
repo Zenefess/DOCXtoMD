@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-09
  * Description: The Markdown emitter: one growable UTF-8 buffer, line assembly and the delimiter rules.
  * To Do: 1) Emit the table-cell context at M9, which is the one escaping context with no caller left.
  *        2) Keep a per-line prefix stack when list items nest at M8 and a quote comes to hold one.
@@ -87,8 +87,9 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       spans and escaping the assembled line would escape that markup too. The two rules that depend
 ///       on seeing more than one span are handled by looking wider rather than by escaping later: the
 ///       ampersand lookahead is safe within a span because RunCoalescer has already merged every
-///       adjacent pair with equal formatting, so a split entity can only be separated by markup that
-///       stops it being one; and D12's dollar count is taken over the whole line and passed into each
+///       adjacent pair with equal formatting -- including, since it is run again after LinkResolve, the
+///       pairs a link's brackets separated until muting removed them -- so a split entity can only be
+///       separated by markup that stops it being one; and D12's dollar count is taken over the whole line and passed into each
 ///       span's escape call, which is what MdEscapeWrite's dollars argument is for.
 /// @note One consequence of grouping worth stating rather than discovering: `IrEndBlock` drops an empty
 ///       paragraph completely, so a blank Normal-styled line between two separate code samples leaves

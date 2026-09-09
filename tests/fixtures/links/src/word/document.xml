@@ -36,5 +36,15 @@
     <w:p><w:hyperlink r:id="rId2"><w:hyperlink r:id="rId3"><w:r><w:t>no nesting</w:t></w:r></w:hyperlink></w:hyperlink></w:p>
     <w:p><w:hyperlink r:id="rId2"><w:r><w:t>a]b</w:t></w:r></w:hyperlink></w:p>
     <w:p><w:hyperlink><w:r><w:t>a hyperlink naming nothing</w:t></w:r></w:hyperlink></w:p>
+    <w:p>
+      <w:r><w:rPr><w:b/></w:rPr><w:t>Bold</w:t></w:r>
+      <w:hyperlink r:id="rId99"><w:r><w:rPr><w:b/></w:rPr><w:t>face</w:t></w:r></w:hyperlink>
+      <w:r><w:t xml:space="preserve"> survives a muted link.</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:r><w:t>AT&amp;</w:t></w:r>
+      <w:hyperlink r:id="rId99"><w:r><w:t>amp;T</w:t></w:r></w:hyperlink>
+      <w:r><w:t xml:space="preserve"> is one entity split by a muted link.</w:t></w:r>
+    </w:p>
   </w:body>
 </w:document>

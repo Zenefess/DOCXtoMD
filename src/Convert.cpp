@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-09
  * Description: One document end to end: container, package, styles, walk, resolve, emit and write.
  * To Do: 1) Report the offset UtfValidate found, which the package records and nothing prints yet.
  *        2) Write through a temporary file and rename over the target, once a partial write costs more.
@@ -315,6 +315,13 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
 
    if(ready) ready = LinkResolveRefs(&document, package, mainPart);
    if(ready) ready = LinkResolveAnchors(&document);
+   // Coalesced a second time, because muting is what makes two spans adjacent that were not. A link's
+   // brackets are a barrier a merge may not cross, and rightly so while they exist -- but the pass that
+   // mutes a link whose destination came to nothing runs after the merge decision was taken, and a muted
+   // span emits nothing. Left as it stood, a bold run either side of one emitted "**A****B**", which is
+   // the fragmentation defect correctness rule 4 exists to prevent, and an entity split across the two
+   // was not escaped, because MdEscape's lookahead cannot see past the span it is writing.
+   if(ready) ready = RunCoalesce(&document);
    if(ready) ready = MediaPlan(media, &document, package, mediaPrefix, emitImages);
    if(ready) IrDropEmptyBlocks(&document);
 

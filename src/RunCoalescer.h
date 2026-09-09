@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-09
  * Description: The coalescing pass: adjacent runs merged on equal formatting, whitespace hoisted out.
  * To Do: 1) Stop merging across a field-result boundary when M10 introduces one.
  *        2) Coalesce a table cell's own blocks once M9 gives a block children.
@@ -49,11 +49,20 @@
 ///       emitter needs no test of its own.
 /// @note Nothing is hoisted inside a fenced code block. Its content is literal, no delimiter is written
 ///       around it, and its leading whitespace is the indentation of the code.
-/// @note A merge never crosses a link's brackets, and no rule here says so. CONVERSION_REFERENCE 5.1
-///       asks that runs be coalesced *within* a hyperlink, and M7's link markers are spans, so the two
-///       text spans on either side of one are not adjacent to each other -- the only thing this pass
-///       ever merges is a text span with the text span immediately before it. An image and an anchor
-///       separate two runs for the same reason, which is right for the same reason.
+/// @note A merge never crosses a link's brackets or an image, and no rule here says so.
+///       CONVERSION_REFERENCE 5.1 asks that runs be coalesced *within* a hyperlink, and M7's link
+///       markers are spans, so the two text spans on either side of one are not adjacent in the output.
+///       An **anchor** is the exception and is transparent: it emits an element of its own between the
+///       two runs without putting anything between their text, and Word writes a bookmark in the middle
+///       of a word often enough that stopping there would emit "**Hel****lo**".
+/// @note A **muted** span is transparent too, and it is why this pass is run twice. A muted span emits
+///       nothing at all, so the text on either side of one *is* adjacent in the output -- but muting is
+///       LinkResolve's, and LinkResolve runs after this pass has already refused the merge on the
+///       strength of brackets that will not survive. Convert therefore calls this again once the muting
+///       is done. Left unmerged, a bold run on either side of a muted link emitted "**A****B**" -- the
+///       fragmentation defect correctness rule 4 exists to prevent, arriving through the back door --
+///       and an entity split across the pair went unescaped, because MdEscape's lookahead is span-local
+///       and cannot see the "amp;" beginning the span after the one it is writing.
 /// @note The arena is never rewritten. A merge extends the first span over the second, which is sound
 ///       only because the walker appends every span's bytes in span order and never leaves a gap -- so
 ///       the pass checks the two ranges really do meet and declines to merge if they ever do not, rather
