@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:multiLevelType w:val="multilevel"/>
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>
+    <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2."/></w:lvl>
+    <w:lvl w:ilvl="2"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlRestart w:val="0"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="1">
+    <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="none"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="2">
+    <w:multiLevelType w:val="multilevel"/>
+    <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2."/></w:lvl>
+    <w:lvl w:ilvl="2"><w:numFmt w:val="decimal"/><w:lvlRestart w:val="0"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="3">
+    <w:multiLevelType w:val="multilevel"/>
+    <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2."/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="4">
+    <w:multiLevelType w:val="multilevel"/>
+    <w:lvl w:ilvl="0"><w:start w:val="4"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2."/></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="3">
+    <w:abstractNumId w:val="0"/>
+    <w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride>
+  </w:num>
+  <w:num w:numId="4"><w:abstractNumId w:val="1"/></w:num>
+  <w:num w:numId="5"><w:abstractNumId w:val="2"/></w:num>
+  <w:num w:numId="6"><w:abstractNumId w:val="3"/></w:num>
+  <w:num w:numId="7">
+    <w:abstractNumId w:val="3"/>
+    <w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride>
+  </w:num>
+  <w:num w:numId="8"><w:abstractNumId w:val="4"/></w:num>
+  <w:num w:numId="9">
+    <w:abstractNumId w:val="4"/>
+    <w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride>
+  </w:num>
+</w:numbering>

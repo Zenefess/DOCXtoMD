@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-09-10
  * Description: Style part parsing, basedOn folding, role and font detection, and toggle-XOR resolution.
  * To Do: 1) Fold w:link so a character style can be reached from the paragraph style it pairs with.
  *        2) Match a font family ending in "mono" as monospace, once a corpus says the fixed table misses.
@@ -294,6 +294,8 @@ void StyleClearDirect(STYLE_DIRECT_RUNptrc direct) {
 struct STYLE_LAYER {
    STYLE_DIRECT_RUN run;        ///< What a w:rPr contributed
    si32             outlineLvl; ///< What a w:pPr contributed, or -1
+   si32             numId;      ///< What a w:pPr's w:numPr named, or -1; 0 is a value and not an absence
+   si32             numLevel;   ///< What that w:numPr's w:ilvl named, or -1
 };
 
 typedef STYLE_LAYER *const STYLE_LAYERptrc;
@@ -302,6 +304,8 @@ typedef STYLE_LAYER *const STYLE_LAYERptrc;
 static void StyleClearLayer(STYLE_LAYERptrc layer) {
    StyleClearDirect(&layer->run);
    layer->outlineLvl = -1;
+   layer->numId      = -1;
+   layer->numLevel   = -1;
 }
 
 void StyleReadDirectProperty(XML_READERptrc reader, STYLE_DIRECT_RUNptrc direct) {
@@ -346,23 +350,39 @@ void StyleReadDirectProperty(XML_READERptrc reader, STYLE_DIRECT_RUNptrc direct)
    }
 }
 
+// Reads the w:val of the element the reader is on as a decimal integer, reporting whether it was one.
+// A value that is absent, empty, over-long or not all digits leaves the destination alone, so a caller
+// can tell "this layer said nothing" from "this layer said zero" -- which w:numId 0 makes a real
+// distinction rather than a tidy one.
+static cbool StyleReadDecimal(XML_READERptrc reader, si32ptrc out) {
+   cXML_TEXT value = XmlAttribute(reader, XML_NS_W, "val");
+
+   // No cap on how many digits are read, because ST_DecimalNumber is an xsd:integer and leading zeros
+   // are legal in one: a length cap turns "007" into a refusal, which M8 briefly did to w:outlineLvl and
+   // so demoted a heading to body text. The overflow test below is the real bound and it stops after ten
+   // significant digits whatever the value is padded to.
+   if(!value.bytes || !value.length) return false;
+
+   si64 parsed = 0;
+
+   for(ui64 index = 0; index < value.length; ++index) {
+      if(value.bytes[index] < '0' || value.bytes[index] > '9') return false;
+      parsed = parsed * 10 + si64(value.bytes[index] - '0');
+      if(parsed > 0x7FFFFFFF) return false;
+   }
+   *out = si32(parsed);
+   return true;
+}
+
 // Reads one element of a w:pPr into a layer. A w:rPr inside a w:pPr is the paragraph *mark's* formatting
 // and never reaches text (CONVERSION_REFERENCE 2.1), so it is skipped rather than folded in.
 static void StyleReadParagraphProperty(XML_READERptrc reader, STYLE_LAYERptrc layer) {
    if(!XmlIsElement(reader, XML_NS_W, "outlineLvl")) return;
 
-   cXML_TEXT value = XmlAttribute(reader, XML_NS_W, "val");
-
-   if(!value.bytes || !value.length) return;
-
    si32 parsed = 0;
 
-   for(ui64 index = 0; index < value.length; ++index) {
-      if(value.bytes[index] < '0' || value.bytes[index] > '9') return;
-      parsed = parsed * 10 + si32(value.bytes[index] - '0');
-      if(parsed > 9) return;
-   }
-   layer->outlineLvl = parsed;
+   // 9 is body text and every value past it is malformed, so neither is a level and neither is stored.
+   if(StyleReadDecimal(reader, &parsed) && parsed <= 9) layer->outlineLvl = parsed;
 }
 
 // Walks the children of the w:rPr the reader is on, reading each and skipping it. Returns false only when
@@ -381,6 +401,38 @@ static cbool StyleReadRunBag(XML_READERptrc reader, STYLE_LAYERptrc layer) {
    }
 }
 
+// Reads the w:numPr the reader is on into a layer, and consumes it.
+//
+// It cannot go through StyleReadParagraphProperty, whose contract is that it touches attributes only
+// and leaves the element for its caller to skip: w:numPr keeps its two values in *children*. The bag
+// therefore branches on it the way DocReadParagraphProperties branches on w:pBdr, rather than the
+// contract being widened for every property that does not need it.
+//
+// A value of 0 is stored as 0. w:numId 0 is a specification of "no numbering" that cancels whatever a
+// w:basedOn parent supplied (CONVERSION_REFERENCE 2.4), so a sentinel of 0 for "absent" would collapse
+// the two and silently un-cancel it. Every numbering field in this module uses -1 for absent.
+static cbool StyleReadNumbering(XML_READERptrc reader, STYLE_LAYERptrc layer) {
+   cui32 containerDepth = reader->depth;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && reader->depth == containerDepth) return true;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(reader, XML_NS_W, "numId")) {
+         StyleReadDecimal(reader, &layer->numId);
+      } else if(XmlIsElement(reader, XML_NS_W, "ilvl")) {
+         si32 parsed = 0;
+
+         // 0 to 8 is every level the schema has, and a value past it is clamped rather than refused:
+         // CONVERSION_REFERENCE 5.4 degrades a malformed numbering reference and never rejects one.
+         if(StyleReadDecimal(reader, &parsed)) layer->numLevel = (parsed > 8 ? 8 : parsed);
+      }
+      if(!XmlSkipElement(reader)) return false;
+   }
+}
+
 // Walks the children of the w:pPr the reader is on.
 static cbool StyleReadParagraphBag(XML_READERptrc reader, STYLE_LAYERptrc layer) {
    cui32 containerDepth = reader->depth;
@@ -391,6 +443,10 @@ static cbool StyleReadParagraphBag(XML_READERptrc reader, STYLE_LAYERptrc layer)
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
       if(token == XML_TOKEN_END_ELEMENT && reader->depth == containerDepth) return true;
       if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(reader, XML_NS_W, "numPr")) {
+         if(!StyleReadNumbering(reader, layer)) return false;
+         continue;
+      }
       StyleReadParagraphProperty(reader, layer);
       if(!XmlSkipElement(reader)) return false;
    }
@@ -488,6 +544,8 @@ static cbool StyleReadStyle(STYLE_MODELptrc model, XML_READERptrc reader, boolpt
    record->basedOn      = -1;
    record->toggleTrue   = runs.run.toggleTrue;
    record->outlineLvl   = marks.outlineLvl;
+   record->numId        = marks.numId;
+   record->numLevel     = marks.numLevel;
    record->role         = role;
    record->headingLevel = level;
    record->doubleStrike = runs.run.doubleStrike;
@@ -651,6 +709,8 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
 
    resolved->toggleParity = 0;
    resolved->outlineLvl   = -1;
+   resolved->numId        = -1;
+   resolved->numLevel     = -1;
    resolved->role         = STYLE_ROLE_NORMAL;
    resolved->headingLevel = 0;
    resolved->doubleStrike = -1;
@@ -662,6 +722,13 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
 
       resolved->toggleParity = ui16(resolved->toggleParity ^ record->toggleTrue);
       if(record->outlineLvl >= 0) resolved->outlineLvl = record->outlineLvl;
+      // The two numbering fields fold independently rather than as one bag, because a producer that
+      // changes a paragraph's level without changing its list writes a w:numPr carrying only w:ilvl --
+      // and a style chain in which one link names the list and another names the level is exactly the
+      // built-in ListParagraph shape. A w:numId of 0 folds like any other value: it is a specification
+      // of "no numbering" and has to be able to cancel what a w:basedOn parent supplied.
+      if(record->numId >= 0) resolved->numId = record->numId;
+      if(record->numLevel >= 0) resolved->numLevel = record->numLevel;
       if(record->doubleStrike >= 0) resolved->doubleStrike = record->doubleStrike;
       if(record->webHidden >= 0) resolved->webHidden = record->webHidden;
       if(record->monospace >= 0) resolved->monospace = record->monospace;
@@ -830,6 +897,15 @@ csi32 StyleFind(cSTYLE_MODELptr model, cchptr styleId) {
 
 csi32 StyleDefaultParagraph(cSTYLE_MODELptr model) { return model->defaultParagraph; }
 
+csi32 StyleNumberingOf(cSTYLE_MODELptr model, cchptr styleId, si32ptrc level) {
+   csi32 found = StyleFind(model, styleId);
+
+   *level = -1;
+   if(found < 0 || !model->resolved) return -1;
+   *level = model->resolved[found].numLevel;
+   return model->resolved[found].numId;
+}
+
 cui32 StyleCount(cSTYLE_MODELptr model) { return model->styleCount; }
 
 cchptr StyleName(cSTYLE_MODELptr model, csi32 styleIndex) {
@@ -837,11 +913,17 @@ cchptr StyleName(cSTYLE_MODELptr model, csi32 styleIndex) {
    return StyleHeapText(model, model->styles[styleIndex].nameAt);
 }
 
-cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleIndex, csi32 directOutline) {
-   STYLE_PARAGRAPH_PROPS props = {STYLE_ROLE_NORMAL, 0};
+cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleIndex, csi32 directOutline, csi32 directNumId, csi32 directLevel) {
+   STYLE_PARAGRAPH_PROPS props = {-1, -1, STYLE_ROLE_NORMAL, 0};
 
    cbool              known    = (styleIndex >= 0 && ui32(styleIndex) < model->styleCount && model->resolved);
    cSTYLE_RESOLVEDptr resolved = (known ? model->resolved + styleIndex : nullptr);
+
+   // Settled before the role is, because this function returns from six places and four of them are
+   // above the outline logic. What the paragraph itself named wins outright and each half falls
+   // through on its own; see the note on the declaration for why the halves are not one property.
+   props.numId    = (directNumId >= 0 ? directNumId : (resolved ? resolved->numId : -1));
+   props.numLevel = (directLevel >= 0 ? directLevel : (resolved ? resolved->numLevel : -1));
 
    if(resolved && resolved->role == STYLE_ROLE_HEADING) {
       props.role         = STYLE_ROLE_HEADING;

@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: The body walk: wrappers, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
@@ -68,10 +68,20 @@ constexpr cui64 DOC_ANCHOR_BYTES = 128u;
 // the ceiling is what stops a part making the walker's own stack frame a function of its content.
 constexpr cui32 DOC_PENDING_ANCHORS = 8u;
 
+// What one paragraph's w:numPr named. Both fields are -1 when it named nothing, and 0 is a value and
+// not an absence: w:numId 0 is how a paragraph cancels numbering its style chain supplied.
+struct DOC_NUM_REF {
+   si32 numId; ///< w:numPr/w:numId exactly as written, 0 included; -1 when the paragraph named none
+   si32 level; ///< w:numPr/w:ilvl, clamped to 0 to 8; -1 when the paragraph named none
+};
+
+typedef DOC_NUM_REF *const DOC_NUM_REFptrc;
+
 // Everything one walk carries. One worker owns one of these on its own stack and never shares it (D6).
 struct DOC_CONTEXT {
    IR_DOCUMENTptr  document;                                       ///< Where blocks and spans are being built
    cSTYLE_MODELptr styles;                                         ///< The resolved style cache
+   cNUM_MODELptr   numbering;                                      ///< The numbering model, read only to ask whether a numId resolves
    XML_READERptr   reader;                                         ///< The tokenizer over the part
    si32            cachedStyle;                                    ///< What cachedId resolved to, or -1
    char            cachedId[STYLE_MAX_NAME_BYTES];                 ///< The last w:pStyle or w:rStyle value looked up
@@ -766,8 +776,58 @@ static cbool DocReadBorders(DOC_CONTEXTptrc context, boolptrc rule) {
    }
 }
 
+// Reads the w:val of the element the reader is on as a decimal integer, reporting whether it was one.
+// A value that is absent, empty, over-long or not all digits leaves the destination alone, which is
+// what keeps "the paragraph said nothing" apart from "the paragraph said zero".
+static cbool DocReadDecimal(DOC_CONTEXTptrc context, cui64 maxDigits, si32ptrc out) {
+   cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
+
+   if(!value.bytes || !value.length || value.length > maxDigits) return false;
+
+   si64 parsed = 0;
+
+   for(ui64 index = 0; index < value.length; ++index) {
+      if(value.bytes[index] < '0' || value.bytes[index] > '9') return false;
+      parsed = parsed * 10 + si64(value.bytes[index] - '0');
+      if(parsed > 0x7FFFFFFF) return false;
+   }
+   *out = si32(parsed);
+   return true;
+}
+
+// Reads the w:numPr the reader is on, and consumes it. Its two values live in children rather than in
+// attributes, so it needs a reader of its own exactly as w:pBdr does.
+//
+// The two are recorded independently. Word writes a w:numPr carrying only w:ilvl when a user changes a
+// paragraph's level without changing which list it is in, and one carrying only w:numId when the level
+// comes from the style chain; treating the pair as one indivisible property would throw away whichever
+// half the paragraph did not restate. Everything CT_NumPr may also carry -- w:numberingChange, a
+// tracked w:ins -- falls through to the skip at the end of the loop, which is the compatibility model
+// this file applies to every element it has not heard of.
+static cbool DocReadNumbering(DOC_CONTEXTptrc context, DOC_NUM_REFptrc num) {
+   cui32 depthHere = context->reader->depth;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_W, "numId")) {
+         DocReadDecimal(context, 10u, &num->numId);
+      } else if(XmlIsElement(context->reader, XML_NS_W, "ilvl")) {
+         si32 parsed = 0;
+
+         // 0 to 8 is every level the schema has. A deeper one is malformed and is clamped rather than
+         // refused, which is CONVERSION_REFERENCE 5.4's whole treatment of a broken numbering value.
+         if(DocReadDecimal(context, 2u, &parsed)) num->level = (parsed > 8 ? 8 : parsed);
+      }
+      if(!XmlSkipElement(context->reader)) return false;
+   }
+}
+
 // Reads the w:pPr the reader is on, and consumes it.
-static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style, si32ptrc outline, boolptrc rule) {
+static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style, si32ptrc outline, boolptrc rule, DOC_NUM_REFptrc num) {
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -780,23 +840,19 @@ static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style,
          if(!DocReadBorders(context, rule)) return false;
          continue;
       }
+      if(XmlIsElement(context->reader, XML_NS_W, "numPr")) {
+         if(!DocReadNumbering(context, num)) return false;
+         continue;
+      }
       if(XmlIsElement(context->reader, XML_NS_W, "pStyle")) {
          csi32 found = DocFindStyle(context, XmlAttribute(context->reader, XML_NS_W, "val"));
 
          if(found >= 0) *style = found;
       } else if(XmlIsElement(context->reader, XML_NS_W, "outlineLvl")) {
-         cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
+         si32 parsed = 0;
 
-         if(value.bytes && value.length && value.length <= 2u) {
-            si32 parsed = 0;
-            bool digits = true;
-
-            for(ui64 index = 0; index < value.length; ++index) {
-               if(value.bytes[index] < '0' || value.bytes[index] > '9') digits = false;
-               else parsed = parsed * 10 + si32(value.bytes[index] - '0');
-            }
-            if(digits && parsed <= 9) *outline = parsed;
-         }
+         // 9 is body text and anything past it is malformed, so neither is a heading level.
+         if(DocReadDecimal(context, 2u, &parsed) && parsed <= 9) *outline = parsed;
       }
       if(!XmlSkipElement(context->reader)) return false;
    }
@@ -813,14 +869,33 @@ static cIR_BLOCK_KIND DocBlockKind(cSTYLE_PARAGRAPH_PROPS props) {
    return IR_BLOCK_PARAGRAPH;
 }
 
+// Whether a paragraph's numbering survives its block kind. It is a separate question from the kind and
+// not a sixth value of it: a list item's kind is what its content is, and being an item of a list is a
+// second fact the document may state about the same paragraph.
+//
+// A heading is the one kind that cancels it, and CONVERSION_REFERENCE 5.4 rules it outright: "Headings
+// with numbering (multilevel heading numbering): heading wins". That is not an edge case but the
+// common one -- Word's Multilevel List linked to headings puts a w:numPr on every Heading N style, and
+// without this rule every heading in such a document becomes a list item and the structure inverts.
+//
+// A w:numId of 0 is a specification of "no numbering" (CONVERSION_REFERENCE 2.4) and cancels whatever
+// the style chain supplied, which is why the test is > 0 and not >= 0.
+static cbool DocListSurvives(cIR_BLOCK_KIND kind, cSTYLE_PARAGRAPH_PROPS props, cNUM_MODELptr numbering) {
+   return props.numId > 0 && kind != IR_BLOCK_HEADING && NumFind(numbering, props.numId) >= 0;
+}
+
 // Walks one w:p into one block, which IrEndBlock throws away again when it holds nothing.
 static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    cui32         depthHere = context->reader->depth;
    si32          style     = StyleDefaultParagraph(context->styles);
    si32          outline   = -1;
+   DOC_NUM_REF   num       = {-1, -1};
    IR_MARK       mark      = {-1, 0, 0, 0};
    IR_BLOCK_KIND kind      = IR_BLOCK_PARAGRAPH;
    ui8           level     = 0;
+   si32          listId    = -1;
+   si32          listLevel = 0;
+   bool          list      = false;
    bool          rule      = false;
    bool          settled   = false;
    bool          begun     = false;
@@ -840,18 +915,21 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
       if(token != XML_TOKEN_START_ELEMENT) continue;
       if(!settled && XmlIsElement(context->reader, XML_NS_W, "pPr")) {
-         if(!DocReadParagraphProperties(context, &style, &outline, &rule)) return false;
+         if(!DocReadParagraphProperties(context, &style, &outline, &rule, &num)) return false;
          continue;
       }
       if(!settled) {
          // The properties are settled by the time any content is reached: w:pPr is the paragraph's first
          // child whenever it is present, so anything else means there is no more of it to come.
-         cSTYLE_PARAGRAPH_PROPS props = StyleResolveParagraph(context->styles, style, outline);
+         cSTYLE_PARAGRAPH_PROPS props = StyleResolveParagraph(context->styles, style, outline, num.numId, num.level);
 
-         head    = (props.headingLevel > 0);
-         level   = props.headingLevel;
-         kind    = DocBlockKind(props);
-         settled = true;
+         head      = (props.headingLevel > 0);
+         level     = props.headingLevel;
+         kind      = DocBlockKind(props);
+         list      = DocListSurvives(kind, props, context->numbering);
+         listId    = props.numId;
+         listLevel = (props.numLevel > 0 ? props.numLevel : 0);
+         settled   = true;
       }
       if(!begun) {
          mark  = IrBeginBlock(context->document, kind, level);
@@ -869,16 +947,21 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
       }
    }
    if(!settled) {
-      cSTYLE_PARAGRAPH_PROPS props = StyleResolveParagraph(context->styles, style, outline);
+      cSTYLE_PARAGRAPH_PROPS props = StyleResolveParagraph(context->styles, style, outline, num.numId, num.level);
 
-      level = props.headingLevel;
-      kind  = DocBlockKind(props);
+      level     = props.headingLevel;
+      kind      = DocBlockKind(props);
+      list      = DocListSurvives(kind, props, context->numbering);
+      listId    = props.numId;
+      listLevel = (props.numLevel > 0 ? props.numLevel : 0);
    }
    // A paragraph with no children at all is how every producer writes an empty line, and inside a run of
    // code paragraphs that is a blank line of the fence rather than nothing -- so a code paragraph gets
    // its block even when there was never any content to open one. The emitter drops such a block again
    // wherever it falls at the edge of a fence, which is the only place it would be a blank line.
-   if(!begun && ok && !rule && kind == IR_BLOCK_CODE) {
+   // A list item gets its block whatever else the paragraph carried, because a marker on a line of its
+   // own is content the border test below has already been told not to speak for.
+   if(!begun && ok && (list || (!rule && kind == IR_BLOCK_CODE))) {
       mark  = IrBeginBlock(context->document, kind, level);
       begun = true;
       if(mark.block < 0) {
@@ -896,11 +979,17 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
       // in a monospace family is code even where no style says so. It is settled here rather than in
       // RunCoalescer because the font is a run property the intermediate representation does not carry,
       // and re-resolving it from the spans afterwards would mean carrying it only to answer this once.
-      if(kind == IR_BLOCK_PARAGRAPH && context->sawText && context->allMono) {
+      // A list item is exempt, and the reasoning is StyleReadBaseline's: the font is a *guess* at what
+      // a paragraph is, and a paragraph carrying a w:numPr has already stated it. A list of code lines
+      // set in Consolas would otherwise become a run of fences, each having lost its marker.
+      if(kind == IR_BLOCK_PARAGRAPH && !list && context->sawText && context->allMono) {
          IR_BLOCKptr block = IrBlockMutable(context->document, ui32(mark.block));
 
          if(block) block->kind = IR_BLOCK_CODE;
       }
+      // Recorded before the block is ended, because IrEndBlock reads it: an empty list item is a marker
+      // on a line of its own and must not be unwound the way an empty paragraph is.
+      if(list) IrSetListRef(context->document, mark, listId, ui32(listLevel));
       ink  = DocBlockIsInk(context->document, mark);
       kept = IrEndBlock(context->document, mark);
    }
@@ -910,7 +999,11 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    // rule. The test is "came to nothing" and not "has no runs", so a paragraph of empty runs is one too.
    // A bookmark keeps a block alive without putting anything on the page, so the rule's test is what
    // the block would have *shown* rather than whether it survived being ended.
-   if(ok && rule && (!kept || !ink)) {
+   // A paragraph carrying a live w:numPr did not come to nothing, whatever its runs held: Word draws
+   // its marker and its border both. Emitting "---" there would delete the item and invent a rule the
+   // document does not have -- and Word's own autoformatted rule never carries numbering, so the
+   // exemption costs nothing. The same reasoning IrHasInk gives for counting a picture as ink.
+   if(ok && rule && !list && (!kept || !ink)) {
       cIR_MARK ruled = IrBeginBlock(context->document, IR_BLOCK_RULE, 0);
 
       if(ruled.block < 0) {
@@ -1060,7 +1153,7 @@ static cbool DocWalkChildren(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 pa
 
 //== Entry points
 
-cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, csi32 partIndex) {
+cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, csi32 partIndex) {
    WALK_STATUS status = {WALK_OK, XML_OK, OPC_OK};
 
    cOPC_RESULT loaded = OpcLoadXmlPart(package, partIndex);
@@ -1070,10 +1163,12 @@ cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_M
       status.opc    = loaded;
       return status;
    }
-   return DocWalkBytes(document, styles, OpcPartBytes(package, partIndex), OpcPartByteCount(package, partIndex));
+   cui8ptr bytes = OpcPartBytes(package, partIndex);
+
+   return DocWalkBytes(document, styles, numbering, bytes, OpcPartByteCount(package, partIndex));
 }
 
-cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cui8ptr bytes, cui64 byteCount) {
+cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, cui8ptr bytes, cui64 byteCount) {
    WALK_STATUS status = {WALK_OK, XML_OK, OPC_OK};
    XML_READER  reader;
    cXML_RESULT opened = XmlOpen(&reader, bytes, byteCount);
@@ -1089,6 +1184,7 @@ cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cui8
 
    context.document     = document;
    context.styles       = styles;
+   context.numbering    = numbering;
    context.reader       = &reader;
    context.cachedStyle  = -1;
    context.cachedId[0]  = 0;

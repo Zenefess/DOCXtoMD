@@ -3,10 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-09-10
  * Description: styles.xml as a resolved-property cache: basedOn chains, toggle parity and style roles.
  * To Do: 1) Resolve w:asciiTheme through theme1.xml, which today leaves the monospace verdict unspecified.
- *        2) Carry w:numPr from a style's pPr when M8 gives numbering a home to be read into.
+ *        2) Carry w:numPr from w:docDefaults, which no producer writes and which would need a guard of
+ *           StyleReadBaseline's shape, since it would make every paragraph in the document an item.
  *        3) Resolve w:link pairing once a character style has to be found from its paragraph twin.
  *        4) Read w:shd as the second code hint CONVERSION_REFERENCE 2.3 names, once a fixture shows one.
  * Dependencies: Diag.h, OpcPackage.h, XmlPull.h, typedefs.h
@@ -118,7 +119,7 @@ enum STYLE_TYPE : si8 {
    STYLE_TYPE_PARAGRAPH = 0, ///< A paragraph style, referenced by w:pStyle
    STYLE_TYPE_CHARACTER,     ///< A character style, referenced by w:rStyle
    STYLE_TYPE_TABLE,         ///< A table style, which nothing reads yet
-   STYLE_TYPE_NUMBERING,     ///< A numbering style, which M8 will chase through w:numStyleLink
+   STYLE_TYPE_NUMBERING,     ///< A numbering style; StyleNumberingOf reaches one by identifier, not by type
    STYLE_TYPE_COUNT          ///< Number of values above; not a type
 };
 
@@ -147,7 +148,14 @@ typedef const STYLE_RUN_PROPS       *cSTYLE_RUN_PROPSptr;
 typedef const STYLE_RUN_PROPS *const cSTYLE_RUN_PROPSptrc;
 
 /// The paragraph properties in force on one paragraph, after every layer has been applied.
+/// @note numId and numLevel are the *reference* a w:numPr carried and not a resolved list: whether the
+///       identifier names anything is NumberingModel's question, and this module never asks it. A numId
+///       of 0 is a specification of "no numbering" that cancels whatever the style chain supplied, so it
+///       reaches a caller as 0 rather than as -1 -- the two mean different things and only one of them
+///       falls through to the chain.
 struct STYLE_PARAGRAPH_PROPS {
+   si32       numId;        ///< The effective w:numId: the paragraph's own if it named one, else the chain's; -1 for none
+   si32       numLevel;     ///< The effective w:ilvl, resolved the same way; -1 when no layer named one
    STYLE_ROLE role;         ///< What the style chain says the paragraph is
    ui8        headingLevel; ///< 1 to 6 when the paragraph is a heading, otherwise 0
 };
@@ -186,6 +194,8 @@ struct STYLE_RECORD {
    si32             basedOn;      ///< Index of the based-on style, or -1; filled once every style is read
    ui16             toggleTrue;   ///< Bit set for each toggle this one style specifies as true
    si32             outlineLvl;   ///< w:pPr/w:outlineLvl, or -1 when this style does not specify it
+   si32             numId;        ///< w:pPr/w:numPr/w:numId, or -1 when this style does not specify it
+   si32             numLevel;     ///< w:pPr/w:numPr/w:ilvl, or -1 when this style does not specify it
    STYLE_ROLE       role;         ///< What this one style's own name and id say it is
    ui8              headingLevel; ///< 1 to 9 as the name said, before clamping; 0 when the role is not heading
    si8              doubleStrike; ///< -1 unspecified, 0 specified false, 1 specified true
@@ -201,6 +211,8 @@ struct STYLE_RECORD {
 struct STYLE_RESOLVED {
    ui16             toggleParity; ///< XOR over the chain of every explicit true toggle specification
    si32             outlineLvl;   ///< The nearest w:outlineLvl along the chain, or -1
+   si32             numId;        ///< The nearest w:numPr/w:numId along the chain, or -1
+   si32             numLevel;     ///< The nearest w:numPr/w:ilvl along the chain, or -1
    STYLE_ROLE       role;         ///< The nearest role along the chain
    ui8              headingLevel; ///< Its heading level, before clamping
    si8              doubleStrike; ///< The nearest w:dstrike along the chain, or -1
@@ -304,6 +316,21 @@ void StyleClose(STYLE_MODELptrc model);
 ///       key holds, so the two paths cannot disagree about a value ISO/IEC 29500 already caps at 255.
 csi32 StyleFind(cSTYLE_MODELptr model, cchptr styleId);
 
+/// The numbering one style declares, for a numbering part's w:numStyleLink to follow.
+/// @param model    A prepared model.
+/// @param styleId  The w:val of a w:numStyleLink, NUL-terminated.
+/// @param level    Receives the style's effective w:ilvl, or -1. May not be null.
+/// @return The style's effective w:numId, or -1 when the model declares no such style or the style
+///         declares no numbering. A w:numId of 0 comes back as 0, which a caller reads as "none".
+/// @note Answered off the *resolved* record and not the raw one: a numbering style may inherit its
+///       w:numPr through w:basedOn, and that chain was already folded once at load.
+/// @note The style's w:type is deliberately not checked. w:numStyleLink names a numbering style by
+///       contract, and a producer that mis-types one should still resolve -- which is the same reading
+///       of "trust what the reference says" that D9 gave the officeDocument relationship.
+/// @note This is a lookup and nothing more. A w:numStyleLink chain can loop, and the guard against that
+///       belongs to the caller, which is the only place that can see the loop.
+csi32 StyleNumberingOf(cSTYLE_MODELptr model, cchptr styleId, si32ptrc level);
+
 /// The style a paragraph with no w:pStyle uses.
 /// @param model  A prepared model.
 /// @return The index of the w:default="1" paragraph style, or -1 when the model declares none.
@@ -321,12 +348,23 @@ cchptr StyleName(cSTYLE_MODELptr model, csi32 styleIndex);
 /// @param model         A prepared model.
 /// @param styleIndex    The paragraph's style, or -1 when it has none and the model has no default.
 /// @param directOutline The paragraph's own w:pPr/w:outlineLvl, or -1 when it does not carry one.
-/// @return The role and, for a heading, its clamped level.
+/// @param directNumId   The paragraph's own w:pPr/w:numPr/w:numId, or -1 when it does not carry one.
+/// @param directLevel   The paragraph's own w:pPr/w:numPr/w:ilvl, or -1 when it does not carry one.
+/// @return The role, a heading's clamped level, and the effective numbering reference.
 /// @note The name decides before w:outlineLvl does, per CONVERSION_REFERENCE 2.8: a style chain naming a
 ///       heading is a heading whatever the outline level says, and the outline level is what catches a
 ///       paragraph whose style has no telling name.
 /// @note Levels 7 to 9 clamp to 6, because GitHub-Flavored Markdown has no deeper heading.
-cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleIndex, csi32 directOutline);
+/// @note Numbering is CONVERSION_REFERENCE 2.9's rule: what the paragraph itself named wins outright,
+///       and only what it did not name falls through to the style chain. The two halves fall through
+///       *independently*, because a producer that changes a paragraph's level without changing its list
+///       writes a w:numPr carrying only w:ilvl -- treating w:numPr as one indivisible property would
+///       then throw the list away. A directNumId of 0 wins like any other value and means "no
+///       numbering", which is the whole reason 0 is reserved.
+/// @note The numbering is returned whatever the role is, a heading included. The walker needs to know
+///       that a heading carried a w:numPr in order to drop its marker knowingly rather than by never
+///       having looked.
+cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleIndex, csi32 directOutline, csi32 directNumId, csi32 directLevel);
 
 /// Resolves the properties in force on one run.
 /// @param model           A prepared model.

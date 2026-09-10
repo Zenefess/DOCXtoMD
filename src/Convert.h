@@ -3,9 +3,9 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: The per-file conversion pipeline and the output-path derivation D7b's operand grammar needs.
- * To Do: 1) Load numbering, footnotes and endnotes here as M8 and M10 give them models to go into.
+ * To Do: 1) Load footnotes and endnotes here as M10 gives them models to go into.
  *        2) Hand this whole function to a worker when M13 adds the bounded pool (D6/D7a).
  *        3) Say so when -o named an existing directory and one input made it a file name, which today
  *           reports only that the file could not be created.
@@ -55,6 +55,12 @@ typedef const CONVERT_TARGET cCONVERT_TARGET;
 /// @note This is the whole pipeline for one document: container, package, styles, walk, emit, write. At
 ///       M13 it is what one worker runs, which is why it takes no shared state and returns a verdict
 ///       rather than setting one.
+/// @note The order of the passes between the walk and the emitter is the one order that works, and
+///       M8 added one more to it. References resolve against the part they were read in; anchors
+///       resolve once every reference is a destination; the media plan turns a part name into a path
+///       and can turn a picture back into its alt text; the counter pass turns a list reference into
+///       a marker and clears the ones that named nothing; and dropping the emptied blocks comes last,
+///       because it is what restores the invariant the emitter rests on.
 cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath);
 
 /// Whether converting one input would destroy something the rest of the run still needs.

@@ -3,15 +3,15 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-09
+ * Last Modified: 2026-09-10
  * Description: One document end to end: container, package, styles, walk, resolve, emit and write.
  * To Do: 1) Report the offset UtfValidate found, which the package records and nothing prints yet.
  *        2) Write through a temporary file and rename over the target, once a partial write costs more.
  *        3) Derive a media directory that is relative to the document rather than to the working
  *           directory when --media-dir names one, which today is the user's own business.
  * Dependencies: BuildGuards.h, CliOptions.h, Convert.h, Diag.h, DocWalker.h, Ir.h, LinkResolver.h,
- *               MdEmitter.h, MediaExtractor.h, OpcPackage.h, RunCoalescer.h, StyleModel.h, Utf.h,
- *               ZipReader.h, typedefs.h, memory management.h, stdio.h, windows.h
+ *               MdEmitter.h, MediaExtractor.h, NumberingModel.h, OpcPackage.h, RunCoalescer.h,
+ *               StyleModel.h, Utf.h, ZipReader.h, typedefs.h, memory management.h, stdio.h, windows.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -32,6 +32,7 @@
 #include "LinkResolver.h"
 #include "MdEmitter.h"
 #include "MediaExtractor.h"
+#include "NumberingModel.h"
 #include "OpcPackage.h"
 #include "RunCoalescer.h"
 #include "StyleModel.h"
@@ -252,6 +253,26 @@ static csi32 ConvertStylesPart(OPC_PACKAGEptrc package, csi32 mainPart) {
    return OpcFindPart(package, record.part);
 }
 
+// The part index of the numbering part, found through the main part's own relationships rather than by
+// name (correctness rule 1). A document with no lists carries no numbering part, and one whose
+// numbering relationship points outside the package is the same case; both come back as -1 and the
+// model stays empty, which makes every w:numPr in the body a dangling reference and so not a list.
+//
+// OPC_REL_VIEW's pointers are into the package heap and stay valid only until the next OpcLoadRels
+// grows it, so OpcFindPart has to be called before any further relationships are loaded. The main
+// part's are loaded once above and nothing else loads any before the walk -- which is worth saying out
+// loud, because M10 adds a second OpcLoadRels to this function for the footnote part.
+static csi32 ConvertNumberingPart(OPC_PACKAGEptrc package, csi32 mainPart) {
+   csi32 relation = OpcFindRelByKind(package, mainPart, OPC_REL_NUMBERING);
+
+   if(relation < 0) return -1;
+
+   cOPC_REL_VIEW record = OpcRel(package, relation);
+
+   if(record.external || !record.part || !record.part[0]) return -1;
+   return OpcFindPart(package, record.part);
+}
+
 // Turns one opened package into Markdown, and plans the media that goes beside it. The package, the
 // emitter and the plan are the caller's; this is only the middle of the pipeline, so that every
 // allocation has exactly one owner and one release path.
@@ -287,16 +308,38 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
       return verdict;
    }
 
+   // Numbering is loaded after the styles and reads them, because a w:numStyleLink delegates through a
+   // numbering *style* -- and it keeps no pointer into the style model, so the two lifetimes stay
+   // independent and StyleClose can stay where it is.
+   NUM_MODEL numbering;
+   csi32     numberingPart = ConvertNumberingPart(package, mainPart);
+
+   NumOpen(&numbering);
+
+   cNUM_RESULT numbered = NumLoad(&numbering, package, numberingPart, &styles);
+
+   if(numbered != NUM_OK) {
+      DiagErrorText(NumResultText(package, &numbering, numbered), inputPath);
+
+      cEXIT_CODE fallback = (numbered == NUM_ERROR_MEMORY ? EXIT_INTERNAL : EXIT_NOT_DOCX);
+      cEXIT_CODE verdict  = (numbered == NUM_ERROR_PART ? OpcExitCode(package, numbering.lastOpc) : fallback);
+
+      NumClose(&numbering);
+      StyleClose(&styles);
+      return verdict;
+   }
+
    IR_DOCUMENT document;
 
    IrOpen(&document);
 
-   cWALK_STATUS walked = DocWalk(&document, package, &styles, mainPart);
+   cWALK_STATUS walked = DocWalk(&document, package, &styles, &numbering, mainPart);
 
    StyleClose(&styles);
    if(walked.result != WALK_OK) {
       DiagErrorText(DocWalkResultText(package, walked), inputPath);
       IrClose(&document);
+      NumClose(&numbering);
       if(walked.result == WALK_ERROR_PART) return OpcExitCode(package, walked.opc);
       return (walked.result == WALK_ERROR_MEMORY ? EXIT_INTERNAL : EXIT_NOT_DOCX);
    }
@@ -323,10 +366,17 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
    // was not escaped, because MdEscape's lookahead cannot see past the span it is writing.
    if(ready) ready = RunCoalesce(&document);
    if(ready) ready = MediaPlan(media, &document, package, mediaPrefix, emitImages);
+   // M8's counter pass turns each list reference the walk recorded into the marker the emitter writes,
+   // and it runs *before* the empty blocks go: a paragraph whose w:numId named no list at all is not an
+   // item, and clearing its reference here is what lets the drop below treat it as the empty paragraph
+   // it turned out to be. A real item is kept whether or not it holds text, because a marker on a line
+   // of its own is what the document showed.
+   if(ready) ready = NumAssignMarkers(&document, &numbering);
    if(ready) IrDropEmptyBlocks(&document);
 
    cMD_RESULT emitted = (ready ? MdEmitDocument(emitter, &document) : MD_ERROR_MEMORY);
 
+   NumClose(&numbering);
    IrClose(&document);
    if(emitted != MD_OK) {
       DiagErrorText("not enough memory to hold the converted document", inputPath);

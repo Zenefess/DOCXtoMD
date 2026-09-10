@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault>
+    <w:pPrDefault/>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="ListNumber">
+    <w:name w:val="List Number"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr><w:numPr><w:numId w:val="2"/></w:numPr></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="ListNumberDeep">
+    <w:name w:val="List Number 2"/>
+    <w:basedOn w:val="ListNumber"/>
+    <w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="ListParagraph">
+    <w:name w:val="List Paragraph"/>
+    <w:basedOn w:val="Normal"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="NumberedHeading">
+    <w:name w:val="heading 2"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Quote">
+    <w:name w:val="Quote"/>
+    <w:basedOn w:val="Normal"/>
+  </w:style>
+</w:styles>

@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: The document walk: WordprocessingML body content into the intermediate representation.
  * To Do: 1) Walk w:tbl into table blocks at M9.
  *        2) Run the field state machine over w:fldChar and w:instrText at M10, which today are skipped.
@@ -21,6 +21,7 @@
 
 #include "typedefs.h"
 #include "Ir.h"
+#include "NumberingModel.h"
 #include "OpcPackage.h"
 #include "StyleModel.h"
 #include "XmlPull.h"
@@ -63,6 +64,16 @@ typedef const WALK_STATUS cWALK_STATUS;
 ///       policy of correctness rule 8; w:sdt, w:smartTag and w:customXml are transparent at every level;
 ///       mc:AlternateContent takes its mc:Fallback when it has one, because this build understands no
 ///       extension namespace and so understands no mc:Choice.
+/// @note What M8 adds. A w:pPr's w:numPr is read into the block as the *reference* it is -- the w:numId
+///       and the w:ilvl the paragraph wrote, resolved against the style chain but against nothing else.
+///       Whether that identifier names a list at all is NumAssignMarkers's question, and it is asked
+///       after the walk because a counter cannot be rewound: this walk speculatively enters an
+///       mc:Choice and unwinds it again, and a number spent there would be gone.
+///       A heading carrying numbering is a heading and nothing else (CONVERSION_REFERENCE 5.4), which
+///       is the only kind that cancels it -- a quotation and a line of code both keep their marker,
+///       because a paragraph may legitimately be an item of a list *and* be one of those. Row 12's
+///       monospace guess does not apply to a paragraph that carries one, and neither does row 25's
+///       horizontal rule: a paragraph wearing a list marker did not come to nothing.
 /// @note What M7 does not walk yet, and skips whole rather than descending into: w:tbl, the field
 ///       elements, the note and comment references, w:sym and m:oMath. Each arrives with the milestone
 ///       that can emit it, except m:oMath and w:sym, which have none yet and are the two places text is
@@ -101,7 +112,7 @@ typedef const WALK_STATUS cWALK_STATUS;
 /// @note A run whose effective w:caps is on has its text uppercased, which is mapping row 37 -- caps is
 ///       a transform on the bytes rather than a delimiter, so it belongs here and not to M6's emitter.
 ///       w:smallCaps leaves the text as typed, which the same row says.
-cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, csi32 partIndex);
+cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, csi32 partIndex);
 
 /// Walks one WordprocessingML body part out of bytes that are already known to be well-formed UTF-8.
 /// @param document   A document IrOpen has prepared.
@@ -111,7 +122,7 @@ cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_M
 /// @return Why the walk stopped.
 /// @note DocWalk is this plus the package read in front of it. The split exists so the walk can be
 ///       driven from a string literal by the unit suite, which opens no file and builds no package.
-cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cui8ptr bytes, cui64 byteCount);
+cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, cui8ptr bytes, cui64 byteCount);
 
 /// The user-facing sentence for a walk status, ready to hand to DiagErrorText.
 /// @param package  The package the walk ran over; a null pointer still yields a usable sentence.

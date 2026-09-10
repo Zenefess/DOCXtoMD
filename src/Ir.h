@@ -3,10 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: The intermediate representation: blocks, spans and the arena the walker builds them in.
- * To Do: 1) Add the list and table span and block kinds as M8 and M9 reach them, and the note reference
- *           at M10.
+ * To Do: 1) Add the table block kind at M9 and the note-reference span kind at M10. M8 deliberately
+ *           added neither for a list: an item's *kind* is what its content is -- a paragraph, a
+ *           quotation, a line of code -- and its list membership is a separate question, so it is
+ *           carried in fields beside the kind rather than by a sixth value of it.
  *        2) Give a block a child-block list once a table cell has to hold one at M9.
  *        3) Record the source paragraph index on a block, so a diagnostic can point at the original.
  *        4) Record the part a reference span came from, once M10 walks a second part whose relationship
@@ -84,13 +86,35 @@ constexpr cui8 IR_SPAN_FLAG_REL  = 0x01u; ///< The destination is a relationship
 constexpr cui8 IR_SPAN_FLAG_PART = 0x02u; ///< The destination is a package part name, not yet extracted
 constexpr cui8 IR_SPAN_FLAG_MUTE = 0x04u; ///< The span emits nothing: an anchor nothing links to
 
+//== List flags
+
+/// What a block's list membership is. It is deliberately not a block *kind*: a list item's kind is what
+/// its content is -- an ordinary paragraph, a quotation, a line of code -- and being an item of a list
+/// is a second, independent fact about it, so a document can say both and this can carry both.
+/// @note A heading is the one combination that cannot arise. CONVERSION_REFERENCE 5.4 rules that a
+///       heading carrying numbering is a heading and nothing else, so the walker never records a list
+///       reference on one.
+constexpr cui8 IR_LIST_NONE    = 0x00u;
+constexpr cui8 IR_LIST_ITEM    = 0x01u; ///< The block is one item of a list
+constexpr cui8 IR_LIST_ORDERED = 0x02u; ///< Its marker is a computed number rather than a bullet
+constexpr cui8 IR_LIST_PLAIN   = 0x04u; ///< It carries no marker at all: w:numFmt none, mapping row 16
+constexpr cui8 IR_LIST_FIRST   = 0x08u; ///< It opens a list the item before it was not part of
+
 /// One block. Its spans are a contiguous range, because a block is built to completion before the next
 /// one starts and nothing ever inserts into the middle of one.
+/// @note The four list fields are written in two stages, exactly as a link's destination is. The walk
+///       records the reference the paragraph carried -- listNumId and listLevel, straight out of its
+///       w:numPr -- and NumAssignMarkers turns that into the marker the emitter writes, filling
+///       listNumber and listFlags and clearing listNumId again when the reference resolves to nothing.
 struct IR_BLOCK {
    ui32          spanAt;       ///< Index of the block's first span
    ui32          spanCount;    ///< How many spans it has
+   si32          listNumId;    ///< The w:numId the walk read, or -1 when the paragraph is not an item
+   ui32          listNumber;   ///< What an ordered item's marker counts; 0 for every other block
    IR_BLOCK_KIND kind;         ///< What the block is
    ui8           headingLevel; ///< 1 to 6 for a heading, 0 otherwise
+   ui8           listLevel;    ///< The w:ilvl an item was written at, 0 to 8; 0 for every other block
+   ui8           listFlags;    ///< The IR_LIST bits in force
 };
 
 /// One span. Both of its byte ranges live in the document's arenas rather than in the record, so a span
@@ -188,11 +212,16 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
 /// @note A paragraph whose text is empty or nothing but ASCII whitespace is dropped whole, which is what
 ///       gives CONVERSION_REFERENCE row 40's "runs of N empty paragraphs collapse" for free: blocks are
 ///       separated by exactly one blank line, so a block that never existed leaves no gap.
-/// @note Two kinds are exempt from the emptiness test. IR_BLOCK_RULE is an empty paragraph by
-///       construction -- CONVERSION_REFERENCE row 25 makes it a lone w:pBdr bottom on a paragraph with
-///       nothing in it -- so the test would throw away every one; its spans are dropped instead, since a
-///       rule emits none. IR_BLOCK_CODE is kept because an empty code paragraph is a blank line inside a
-///       fence, and the emitter trims one only where it falls at the fence's edge.
+/// @note Two kinds and one flag are exempt from the emptiness test. IR_BLOCK_RULE is an empty paragraph
+///       by construction -- CONVERSION_REFERENCE row 25 makes it a lone w:pBdr bottom on a paragraph
+///       with nothing in it -- so the test would throw away every one; its spans are dropped instead,
+///       since a rule emits none. IR_BLOCK_CODE is kept because an empty code paragraph is a blank line
+///       inside a fence, and the emitter trims one only where it falls at the fence's edge. And a block
+///       carrying a list reference is kept because an empty list item is a marker on a line of its own,
+///       which Word draws and CommonMark spells; dropping it would take the numbers of every item after
+///       it down by one, which is the one thing M8 exists to compute correctly. The emitter trims a
+///       content-free item off either *edge* of a list, which is where Word's own artefact lands -- the
+///       paragraph a user leaves behind on pressing Enter to get out of a list.
 /// @note Leading and trailing break spans are trimmed. A break at the end of a paragraph would emit a
 ///       hard-break marker with nothing after it, which is a stray backslash at the end of a line.
 /// @note A non-breaking space counts as content. CONVERSION_REFERENCE row 35 keeps U+00A0 verbatim, and
@@ -203,6 +232,19 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
 ///       anchor is judged again by IrDropEmptyBlocks once LinkResolve has muted the ones nothing points
 ///       at, which is the only way a block can be emptied after it was ended.
 cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark);
+
+/// Records the list reference a paragraph's w:numPr carried, on the block being built.
+/// @param document  A prepared document.
+/// @param mark      What IrBeginBlock returned for the block; a mark whose block is -1 does nothing.
+/// @param numId     The w:numId exactly as written, 0 included; -1 records no reference at all.
+/// @param level     The w:ilvl; a value above 8 is clamped, since that is every level the schema has.
+/// @note Separate from IrBeginBlock because a paragraph's numbering is settled with the rest of its
+///       w:pPr, before any content reaches the block, so the three arguments would be dead on every one
+///       of the other calls that begin one. It clamps here so that nothing downstream has to.
+/// @note This records a *reference*. NumAssignMarkers resolves it, which is the same division of labour
+///       IR_SPAN_FLAG_REL gives a link's destination: the walk writes down what the part said and a
+///       later pass, which can see the whole document, turns it into what the emitter writes.
+void IrSetListRef(IR_DOCUMENTptrc document, cIR_MARK mark, csi32 numId, cui32 level);
 
 /// Starts a span inside the block being built.
 /// @param document  A prepared document.
@@ -294,6 +336,16 @@ cui32 IrSpanCount(cIR_DOCUMENTptr document);
 ///       even though the bookmark is reason enough to keep the block.
 cbool IrHasInk(cIR_DOCUMENTptr document, cui32 first, cui32 last);
 
+/// Whether a range of spans holds anything worth keeping a block for.
+/// @param document  A prepared document.
+/// @param first     The first span of the range.
+/// @param last      One past its last span; a value beyond the document is clamped.
+/// @return true when the range holds ink, or an anchor nothing has muted.
+/// @note The wider twin of IrHasInk, and the test IrEndBlock and IrDropEmptyBlocks themselves apply. A
+///       caller trimming a block off the edge of a group asks this one and not the narrower one, or an
+///       item holding nothing but a picture or a live bookmark would be trimmed away as empty.
+cbool IrHasContent(cIR_DOCUMENTptr document, cui32 first, cui32 last);
+
 /// One block by index.
 /// @return The block, or null for an index outside the document.
 cIR_BLOCKptr IrBlockAt(cIR_DOCUMENTptr document, cui32 index);
@@ -323,6 +375,11 @@ IR_SPANptr IrSpanMutable(IR_DOCUMENTptrc document, cui32 index);
 ///       nothing points at, and MediaPlan can leave an image with nothing to show. Re-testing every
 ///       block here restores the invariant in one place rather than making the emitter carry a case for
 ///       a block that emits nothing.
+/// @note The exemptions are IrEndBlock's, and the two tests have to agree or a block that survived
+///       being ended would be thrown away on the second look. A list item is exempt only while its
+///       reference still stands: NumAssignMarkers runs before this and clears the reference on a
+///       paragraph whose numId resolved to nothing, so an empty one of those is dropped like any other
+///       empty paragraph while an empty *item* keeps its marker.
 /// @note Blocks keep their order and their spans; only the records move down over the dropped ones. The
 ///       arena is not compacted, for the same reason IrSetDest does not compact it.
 void IrDropEmptyBlocks(IR_DOCUMENTptrc document);

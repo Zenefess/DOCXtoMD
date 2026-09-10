@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: The intermediate representation's arena: growth, span appends and empty-block trimming.
  * To Do: 1) Size the first allocation from the part's own byte count, once the walker knows it.
  *        2) Release the arena back to the allocator between documents when M13 reuses a worker.
@@ -152,13 +152,29 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
 
    IR_BLOCKptr block = document->blocks + document->blockCount;
 
+   // Every field is written here and nothing zeroes a record: IrReserve hands back whatever amalloc
+   // did, so a field this misses is indeterminate for every block in the document -- which neither
+   // sanitizer nor MSVC's /RTCu reaches, both of them being about the stack.
    block->spanAt       = document->spanCount;
    block->spanCount    = 0;
+   block->listNumId    = -1;
+   block->listNumber   = 0;
    block->kind         = kind;
    block->headingLevel = headingLevel;
+   block->listLevel    = 0;
+   block->listFlags    = IR_LIST_NONE;
    mark.block          = si32(document->blockCount);
    ++document->blockCount;
    return mark;
+}
+
+void IrSetListRef(IR_DOCUMENTptrc document, cIR_MARK mark, csi32 numId, cui32 level) {
+   if(mark.block < 0 || ui32(mark.block) >= document->blockCount) return;
+
+   IR_BLOCKptr block = document->blocks + mark.block;
+
+   block->listNumId = numId;
+   block->listLevel = ui8(level < 9u ? level : 8u);
 }
 
 cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark) {
@@ -192,7 +208,10 @@ cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark) {
    // An empty code paragraph is a blank line inside a fence, which is content of a kind an ordinary
    // paragraph has no equivalent for -- so it is kept here and the emitter trims one only where it
    // falls at the edge of a fence, which is where it would be a blank line before or after the code.
-   if(!content && block->kind == IR_BLOCK_CODE) content = true;
+   // An empty *list item* is kept on the same reasoning and the same terms: it is a marker on a line of
+   // its own, which CommonMark spells and Word draws, and the emitter trims one off either edge of a
+   // list. Dropping it here instead would take the number of every item after it down by one.
+   if(!content && (block->kind == IR_BLOCK_CODE || block->listNumId >= 0)) content = true;
    if(!content) {
       // Nothing worth emitting: unwind the block completely, arena and all, so that the next block's
       // text starts where this one's would have and an empty paragraph costs nothing at all.
@@ -302,6 +321,12 @@ cbool IrHasInk(cIR_DOCUMENTptr document, cui32 first, cui32 last) {
    return (first < stop ? IrRangeHasInk(document, first, stop) : false);
 }
 
+cbool IrHasContent(cIR_DOCUMENTptr document, cui32 first, cui32 last) {
+   cui32 stop = (last < document->spanCount ? last : document->spanCount);
+
+   return (first < stop ? IrRangeHasContent(document, first, stop) : false);
+}
+
 cIR_BLOCKptr IrBlockAt(cIR_DOCUMENTptr document, cui32 index) { return (index < document->blockCount ? document->blocks + index : nullptr); }
 
 cIR_SPANptr IrSpanAt(cIR_DOCUMENTptr document, cui32 index) { return (index < document->spanCount ? document->spans + index : nullptr); }
@@ -315,10 +340,13 @@ void IrDropEmptyBlocks(IR_DOCUMENTptrc document) {
 
    for(ui32 index = 0; index < document->blockCount; ++index) {
       cIR_BLOCKptr block = document->blocks + index;
-      // A rule carries no spans by construction and a code paragraph may legitimately be blank, so both
-      // are exempt here exactly as they are in IrEndBlock -- the two tests have to agree, or a block
-      // that survived being ended would be thrown away on the second look.
-      cbool exempt = (block->kind == IR_BLOCK_RULE || block->kind == IR_BLOCK_CODE);
+      // A rule carries no spans by construction, a code paragraph may legitimately be blank, and a list
+      // item is a marker whether or not it holds text, so all three are exempt here exactly as they are
+      // in IrEndBlock -- the two tests have to agree, or a block that survived being ended would be
+      // thrown away on the second look. NumAssignMarkers runs before this and clears the reference on a
+      // paragraph whose numId resolved to nothing, so only a *real* item is exempt by the time this
+      // asks; an empty paragraph carrying a dangling one is dropped like any other.
+      cbool exempt = (block->kind == IR_BLOCK_RULE || block->kind == IR_BLOCK_CODE || block->listNumId >= 0);
 
       if(!exempt && !IrRangeHasContent(document, block->spanAt, block->spanAt + block->spanCount)) continue;
       document->blocks[kept] = *block;

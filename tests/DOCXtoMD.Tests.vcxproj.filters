@@ -44,6 +44,9 @@
     <ClCompile Include="..\src\MdEscape.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\NumberingModel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\OpcPackage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -84,6 +87,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="unit\TestMdEscape.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="unit\TestNumberingModel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="unit\TestOpcPackage.cpp">
@@ -137,6 +143,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\src\MdEscape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\NumberingModel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\src\OpcPackage.h">

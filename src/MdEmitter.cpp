@@ -3,9 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-09
+ * Last Modified: 2026-09-10
  * Description: Line assembly, inline delimiters, the blank-line discipline and every block kind's shape.
- * To Do: 1) Keep a per-line prefix stack when list items nest at M8 and a quote holds one at M8 or M9.
+ * To Do: 1) Emit a fenced block inside a *quote*, which no block kind can express today: a paragraph
+ *           is a quotation or a fence and never both, so only a list item reaches a prefixed fence.
  *        2) Emit a table's pipe rows through MD_CONTEXT_TABLE_CELL at M9, which has no caller yet.
  *        3) Size the buffer from the part's byte count rather than growing from a fixed first block.
  * Dependencies: BuildGuards.h, CliOptions.h, Ir.h, MdEmitter.h, MdEscape.h, Utf.h, typedefs.h,
@@ -43,6 +44,33 @@ constexpr cui64 MD_MIN_FENCE = 3u;
 // The prefix every line of a blockquote carries, and the line that joins two of them into one quote.
 static constexpr cchptr MD_QUOTE_PREFIX = "> ";
 static constexpr cchptr MD_QUOTE_JOIN   = ">";
+
+// How many list levels there are. ISO/IEC 29500-1 fixes w:ilvl at 0 to 8, which is nine.
+constexpr cui32 MD_MAX_LIST_LEVELS = 9u;
+
+// The widest one marker is: nine digits, a dot and the single space after it are eleven bytes, and the
+// twelfth is the terminator, because a marker is measured with MdListMarker and then copied as a string.
+// CommonMark accepts a start of at most nine digits, and a longer run of them is not a list marker at
+// all -- the line would stop being a list rather than merely look wrong.
+constexpr cui64 MD_MAX_MARKER = 12u;
+constexpr cui32 MD_MAX_NUMBER = 999999999u;
+
+// What kind of Markdown list a reader still has open at one depth. It is not the same question as which
+// depths the ilvl stack has open: a rendered list closes only when something is emitted *above* it, so
+// two items of two different lists can meet at one depth with a nested item written between them.
+constexpr cui8 MD_LIST_SHUT    = 0u; // Nothing open at this depth
+constexpr cui8 MD_LIST_BULLETS = 1u; // A bullet list is open
+constexpr cui8 MD_LIST_NUMBERS = 2u; // An ordered list is open, and its start is the number it began at
+
+// The widest prefix a line may carry: nine levels of the widest marker, plus a quote marker the list
+// may sit inside, plus room to spare. A document nested past this is clamped rather than refused --
+// losing a document's text over its indentation would be a poor trade.
+constexpr cui64 MD_MAX_PREFIX = 160u;
+
+// The separator that keeps two adjacent lists from becoming one. Mapping row 17 names it, and it needs
+// no blank line on either side: an HTML block start line is not paragraph-continuation text, so it
+// closes the list above it where it stands and leaves both lists tight.
+static constexpr cchptr MD_LIST_SPLIT = "<!-- -->";
 
 //-- Buffers
 
@@ -770,11 +798,103 @@ static cbool MdBreakLine(MD_EMITTERptrc emitter) {
    return MdAppendByte(emitter, '\n');
 }
 
+//-- Prefixes
+
+// What stands in front of each line of one block. The two forms are the whole reason a single string
+// could not carry this any longer: a quote writes "> " on every line of its block, while a list item
+// writes its marker on the first line and the same width in spaces on every line after it -- and that
+// width is the content column CommonMark measures a continuation line, and a nested item's own marker,
+// against. The quote was the degenerate case where the two happened to be equal.
+struct MD_PREFIX {
+   char first[MD_MAX_PREFIX]; ///< What the block's first line takes
+   char cont[MD_MAX_PREFIX];  ///< What every line after it takes, and every line of a block nested in it
+   ui64 firstUsed;            ///< Bytes of first
+   ui64 contUsed;             ///< Bytes of cont
+};
+
+typedef MD_PREFIX *const       MD_PREFIXptrc;
+typedef const MD_PREFIX *const cMD_PREFIXptrc;
+
+// Where the content of the open item at each list level starts. It is maintained across a whole run of
+// items rather than computed per block, because a child's indentation is a fact about the marker its
+// parent actually wrote: "10. " is four columns and "9. " is three, so two siblings of one list have
+// children indented differently, and a child indented to the narrower of the two is not a child at all.
+struct MD_LIST {
+   ui32 column[MD_MAX_LIST_LEVELS]; ///< Where the content of the item open at each depth starts
+   ui8  level[MD_MAX_LIST_LEVELS];  ///< Which w:ilvl opened each of those depths
+   ui8  open[MD_MAX_LIST_LEVELS];   ///< Which kind of Markdown list a reader still has open at each depth
+   ui32 depth;                      ///< How many depths are open
+};
+
+typedef const MD_LIST *cMD_LISTptr;
+typedef MD_LIST *const MD_LISTptrc;
+
+// Empties a prefix.
+static void MdPrefixClear(MD_PREFIXptrc prefix) {
+   prefix->firstUsed = 0;
+   prefix->contUsed  = 0;
+}
+
+// Appends bytes that stand on every line alike: an enclosing item's indentation, or a quote's marker.
+// A contribution that would not fit is dropped whole rather than truncated, so a line never carries
+// half a marker; the ceiling is far past any document, and losing a document's text over its own
+// indentation would be the worse trade.
+static void MdPrefixSame(MD_PREFIXptrc prefix, cchptr text, cui64 byteCount) {
+   if(prefix->firstUsed + byteCount > MD_MAX_PREFIX || prefix->contUsed + byteCount > MD_MAX_PREFIX) return;
+   for(ui64 index = 0; index < byteCount; ++index) {
+      prefix->first[prefix->firstUsed + index] = text[index];
+      prefix->cont[prefix->contUsed + index]   = text[index];
+   }
+   prefix->firstUsed += byteCount;
+   prefix->contUsed += byteCount;
+}
+
+// Appends one item's marker: the marker itself on the block's first line, and that many spaces on every
+// line after it, which is the item's content column.
+static void MdPrefixMarker(MD_PREFIXptrc prefix, cchptr marker, cui64 byteCount) {
+   if(prefix->firstUsed + byteCount > MD_MAX_PREFIX || prefix->contUsed + byteCount > MD_MAX_PREFIX) return;
+   for(ui64 index = 0; index < byteCount; ++index) {
+      prefix->first[prefix->firstUsed + index] = marker[index];
+      prefix->cont[prefix->contUsed + index]   = ' ';
+   }
+   prefix->firstUsed += byteCount;
+   prefix->contUsed += byteCount;
+}
+
+// Appends a run of spaces to both forms.
+static void MdPrefixIndent(MD_PREFIXptrc prefix, cui32 columns) {
+   for(ui32 index = 0; index < columns; ++index) MdPrefixSame(prefix, " ", 1u);
+}
+
+// Writes the prefix in force in front of one line.
+static cbool MdWritePrefix(MD_EMITTERptrc emitter, cMD_PREFIXptrc prefix, cbool first) {
+   cchptr bytes = (first ? prefix->first : prefix->cont);
+   cui64  used  = (first ? prefix->firstUsed : prefix->contUsed);
+
+   return (used ? MdAppend(emitter, bytes, used) : true);
+}
+
+// Writes what a block with no content at all leaves behind: its marker, with the padding after it
+// trimmed off. "- " with nothing following it would put a space before a newline, which is Markdown's
+// other spelling of a hard break and which this emitter's own invariants forbid.
+static cbool MdWriteBareMarker(MD_EMITTERptrc emitter, cMD_PREFIXptrc prefix) {
+   ui64 used = prefix->firstUsed;
+
+   while(used && MdIsPad(prefix->first[used - 1u])) --used;
+   return (used ? MdAppend(emitter, prefix->first, used) : true);
+}
+
 //-- Blocks
 
-// Emits a paragraph or a blockquote: one line per range of spans between hard breaks, each carrying the
-// block's prefix, and each put through the line-start pass so it cannot open a block it should not.
-static cbool MdEmitLines(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block, cchptr prefix) {
+// Emits a paragraph, a blockquote or a list item: one line per range of spans between hard breaks, each
+// carrying the block's prefix, and each put through the line-start pass so it cannot open a block it
+// should not.
+//
+// The order -- break, then prefix, then content -- is what puts a continuation line at the item's own
+// content column, and the line-start pass still runs over emitter->line, which holds the content alone.
+// That separation is load-bearing: a marker written into the line buffer would be escaped into "\\-" by
+// the very pass that exists to stop a *run's* text opening a list.
+static cbool MdEmitLines(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block, cMD_PREFIXptrc prefix) {
    MD_LINK link  = {0, 0, 0, false};
    ui32    index = 0;
    bool    wrote = false;
@@ -787,7 +907,7 @@ static cbool MdEmitLines(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_B
       // empty Markdown line ends the paragraph, so neither spelling of a hard break can carry one.
       if(emitter->lineUsed) {
          if(wrote && !MdBreakLine(emitter)) return false;
-         if(prefix && !MdAppendText(emitter, prefix)) return false;
+         if(!MdWritePrefix(emitter, prefix, !wrote)) return false;
 
          csi64 at = MdEscapeLineStartAt(emitter->line, emitter->lineUsed, wrote);
 
@@ -803,6 +923,10 @@ static cbool MdEmitLines(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_B
          ++index;
       }
    }
+   // A block that produced no line at all is an empty list item, which IrEndBlock keeps on purpose: a
+   // marker alone on its line is what the document showed and what CommonMark spells. Nothing else can
+   // reach here, because every other empty block was unwound before the emitter ever saw it.
+   if(!wrote && prefix->firstUsed && !MdWriteBareMarker(emitter, prefix)) return false;
    emitter->lineUsed = 0;
    return MdAppendByte(emitter, '\n');
 }
@@ -866,7 +990,7 @@ static cbool MdBlockHasContent(cIR_DOCUMENTptr document, cIR_BLOCKptr block) {
 // a single fence. The fence is longer than the longest run of backticks anywhere inside it, because a
 // shorter one would be closed by the content; there is no info string, because the language a Word
 // document was written about is never recoverable from it.
-static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32 first, cui32 last) {
+static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32 first, cui32 last, cMD_PREFIXptrc prefix) {
    ui64 ticks = MD_MIN_FENCE;
 
    for(ui32 index = first; index < last; ++index) {
@@ -892,12 +1016,27 @@ static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32
          if(run > ticks) ticks = run;
       }
    }
+   // Every line the fence writes takes the prefix in force, so a fence inside a list item sits at that
+   // item's content column. Writing it there rather than one column in also keeps the relative fence
+   // indentation at zero: CommonMark strips from each content line as many columns as the opening fence
+   // was indented by, and the code's own leading whitespace is exactly what that would eat.
+   //
+   // A line that came to nothing has its prefix rolled back off again rather than being left as trailing
+   // whitespace, which is what keeps a blank line of code blank.
+   if(!MdWritePrefix(emitter, prefix, true)) return false;
    if(!MdAppendRun(emitter, '`', ticks)) return false;
    if(!MdAppendByte(emitter, '\n')) return false;
    for(ui32 index = first; index < last; ++index) {
       cIR_BLOCKptr block = IrBlockAt(document, index);
 
       if(!block) continue;
+
+      ui64 lineAt = emitter->used;
+
+      if(!MdWritePrefix(emitter, prefix, false)) return false;
+
+      ui64 bodyAt = emitter->used;
+
       for(ui32 at = 0; at < block->spanCount; ++at) {
          cIR_SPANptr span = IrSpanAt(document, block->spanAt + at);
 
@@ -905,7 +1044,11 @@ static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32
          // A hard break inside a code paragraph is simply the next line of the code: there is no
          // marker to write, because a fence has no other way to continue.
          if(span->kind == IR_SPAN_BREAK) {
+            if(emitter->used == bodyAt) emitter->used = lineAt;
             if(!MdAppendByte(emitter, '\n')) return false;
+            lineAt = emitter->used;
+            if(!MdWritePrefix(emitter, prefix, false)) return false;
+            bodyAt = emitter->used;
             continue;
          }
          // Nothing but text reaches a fence. A link inside one has no brackets to write -- the
@@ -914,10 +1057,206 @@ static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32
          if(span->kind != IR_SPAN_TEXT) continue;
          if(!MdAppendEscaped(emitter, IrText(document, span->textAt), span->textBytes, MD_CONTEXT_CODE_BLOCK)) return false;
       }
+      if(emitter->used == bodyAt) emitter->used = lineAt;
       if(!MdAppendByte(emitter, '\n')) return false;
    }
+   if(!MdWritePrefix(emitter, prefix, false)) return false;
    if(!MdAppendRun(emitter, '`', ticks)) return false;
    return MdAppendByte(emitter, '\n');
+}
+
+//-- Lists
+
+// Builds one item's marker: "- " for a bullet, or its number, a dot and one space for an ordered item.
+//
+// Exactly one space follows it, and that is load-bearing rather than a matter of taste. CommonMark fixes
+// an item's content column from its own first line, and with one space all three of its list-item rules
+// -- the ordinary case, an item whose content begins with indented code, and an item that begins with a
+// blank line -- give the same column. One formula therefore covers every item this emitter can write,
+// the empty one included; two spaces would need a second.
+//
+// The number is capped at nine digits because a longer run of them is not a list marker at all -- the
+// line would silently stop being a list. NumAssignMarkers caps it too; this is the emitter refusing to
+// depend on a pass that runs before it.
+static cui64 MdListMarker(cIR_BLOCKptr block, chptrc dest) {
+   ui64 used = 0;
+
+   if(!(block->listFlags & IR_LIST_ORDERED)) {
+      dest[used++] = '-';
+      dest[used++] = ' ';
+      return used;
+   }
+
+   char digits[MD_MAX_MARKER];
+   ui64 count  = 0;
+   ui32 number = (block->listNumber > MD_MAX_NUMBER ? MD_MAX_NUMBER : block->listNumber);
+
+   do {
+      digits[count++] = char('0' + (number % 10u));
+      number /= 10u;
+   } while(number && count + 2u < MD_MAX_MARKER);
+   while(count) dest[used++] = digits[--count];
+   dest[used++] = '.';
+   dest[used++] = ' ';
+   return used;
+}
+
+// Whether a block would put anything on the page. It is IrEndBlock's own test and not the narrower one
+// MdBlockHasContent applies to a fence: an item holding nothing but a picture, or nothing but a bookmark
+// something still points at, emits bytes and must not be trimmed off the edge of a list as empty.
+static cbool MdItemHasContent(cIR_DOCUMENTptr document, cIR_BLOCKptr block) {
+   if(!block) return false;
+   return IrHasContent(document, block->spanAt, block->spanAt + block->spanCount);
+}
+
+// Emits one run of consecutive list items.
+//
+// A run is emitted as a group for the same reason a run of code paragraphs is: nothing at all stands
+// between two items of one list, and the block separator's contract is that it writes exactly one line.
+// Keeping the grouping here leaves that contract intact instead of teaching the separator to write
+// nothing, and it is what makes a list tight.
+// How far the continuation lines of a marker-less item at one level would be indented, worked out
+// without disturbing the stack. It is the lookahead a fence needs: mapping row 12 merges consecutive
+// all-monospace paragraphs into one fence, and what says two of them belong to one item is that their
+// lines land in one column -- which is a fact about the markers above them and not about their levels.
+static cui32 MdPlainIndent(cMD_LISTptr list, cui8 level) {
+   cui32 wanted = (level < MD_MAX_LIST_LEVELS ? level : MD_MAX_LIST_LEVELS - 1u);
+   ui32  depth  = list->depth;
+
+   while(depth && list->level[depth - 1u] > wanted) --depth;
+
+   cbool reopened = (depth && list->level[depth - 1u] == wanted);
+   cui32 opened   = (reopened ? depth - 1u : depth);
+   cui32 at       = (opened < MD_MAX_LIST_LEVELS ? opened : MD_MAX_LIST_LEVELS - 1u);
+
+   return (reopened ? list->column[at] : (at ? list->column[at - 1u] : 0u));
+}
+
+static cbool MdEmitList(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32 first, cui32 last, MD_LISTptrc list, MD_PREFIXptrc prefix) {
+   ui32         written = 0;       // The depth the item before this one was emitted at
+   cIR_BLOCKptr emitted = nullptr; // The last block that actually put a line out, which is not the block
+                                   // before this one: a content-free continuation is skipped whole, and
+                                   // asking the *previous block* whether it wrote anything then reads a
+                                   // block that was never emitted and suppresses a blank line the one
+                                   // before it had earned.
+
+   list->depth = 0;
+   for(ui32 level = 0; level < MD_MAX_LIST_LEVELS; ++level) list->open[level] = MD_LIST_SHUT;
+   for(ui32 index = first; index < last; ++index) {
+      cIR_BLOCKptr block = IrBlockAt(document, index);
+
+      if(!block) continue;
+
+      // A marker-less continuation with nothing in it is nothing at all. It has no marker to stand for
+      // it the way an empty *marked* item does, so its line lands on top of the blank line the
+      // cannot-interrupt-a-paragraph rule below has already written and the pair reads as two. A code
+      // paragraph is the one exception, because an empty one is a blank line of its own fence.
+      cbool hollow = (block->listFlags & IR_LIST_PLAIN) != 0 && block->kind != IR_BLOCK_CODE;
+
+      if(hollow && !MdItemHasContent(document, block)) continue;
+
+      char  marker[MD_MAX_MARKER];
+      cbool plain  = (block->listFlags & IR_LIST_PLAIN) != 0;
+      cui32 wanted = (block->listLevel < MD_MAX_LIST_LEVELS ? block->listLevel : MD_MAX_LIST_LEVELS - 1u);
+
+      // A w:ilvl is mapped onto an emitted depth through the stack of levels still open, rather than
+      // used as one. Two things force it. A level the document skipped over would otherwise put a marker
+      // four columns past its parent's content column, and four columns past it is an indented code
+      // block -- the list would not merely look wrong, it would stop being a list; CONVERSION_REFERENCE
+      // 5.4 allows a skip to be normalised to one Markdown level per step, and this is that. And a run
+      // of items that *begins* at a deep w:ilvl has no parent to be indented under at all, so using the
+      // level directly would emit a shallower item further in than the deeper one above it and invert
+      // the document's own nesting.
+      while(list->depth && list->level[list->depth - 1u] > wanted) --list->depth;
+
+      cbool reopened = (list->depth && list->level[list->depth - 1u] == wanted);
+      cui32 opened   = (reopened ? list->depth - 1u : list->depth);
+      // The stack's levels strictly increase, so nine of them is every depth there can be; the clamp is
+      // a bound the type does not carry rather than a case that arises.
+      cui32 depth        = (opened < MD_MAX_LIST_LEVELS ? opened : MD_MAX_LIST_LEVELS - 1u);
+      cui32 markerColumn = (depth ? list->column[depth - 1u] : 0u);
+
+      MdPrefixClear(prefix);
+      if(plain) {
+         // Mapping row 16: no marker at all, indented to the content column of the item it continues.
+         MdPrefixIndent(prefix, (reopened ? list->column[depth] : markerColumn));
+      } else {
+         cui64 used = MdListMarker(block, marker);
+
+         MdPrefixIndent(prefix, markerColumn);
+         MdPrefixMarker(prefix, marker, used);
+         list->column[depth] = markerColumn + ui32(used);
+         list->level[depth]  = ui8(wanted);
+         list->depth         = depth + 1u;
+      }
+      // A quotation that is also an item takes its marker first and its "> " after it, on the item's
+      // first line, and both on every line after: "- > quoted".
+      if(block->kind == IR_BLOCK_QUOTE) MdPrefixSame(prefix, MD_QUOTE_PREFIX, 2u);
+
+      cbool ordered = (block->listFlags & IR_LIST_ORDERED) != 0;
+      cbool content = MdItemHasContent(document, block);
+      // Whether this item joins a list a reader already has open is asked of the *open* list at this
+      // depth and never of the block immediately above, because the two are not the same question: an
+      // item that follows a nested one is above it in the output, so the block before it sits at a
+      // deeper depth while the list it is about to join is the one two markers back. Comparing against
+      // the previous block let a restart after a nested item merge into the list it was meant to leave,
+      // and a renderer then renumbered it from the earlier list's own start.
+      //
+      // Only an *ordered* pair can need separating, and that is a policy rather than an omission. What
+      // a merge costs is the second list's start number, which a renderer takes from its first item and
+      // would then discard; two bullet lists that merge lose nothing a reader can see, so a comment
+      // between them would be markup written for no one. A pair whose marker kinds differ separates
+      // itself, because changing the marker starts a new list.
+      cbool sibling = (list->open[depth] == MD_LIST_NUMBERS);
+      cbool shaped  = sibling && ordered && !plain;
+
+      // Two lists that meet with the same marker at the same level merge into one, and the second one's
+      // start number is then discarded -- so a list the item above it was not part of takes mapping row
+      // 17's HTML comment. It carries the level's own indentation, which is what keeps a restart inside
+      // a nested list inside the item holding it, and it needs no blank line on either side.
+      if(shaped && (block->listFlags & IR_LIST_FIRST)) {
+         if(!MdAppendRun(emitter, ' ', markerColumn)) return false;
+         if(!MdAppendText(emitter, MD_LIST_SPLIT)) return false;
+         if(!MdAppendByte(emitter, '\n')) return false;
+      }
+      // A block that cannot interrupt a paragraph needs a blank line in front of it, or its own first
+      // line is read as more of the paragraph above it. Three shapes arise inside a list: a marker-less
+      // continuation paragraph, a nested list whose first number is not 1, and a nested list whose first
+      // item is empty. The last is the worst of the three, because a lone "-" under a line of text is a
+      // setext underline and turns the item above it into a heading rather than merely losing structure.
+      cbool nested = emitted && depth > written;
+      cbool opens  = plain || (nested && ((ordered && block->listNumber != 1u) || !content));
+
+      if(opens && emitted && !MdAppendByte(emitter, '\n')) return false;
+      written = depth;
+      emitted = block;
+      // Anything emitted at this depth ends every list a reader had open below it, and a marker opens
+      // one here. A marker-less continuation paragraph closes the deeper lists the same way and opens
+      // nothing, because it is a paragraph of the item it continues rather than an item of its own.
+      for(ui32 level = depth + 1u; level < MD_MAX_LIST_LEVELS; ++level) list->open[level] = MD_LIST_SHUT;
+      if(!plain) list->open[depth] = (ordered ? MD_LIST_NUMBERS : MD_LIST_BULLETS);
+      if(block->kind == IR_BLOCK_CODE) {
+         ui32 run = index + 1u;
+
+         // Row 12's merge, inside an item: a marker-less code paragraph whose lines land in the column
+         // this one's already do is another paragraph of the same item rather than a second block of
+         // code, so it belongs inside this fence. A code paragraph carrying a marker of its own is an
+         // item in its own right and ends the run, because merging it would delete its marker.
+         while(run < last) {
+            cIR_BLOCKptr next = IrBlockAt(document, run);
+
+            if(!next || next->kind != IR_BLOCK_CODE) break;
+            if(!(next->listFlags & IR_LIST_PLAIN)) break;
+            if(MdPlainIndent(list, next->listLevel) != prefix->contUsed) break;
+            ++run;
+         }
+         if(!MdEmitFence(emitter, document, index, run, prefix)) return false;
+         index = run - 1u;
+      } else if(!MdEmitLines(emitter, document, block, prefix)) {
+         return false;
+      }
+   }
+   return true;
 }
 
 //-- Separation
@@ -927,8 +1266,13 @@ static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32
 // them would close the blockquote and open a second; a bare ">" keeps them inside one, which is what a
 // reader of the .docx sees. That is the only place the one-blank-line rule bends, and it bends towards
 // the same shape: the separator is still exactly one line.
-static cbool MdSeparate(MD_EMITTERptrc emitter, cIR_BLOCK_KIND previous, cIR_BLOCK_KIND next) {
-   if(previous == IR_BLOCK_QUOTE && next == IR_BLOCK_QUOTE) {
+// It takes the blocks and not their kinds, because since M8 a kind no longer says everything a
+// separator needs: a quotation that is also a list item is still IR_BLOCK_QUOTE, and joining it to the
+// quotation before it with a bare ">" would put that marker outside the item it belongs to.
+static cbool MdSeparate(MD_EMITTERptrc emitter, cIR_BLOCKptr previous, cIR_BLOCKptr next) {
+   cbool listed = (previous && (previous->listFlags & IR_LIST_ITEM)) || (next && (next->listFlags & IR_LIST_ITEM));
+
+   if(!listed && previous && next && previous->kind == IR_BLOCK_QUOTE && next->kind == IR_BLOCK_QUOTE) {
       if(!MdAppendText(emitter, MD_QUOTE_JOIN)) return false;
    }
    return MdAppendByte(emitter, '\n');
@@ -950,16 +1294,62 @@ void MdClose(MD_EMITTERptrc emitter) {
 }
 
 cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
-   cui32         blocks   = IrBlockCount(document);
-   ui32          index    = 0;
-   IR_BLOCK_KIND previous = IR_BLOCK_PARAGRAPH;
-   bool          wrote    = (emitter->used != 0);
+   cui32        blocks   = IrBlockCount(document);
+   ui32         index    = 0;
+   cIR_BLOCKptr previous = nullptr;
+   bool         wrote    = (emitter->used != 0);
+   MD_LIST      list;
+   MD_PREFIX    prefix;
 
+   list.depth = 0;
+   MdPrefixClear(&prefix);
    while(index < blocks) {
       cIR_BLOCKptr block = IrBlockAt(document, index);
 
       if(!block) {
          ++index;
+         continue;
+      }
+      // A run of items is grouped the way a run of code paragraphs is, and for the same reason: what
+      // separates two items of one list is nothing at all, which no block separator can write.
+      if(block->listFlags & IR_LIST_ITEM) {
+         ui32 last = index;
+
+         while(last < blocks) {
+            cIR_BLOCKptr next = IrBlockAt(document, last);
+
+            if(!next || !(next->listFlags & IR_LIST_ITEM)) break;
+            ++last;
+         }
+
+         ui32 from = index;
+         ui32 to   = last;
+
+         // A content-free item is a marker on a line of its own in the middle of a list, and nothing at
+         // all at either end of one: an empty last item is the paragraph a user leaves behind on
+         // pressing Enter to get out of a list, and an empty first one is the same artefact at the top.
+         //
+         // Unless the item after it is deeper. Then it is not an artefact but the *parent* those items
+         // hang from, and dropping it promotes them to the outer list -- where a later shallower item
+         // becomes their sibling and a renderer counts it on from their numbers rather than from its
+         // own. The trailing edge needs no such test: an item at the end of a run has nothing after it
+         // to be the parent of.
+         while(from < to) {
+            cIR_BLOCKptr head = IrBlockAt(document, from);
+            cIR_BLOCKptr next = (from + 1u < to ? IrBlockAt(document, from + 1u) : nullptr);
+
+            if(!head || MdItemHasContent(document, head)) break;
+            if(next && next->listLevel > head->listLevel) break;
+            ++from;
+         }
+         while(to > from && !MdItemHasContent(document, IrBlockAt(document, to - 1u))) --to;
+         if(from < to) {
+            if(wrote && !MdSeparate(emitter, previous, IrBlockAt(document, from))) return MD_ERROR_MEMORY;
+            if(!MdEmitList(emitter, document, from, to, &list, &prefix)) return MD_ERROR_MEMORY;
+            previous = IrBlockAt(document, to - 1u);
+            wrote    = true;
+         }
+         index = last;
          continue;
       }
       if(block->kind == IR_BLOCK_CODE) {
@@ -968,7 +1358,9 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
          while(last < blocks) {
             cIR_BLOCKptr next = IrBlockAt(document, last);
 
-            if(!next || next->kind != IR_BLOCK_CODE) break;
+            // A code paragraph that is also a list item is its own fence inside its own item, so the
+            // run stops before one rather than swallowing it and emitting it at column zero.
+            if(!next || next->kind != IR_BLOCK_CODE || (next->listFlags & IR_LIST_ITEM)) break;
             ++last;
          }
 
@@ -981,9 +1373,10 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
          while(from < to && !MdBlockHasContent(document, IrBlockAt(document, from))) ++from;
          while(to > from && !MdBlockHasContent(document, IrBlockAt(document, to - 1u))) --to;
          if(from < to) {
-            if(wrote && !MdSeparate(emitter, previous, IR_BLOCK_CODE)) return MD_ERROR_MEMORY;
-            if(!MdEmitFence(emitter, document, from, to)) return MD_ERROR_MEMORY;
-            previous = IR_BLOCK_CODE;
+            MdPrefixClear(&prefix);
+            if(wrote && !MdSeparate(emitter, previous, IrBlockAt(document, from))) return MD_ERROR_MEMORY;
+            if(!MdEmitFence(emitter, document, from, to, &prefix)) return MD_ERROR_MEMORY;
+            previous = IrBlockAt(document, from);
             wrote    = true;
          }
          index = last;
@@ -993,17 +1386,17 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
       // block leaves the file ending in a single newline. No block but a trimmed-away run of code can
       // come to nothing here -- IrEndBlock drops one that holds no printable byte -- so the separator
       // can be written before the block rather than unwound again afterwards.
-      if(wrote && !MdSeparate(emitter, previous, block->kind)) return MD_ERROR_MEMORY;
+      MdPrefixClear(&prefix);
+      if(wrote && !MdSeparate(emitter, previous, block)) return MD_ERROR_MEMORY;
       if(block->kind == IR_BLOCK_HEADING) {
          if(!MdEmitHeading(emitter, document, block)) return MD_ERROR_MEMORY;
       } else if(block->kind == IR_BLOCK_RULE) {
          if(!MdEmitRule(emitter)) return MD_ERROR_MEMORY;
-      } else if(block->kind == IR_BLOCK_QUOTE) {
-         if(!MdEmitLines(emitter, document, block, MD_QUOTE_PREFIX)) return MD_ERROR_MEMORY;
-      } else if(!MdEmitLines(emitter, document, block, nullptr)) {
-         return MD_ERROR_MEMORY;
+      } else {
+         if(block->kind == IR_BLOCK_QUOTE) MdPrefixSame(&prefix, MD_QUOTE_PREFIX, 2u);
+         if(!MdEmitLines(emitter, document, block, &prefix)) return MD_ERROR_MEMORY;
       }
-      previous = block->kind;
+      previous = block;
       wrote    = true;
       ++index;
    }
