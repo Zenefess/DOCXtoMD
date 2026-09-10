@@ -55,6 +55,12 @@ BUILD = os.path.join(ROOT, "build")
 # exiting 5 to say the converter did not exist yet.
 EXPECTATIONS = []
 
+# Which built fixture must extract which media files, and what each of them must hold. run_golden.py
+# reads this for the same reason it reads GOLDENS below: a fixture and what it must produce are
+# declared together, in one place, or they drift. The bytes are the fixture tree's own, so a part
+# edited under tests/fixtures/ changes both sides of the comparison at once.
+MEDIA = []
+
 # Which built fixture must reproduce which fixture case's expected.md, byte for byte. run_golden.py
 # reads this table for the same reason run_container.py reads the one above: a fixture and what it
 # must produce are declared together, in one place, or they drift.
@@ -64,6 +70,11 @@ GOLDENS = []
 def expect(name, code, matches, why, sound=None):
     EXPECTATIONS.append({"name": name, "code": code, "matches": matches, "why": why,
                          "sound": (code == 0 if sound is None else sound)})
+
+
+def media(name, files):
+    """Records that one built .docx must extract exactly these files, with exactly these bytes."""
+    MEDIA.append({"name": name, "files": files})
 
 
 def golden(name, case):
@@ -267,6 +278,7 @@ def build_all(verbose=True, writing=True):
     WRITING = writing
     del EXPECTATIONS[:]
     del GOLDENS[:]
+    del MEDIA[:]
     if writing:
         os.makedirs(BUILD, exist_ok=True)
     parts = read_part_tree("minimal")
@@ -681,13 +693,37 @@ def build_all(verbose=True, writing=True):
                  "decoy-main-rel.docx", "mixed-case-names.docx", "duplicate-names.docx"]:
         golden(same, "minimal")
     golden("relocated-main.docx", "relocated")
+    # Which media file each extracting fixture must produce, and which part of its own tree the bytes
+    # come from. The numbering is the order the document first draws each picture, which is what
+    # MediaExtractor promises and the one thing a reader of the .md can check by eye.
+    extracted = {"images": [("image1.png", "word/media/cat.png"),
+                            ("image2.jpg", "word/media/photo.jpeg"),
+                            ("image3.gif", "word/media/logo.gif"),
+                            ("image4.dat", "word/media/odd.dat"),
+                            ("image5.jpg", "word/media/mystery.png")]}
+
     for case in ["headings", "toggles", "textflow", "nostyles", "wrappers", "dollars",
                  "fragments", "hoisting", "inline", "code", "quotes", "rules", "monodefault",
-                 "monostyle"]:
+                 "monostyle", "links", "images", "anchors"]:
         tree = read_part_tree(case)
         write(case + ".docx", build_zip([make_entry(name, raw) for name, raw in tree]))
         expect(case + ".docx", 0, ["wrote", case + ".md"], "the %s golden fixture" % case)
         golden(case + ".docx", case)
+        if case in extracted:
+            parts = dict(tree)
+            media(case + ".docx", [(leaf, parts[part]) for leaf, part in extracted[case]])
+
+    # A media part is binary, and every byte of it has to survive the round trip -- a NUL in the
+    # middle in particular, which a writer that thought it was handling text would stop at. The tree
+    # holds reviewable ASCII for exactly the reason the rest of it does, so the one payload that
+    # proves the byte path is synthesised here instead.
+    blob = bytes(range(256)) * 4 + b"\x00\xff\x00\xff"
+    images = swap(read_part_tree("images"), [("word/media/cat.png", b"PNG-FIXTURE-CAT\n", blob)])
+    write("media-binary.docx", build_zip([make_entry(name, raw) for name, raw in images]))
+    expect("media-binary.docx", 0, ["wrote", "media-binary.md"],
+           "a media part holding every byte value, which must reach disk unchanged")
+    binary = dict(images)
+    media("media-binary.docx", [(leaf, binary[part]) for leaf, part in extracted["images"]])
 
     if verbose:
         print("built %d fixtures in %s" % (len(EXPECTATIONS), BUILD))

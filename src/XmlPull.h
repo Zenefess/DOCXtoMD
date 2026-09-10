@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-27
  * Description: First-party streaming XML pull tokenizer over one in-memory part (decision D2).
  * To Do: 1) Enforce XML 1.0's ban on a literal ]]> in character data if a producer is ever found
  *           emitting one; today it costs a scan and rejects nothing.
@@ -87,6 +87,7 @@ enum XML_NS : si32 {
    XML_NS_PIC,      ///< DrawingML picture
    XML_NS_M,        ///< Office math
    XML_NS_V,        ///< VML
+   XML_NS_O,        ///< The Office drawing extensions VML carries its alt text in
    XML_NS_MC,       ///< Markup compatibility and extensibility
    XML_NS_CT,       ///< The package's [Content_Types].xml
    XML_NS_PR,       ///< The package's relationship parts

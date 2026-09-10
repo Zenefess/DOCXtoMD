@@ -3,12 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: The context-aware Markdown escaping writer: one rule set per place text can be emitted.
  * To Do: 1) Escape a leading pipe once tables give a line one, which is M9's business.
  *        2) Widen D12's dollar scope from the line to the block if a fixture ever shows GitHub's inline
  *           math pairing across a hard break, which this build assumes it does not.
- *        3) Revisit the link-destination rule against real hyperlink targets when M7 emits one.
+ *        3) Percent-encode a destination's own '%' if a producer is ever found writing an unencoded one,
+ *           which today would turn a working %20 into a broken %2520 and so is deliberately left alone.
  *        4) Benchmark an AVX2 scan for the next byte needing an escape before adopting one (bd1/bd2).
  * Dependencies: typedefs.h
  * ISA: Scalar
@@ -109,10 +110,14 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool d
 ///       does not cross a line end -- GitHub documents `$$` for multi-line expressions, which reads
 ///       that way -- and `tests/fixtures/dollars` pins the assumption as output, so widening it later
 ///       is a visible diff rather than a silent one.
-/// @note Four contexts have no caller before M7: the two link contexts, the alt text and the table
-///       cell. They are written now because correctness rule 6 forbids an emitter concatenating raw
-///       text and because the rules are pure and testable without one -- but they are provisional,
-///       and the milestone that first emits through one is expected to re-cut it against real input.
+/// @note Three of the four contexts M5 wrote without a caller got one at M7, and re-cutting them
+///       against real hyperlinks changed none of them. Link text and alt text are the inline set:
+///       what CONVERSION_REFERENCE 4.1 asks of them beyond it is that a closing bracket may not appear
+///       unescaped, and the inline set escapes both brackets unconditionally already. The destination
+///       rule stood too, with one thing worth recording rather than discovering: a byte above ASCII is
+///       left as it stands, because CommonMark takes a raw UTF-8 destination and every renderer encodes
+///       it itself, so encoding it here would only make the source unreadable. MD_CONTEXT_TABLE_CELL is
+///       the one still waiting, and M9 is expected to re-cut it the same way.
 cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars);
 
 /// Reports where a finished line needs one backslash to stop it starting a block it should not.

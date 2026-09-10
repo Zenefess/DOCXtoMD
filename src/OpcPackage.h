@@ -3,11 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-08-27
  * Description: The OPC package model: content types, relationship graphs, and main-part discovery.
- * To Do: 1) Add an uncached part read for MediaExtractor at M7, which streams an image out once.
- *        2) Add the content-type to file-extension table when M7 first names an extracted image.
- *        3) Release a cached part on demand, once a document large enough to want it turns up.
+ * To Do: 1) Add an uncached part read for MediaExtractor, which streams an image out once and then
+ *           holds the whole of it in the part cache for the rest of the conversion.
+ *        2) Release a cached part on demand, once a document large enough to want it turns up.
+ *        3) Index the content-type Override rows if a package is ever found carrying enough of them for
+ *           the per-part scan to matter; the part-name index below settles the larger half of that.
  * Dependencies: Diag.h, Utf.h, XmlPull.h, ZipReader.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -162,6 +164,8 @@ struct al32 OPC_PACKAGE {
    OPC_TYPE_ROWptr defaults;          ///< Default rows of [Content_Types].xml, by extension
    OPC_TYPE_ROWptr overrides;         ///< Override rows, by part name
    OPC_RELptr      rels;              ///< Every relationship loaded so far, grouped by part
+   si32ptr         nameIndex;         ///< Open-addressed part-name table, or null when it could not be built
+   ui64            nameMask;          ///< One less than the slot count of nameIndex
    ui64            heapUsed;          ///< Bytes of heap in use
    ui64            heapCapacity;      ///< Bytes allocated at heap
    ui64            defaultCapacity;   ///< Rows allocated at defaults

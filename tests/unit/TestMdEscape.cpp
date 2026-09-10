@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: Unit tests for the context-aware escaping writer and the line-start and heading passes.
  * To Do: 1) Add the table-cell pipe cases against a real table once M9 emits one.
  *        2) Check the link-destination rule against the targets real producers write, at M7.
@@ -204,6 +204,33 @@ void TestMdEscape(void) {
    // An already-encoded target is left alone, or a working %20 would turn into a broken %2520.
    CHECK(EscapedIs("a%20b", MD_CONTEXT_LINK_DEST, "a%20b"));
    CHECK(EscapedIs("a\"b", MD_CONTEXT_LINK_DEST, "a%22b"));
+   // A fragment separator is written by the emitter and must reach the reader as one, and a byte
+   // above ASCII is left as it stands: CommonMark takes a raw UTF-8 destination and every renderer
+   // encodes it itself, so encoding it here would only make it unreadable in the source.
+   CHECK(EscapedIs("#anchor", MD_CONTEXT_LINK_DEST, "#anchor"));
+   CHECK(EscapedIs("a/\xD0\x9F", MD_CONTEXT_LINK_DEST, "a/\xD0\x9F"));
+   // A dollar is never escaped in a destination, whatever the line holds: it is not inline content,
+   // and %24 is not always what a server expects where a literal dollar was written.
+   CHECK(EscapedAs("a$b$c", MD_CONTEXT_LINK_DEST, true, "a$b$c"));
+
+   CheckGroup("MdEscape: link text and alt text");
+   // M7 gives these two their first callers, and re-cutting them against real hyperlinks changed
+   // nothing: what CONVERSION_REFERENCE 4.1 asks of them beyond the inline set is that a closing
+   // bracket may not appear unescaped, and the inline set escapes both brackets unconditionally
+   // already. They are named rather than folded into the inline context so that a later change to
+   // the link rules reaches the text inside a link without having to find every place that meant it.
+   CHECK(EscapedIs("a]b", MD_CONTEXT_LINK_TEXT, "a\\]b"));
+   CHECK(EscapedIs("a]b", MD_CONTEXT_ALT_TEXT, "a\\]b"));
+   CHECK(EscapedIs("a[b", MD_CONTEXT_LINK_TEXT, "a\\[b"));
+   CHECK(EscapedIs("a*b", MD_CONTEXT_LINK_TEXT, "a\\*b"));
+   CHECK(EscapedIs("A & B", MD_CONTEXT_ALT_TEXT, "A & B"));
+   CHECK(EscapedIs("A &amp; B", MD_CONTEXT_ALT_TEXT, "A &amp;amp; B"));
+   // The exclamation mark is deliberately not escaped: the bracket that would complete an image
+   // marker is escaped here already, so there is nothing for it to open.
+   CHECK(EscapedIs("a![b", MD_CONTEXT_LINK_TEXT, "a!\\[b"));
+   // D12 reaches both, because both are parsed as inline content by the renderer.
+   CHECK(EscapedAs("$5 and $10", MD_CONTEXT_LINK_TEXT, true, "\\$5 and \\$10"));
+   CHECK(EscapedAs("$5", MD_CONTEXT_ALT_TEXT, false, "$5"));
 
    CheckGroup("MdEscape: the line-start pass");
    CHECK(LineStartOf("# heading") == 0);

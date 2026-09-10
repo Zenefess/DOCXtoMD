@@ -3,11 +3,14 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: The intermediate representation: blocks, spans and the arena the walker builds them in.
- * To Do: 1) Add the list, table, image, link and note span and block kinds as M7 through M10 reach them.
+ * To Do: 1) Add the list and table span and block kinds as M8 and M9 reach them, and the note reference
+ *           at M10.
  *        2) Give a block a child-block list once a table cell has to hold one at M9.
  *        3) Record the source paragraph index on a block, so a diagnostic can point at the original.
+ *        4) Record the part a reference span came from, once M10 walks a second part whose relationship
+ *           ids are scoped separately from the body's.
  * Dependencies: typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -53,14 +56,33 @@ enum IR_BLOCK_KIND : ui8 {
 typedef const IR_BLOCK_KIND cIR_BLOCK_KIND;
 
 /// What one span inside a block is.
+/// @note The three M7 kinds are markers rather than content, and that is what makes them useful twice
+///       over. A link is a start and an end with its content between them, so the content coalesces
+///       normally while the markers stop a merge crossing the brackets -- which is CONVERSION_REFERENCE
+///       5.1's "coalesce runs *within* the hyperlink" without a rule of its own.
 enum IR_SPAN_KIND : ui8 {
-   IR_SPAN_TEXT = 0,  ///< A run of text with one set of formatting
-   IR_SPAN_BREAK,     ///< A hard line break inside the block
-   IR_SPAN_KIND_COUNT ///< Number of values above; not a kind
+   IR_SPAN_TEXT = 0,   ///< A run of text with one set of formatting
+   IR_SPAN_BREAK,      ///< A hard line break inside the block
+   IR_SPAN_LINK_START, ///< Opens a link; its destination is the span's dest
+   IR_SPAN_LINK_END,   ///< Closes the link the nearest IR_SPAN_LINK_START opened
+   IR_SPAN_IMAGE,      ///< An image: its alt text is the span's text, its source the span's dest
+   IR_SPAN_ANCHOR,     ///< A bookmark: a name a link may target, carried as the span's text
+   IR_SPAN_KIND_COUNT  ///< Number of values above; not a kind
 };
 
 /// Constant form of IR_SPAN_KIND, spelled per GCS r2.
 typedef const IR_SPAN_KIND cIR_SPAN_KIND;
+
+//== Span flags
+
+/// What a span's destination currently is, and whether the span will be emitted at all. A destination
+/// is rewritten twice on its way to the output -- LinkResolve turns a relationship id into a URL or a
+/// part name, and MediaPlan turns a part name into a relative file path -- so the flag says which stage
+/// it has reached rather than being guessed from the bytes.
+constexpr cui8 IR_SPAN_FLAG_NONE = 0x00u;
+constexpr cui8 IR_SPAN_FLAG_REL  = 0x01u; ///< The destination is a relationship id, not yet resolved
+constexpr cui8 IR_SPAN_FLAG_PART = 0x02u; ///< The destination is a package part name, not yet extracted
+constexpr cui8 IR_SPAN_FLAG_MUTE = 0x04u; ///< The span emits nothing: an anchor nothing links to
 
 /// One block. Its spans are a contiguous range, because a block is built to completion before the next
 /// one starts and nothing ever inserts into the middle of one.
@@ -71,13 +93,26 @@ struct IR_BLOCK {
    ui8           headingLevel; ///< 1 to 6 for a heading, 0 otherwise
 };
 
-/// One span. Text lives in the document's byte arena rather than in the record, so a span is sixteen
-/// bytes and an array of them is worth scanning.
+/// One span. Both of its byte ranges live in the document's arenas rather than in the record, so a span
+/// is twenty-four bytes and an array of them is still worth scanning.
+/// @note Only IR_SPAN_IMAGE uses both ranges at once -- its text is the alt text and its dest the source
+///       -- which is what settles the field pair rather than one range and a discriminator: a link start
+///       carries only a destination and an anchor only a name, and a record that held one range would
+///       need a second span to say the other.
+/// @note The two ranges address *different* arenas, and that is load-bearing rather than tidy. Every
+///       text span of a block lies end to end in the text arena, which is the invariant RunCoalescer
+///       merges on; a destination written between two runs would put a gap in the middle of it, and an
+///       anchor -- which CONVERSION_REFERENCE 5.1 says a merge must see straight through, because Word
+///       writes _GoBack in the middle of a paragraph -- would then stop the two halves of a word from
+///       ever coming back together.
 struct IR_SPAN {
-   ui32         textAt;    ///< Arena offset of the span's bytes
+   ui32         textAt;    ///< Text-arena offset of the span's bytes
    ui32         textBytes; ///< How many bytes they are; never NUL-terminated
+   ui32         destAt;    ///< Destination-arena offset of the span's destination, for the kinds with one
+   ui32         destBytes; ///< How many bytes it is; never NUL-terminated
    ui32         fmt;       ///< The IR_FMT bits in force
    IR_SPAN_KIND kind;      ///< What the span is
+   ui8          flags;     ///< The IR_SPAN_FLAG bits in force
 };
 
 /// Constant and pointer forms of the records, spelled per GCS r2/t2.
@@ -90,7 +125,8 @@ typedef const IR_SPAN  *cIR_SPANptr;
 struct IR_MARK {
    si32 block;  ///< The block's index, or -1 when it could not be started
    ui32 spanAt; ///< The span count when it started
-   ui64 heapAt; ///< The arena's used size when it started
+   ui64 heapAt; ///< The text arena's used size when it started
+   ui64 destAt; ///< The destination arena's used size when it started
 };
 
 /// Constant form of IR_MARK, spelled per GCS r2.
@@ -103,11 +139,14 @@ typedef const IR_MARK cIR_MARK;
 struct al32 IR_DOCUMENT {
    IR_BLOCKptr blocks;        ///< Every block, in document order
    IR_SPANptr  spans;         ///< Every span, grouped by block
-   chptr       heap;          ///< Every byte of text, addressed by offset
+   chptr       heap;          ///< Every byte of paragraph text, addressed by offset
+   chptr       dest;          ///< Every byte of every destination and anchor name, addressed by offset
    ui64        blockCapacity; ///< Records allocated at blocks
    ui64        spanCapacity;  ///< Records allocated at spans
    ui64        heapCapacity;  ///< Bytes allocated at heap
    ui64        heapUsed;      ///< Bytes of heap in use
+   ui64        destCapacity;  ///< Bytes allocated at dest
+   ui64        destUsed;      ///< Bytes of dest in use
    ui32        blockCount;    ///< Blocks in blocks
    ui32        spanCount;     ///< Spans in spans
    bool        failed;        ///< Whether any append ran out of memory; sticky once set
@@ -158,6 +197,11 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
 ///       hard-break marker with nothing after it, which is a stray backslash at the end of a line.
 /// @note A non-breaking space counts as content. CONVERSION_REFERENCE row 35 keeps U+00A0 verbatim, and
 ///       a paragraph holding one was written to hold something.
+/// @note An image counts as content and so does an anchor, because a paragraph holding nothing but a
+///       picture is a picture and one holding nothing but a bookmark is a link target. A link's own two
+///       markers do not: "[](url)" is a link with no text, which CONVERSION_REFERENCE 5.6 skips. An
+///       anchor is judged again by IrDropEmptyBlocks once LinkResolve has muted the ones nothing points
+///       at, which is the only way a block can be emptied after it was ended.
 cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark);
 
 /// Starts a span inside the block being built.
@@ -178,6 +222,44 @@ cbool IrAddSpan(IR_DOCUMENTptrc document, cIR_SPAN_KIND kind, cui32 fmt);
 ///       ends a run of character data -- so appending has to be possible after a span has been started.
 cbool IrAppendText(IR_DOCUMENTptrc document, cchptr bytes, cui64 byteCount);
 
+/// Appends bytes to the destination of the span most recently started.
+/// @param document   A prepared document.
+/// @param bytes      UTF-8 bytes; they are copied.
+/// @param byteCount  How many.
+/// @return true when they were appended, false when there is no span or the document could not grow.
+/// @note The twin of IrAppendText for the other of a span's two ranges. A destination is written once by
+///       the walker, so the two never interleave on one span -- which is what lets both be plain offsets
+///       into one arena rather than needing a range of their own.
+cbool IrAppendDest(IR_DOCUMENTptrc document, cchptr bytes, cui64 byteCount);
+
+/// Replaces the destination of one span, wherever it stands.
+/// @param document   A prepared document.
+/// @param index      Which span, as an index into the document's spans.
+/// @param bytes      UTF-8 bytes; they are copied to the end of the arena.
+/// @param byteCount  How many.
+/// @return true when the destination was replaced, false for an index outside the document or when the
+///         arena could not grow.
+/// @note The old bytes are left where they are rather than compacted. A destination is rewritten at most
+///       twice per span -- LinkResolve, then MediaPlan -- so the waste is bounded by the document's own
+///       link count, and compacting would move every offset in the arena.
+/// @note This appends to the arena after the walk has finished, which is safe only because RunCoalesce
+///       has already run: that pass is the one thing relying on a block's text spans lying end to end,
+///       and it checks the invariant rather than assuming it.
+/// @note The bytes may be inside the arena they are being copied into. That is what LinkResolve does
+///       when it puts a heading's slug on the anchor that reaches it, and growing the arena would
+///       otherwise free the block being read from; the offset is remembered across the growth.
+cbool IrSetDest(IR_DOCUMENTptrc document, cui32 index, cchptr bytes, cui64 byteCount);
+
+/// Appends bytes to the destination arena, for a pass that has to build one out of several pieces.
+/// @param document   A prepared document.
+/// @param bytes      UTF-8 bytes; they are copied.
+/// @param byteCount  How many.
+/// @return Where they landed, or -1 when the arena could not grow.
+/// @note LinkResolve stores a heading's slug here so that the anchor pointing at it and the index that
+///       deduplicates it can both address it by offset -- an offset survives the growth an address
+///       does not, which is what makes one arena serve a pass that keeps adding to it.
+csi64 IrStoreDest(IR_DOCUMENTptrc document, cchptr bytes, cui64 byteCount);
+
 /// Records where the document currently ends, so that a speculative walk can be undone.
 /// @param document  A prepared document.
 /// @return The current block count, span count and arena size.
@@ -197,6 +279,21 @@ void IrRewind(IR_DOCUMENTptrc document, cIR_MARK mark);
 /// @return The count, or 0 for a document that was never opened.
 cui32 IrBlockCount(cIR_DOCUMENTptr document);
 
+/// How many spans the document holds, over every block.
+/// @return The count, or 0 for a document that was never opened.
+cui32 IrSpanCount(cIR_DOCUMENTptr document);
+
+/// Whether a range of spans puts anything on the page.
+/// @param document  A prepared document.
+/// @param first     The first span of the range.
+/// @param last      One past its last span; a value beyond the document is clamped.
+/// @return true when the range holds an image, or text that is not all ASCII whitespace.
+/// @note An anchor does not count, which is the one place this and the emptiness test IrEndBlock
+///       applies come apart. The walker asks this to decide mapping row 25's horizontal rule, which
+///       is about a paragraph that came to nothing -- and a paragraph holding one bookmark did,
+///       even though the bookmark is reason enough to keep the block.
+cbool IrHasInk(cIR_DOCUMENTptr document, cui32 first, cui32 last);
+
 /// One block by index.
 /// @return The block, or null for an index outside the document.
 cIR_BLOCKptr IrBlockAt(cIR_DOCUMENTptr document, cui32 index);
@@ -212,10 +309,33 @@ cIR_SPANptr IrSpanAt(cIR_DOCUMENTptr document, cui32 index);
 ///       expressed through a const view, and neither is worth a second entry point per field.
 IR_BLOCKptr IrBlockMutable(IR_DOCUMENTptrc document, cui32 index);
 
-/// The bytes one arena offset names.
+/// One span by index, for a caller that has to rewrite it.
+/// @return The span, or null for an index outside the document.
+/// @note The mutable twin of IrSpanAt, and the same bargain IrBlockMutable strikes. LinkResolve mutes an
+///       anchor nothing points at and MediaPlan clears a destination's part flag; neither is a field a
+///       const view can reach, and neither is worth an entry point of its own.
+IR_SPANptr IrSpanMutable(IR_DOCUMENTptrc document, cui32 index);
+
+/// Drops every block that no longer holds anything worth emitting.
+/// @param document  A prepared document.
+/// @note IrEndBlock keeps the invariant the emitter rests on -- every block it is handed produces at
+///       least one byte -- and two M7 passes can break it after the fact: LinkResolve mutes an anchor
+///       nothing points at, and MediaPlan can leave an image with nothing to show. Re-testing every
+///       block here restores the invariant in one place rather than making the emitter carry a case for
+///       a block that emits nothing.
+/// @note Blocks keep their order and their spans; only the records move down over the dropped ones. The
+///       arena is not compacted, for the same reason IrSetDest does not compact it.
+void IrDropEmptyBlocks(IR_DOCUMENTptrc document);
+
+/// The bytes one text-arena offset names.
 /// @return The bytes, or an empty string when the arena is empty. Never null, never NUL-terminated at
 ///         the span's own end.
 cchptr IrText(cIR_DOCUMENTptr document, cui32 at);
+
+/// The bytes one destination-arena offset names.
+/// @return The bytes, or an empty string when the arena is empty. Never null, never NUL-terminated at
+///         the span's own end.
+cchptr IrDest(cIR_DOCUMENTptr document, cui32 at);
 
 /// Whether any append ran out of memory.
 /// @return true once an append has failed, and from then on. A failed document holds no usable IR.

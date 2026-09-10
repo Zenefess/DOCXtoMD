@@ -3,11 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-09-09
  * Description: The Markdown emitter: one growable UTF-8 buffer, line assembly and the delimiter rules.
- * To Do: 1) Emit the link, image and table-cell contexts at M7 and M9, which have no caller yet.
+ * To Do: 1) Emit the table-cell context at M9, which is the one escaping context with no caller left.
  *        2) Keep a per-line prefix stack when list items nest at M8 and a quote comes to hold one.
  *        3) Size the buffer from the part's byte count rather than growing from a fixed first block.
+ *        4) Emit an image's wp:extent size as an HTML img element where a document depends on it (row 23).
  * Dependencies: CliOptions.h, Ir.h, MdEscape.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -86,8 +87,9 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       spans and escaping the assembled line would escape that markup too. The two rules that depend
 ///       on seeing more than one span are handled by looking wider rather than by escaping later: the
 ///       ampersand lookahead is safe within a span because RunCoalescer has already merged every
-///       adjacent pair with equal formatting, so a split entity can only be separated by markup that
-///       stops it being one; and D12's dollar count is taken over the whole line and passed into each
+///       adjacent pair with equal formatting -- including, since it is run again after LinkResolve, the
+///       pairs a link's brackets separated until muting removed them -- so a split entity can only be
+///       separated by markup that stops it being one; and D12's dollar count is taken over the whole line and passed into each
 ///       span's escape call, which is what MdEscapeWrite's dollars argument is for.
 /// @note One consequence of grouping worth stating rather than discovering: `IrEndBlock` drops an empty
 ///       paragraph completely, so a blank Normal-styled line between two separate code samples leaves
@@ -116,6 +118,25 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       only safe once adjacent runs with equal formatting have been merged and whitespace hoisted out
 ///       of the span -- "**Hel****lo**" and "**bold **text" are what the two omissions produce -- and
 ///       this module assumes both, so it emits a delimiter pair around any formatted span it is given.
+/// @note It must also have been through LinkResolve and MediaPlan, and then IrDropEmptyBlocks. This
+///       module writes a link's destination exactly as it finds it and never looks a reference up, so a
+///       document that skipped those passes emits a relationship id where a URL belongs; and every block
+///       it is handed is assumed to produce at least one byte, which is what lets the blank line between
+///       two blocks be written before the second rather than unwound after it.
+/// @note What M7's four span kinds emit: a link is its content between brackets and its destination in
+///       parentheses, percent-encoded rather than backslash-escaped; an image is that with a '!' in
+///       front and its alt text between the brackets; an anchor is the raw "<a id>" element mapping row
+///       22 asks for. A span LinkResolve muted emits nothing at all -- a link with no destination or no
+///       content, an anchor nothing points at -- and a link that runs over a hard break is closed at the
+///       end of its line and opened again on the next, because Markdown cannot spell one that does.
+/// @note Two rules follow from a link needing to see more than the span it stands on. A hard break at the
+///       very *edge* of a link leaves one of its two halves with nothing between the brackets, and
+///       "[](url)" is a link a reader can neither see nor click, so that bracket is unwound rather than
+///       closed. And an exclamation mark immediately in front of a link's '[' is escaped: the pair is an
+///       image marker, so "see this!" followed by a link renders as a broken picture with the link text
+///       gone. That is CONVERSION_REFERENCE 4.2's pitfall 7, and MdEscape leaves the mark alone on
+///       purpose -- it is only dangerous next to a bracket this module itself writes, which is knowledge
+///       a run does not have.
 cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document);
 
 /// The emitted bytes.

@@ -3,9 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-08-27
  * Description: Unit tests for adjacent-run merging, whitespace hoisting and the order of the two.
- * To Do: 1) Add the hyperlink and field-result barriers when M7 and M10 stop a merge crossing one.
+ * To Do: 1) Add the field-result barrier when M10 stops a merge crossing one; M7's link barrier is
+ *           driven below, and an anchor's transparency to a merge beside it.
  *        2) Drive a document straight from IrAddSpan once a case needs a shape no body part produces.
  * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, RunCoalescer.h, StyleModel.h, typedefs.h
  * ISA: Scalar
@@ -32,7 +33,9 @@ static constexpr cchptr STYLE_SPAN  = "<w:style w:type=\"character\" w:styleId=\
 
 // The root element every body below is wrapped in, kept out of the helper so no line reaches the column
 // limit once the formatter has joined what it can.
-static constexpr cchptr COALESCE_HEAD = "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>";
+static constexpr cchptr COALESCE_HEAD = "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
+                                        " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+                                        " xmlns:v=\"urn:schemas-microsoft-com:vml\"><w:body>";
 static constexpr cchptr COALESCE_TAIL = "</w:body></w:document>";
 
 // The wrapper a styles part goes inside, for the cases that need one.
@@ -56,7 +59,9 @@ static void CoalesceAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr t
 }
 
 // Renders the coalesced representation into one compact trace, in the notation TestDocWalker uses and
-// two letters wider: c is a code span and the block letters are P, H<level>, Q, C and R.
+// two letters wider: c is a code span and the block letters are P, H<level>, Q, C and R. M7's span
+// kinds render the same way here: L(dest) and L) for a link, I(source)[alt] for an image, N(name) for
+// a bookmark anchor.
 static void CoalesceTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
    ui64 used = 0;
 
@@ -82,6 +87,21 @@ static void CoalesceTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes
          if(one->kind == IR_SPAN_BREAK) {
             CoalesceAppend(dest, destBytes, &used, "|");
             continue;
+         }
+         if(one->kind == IR_SPAN_LINK_END) {
+            CoalesceAppend(dest, destBytes, &used, "L)");
+            continue;
+         }
+         if(one->kind == IR_SPAN_LINK_START || one->kind == IR_SPAN_IMAGE || one->kind == IR_SPAN_ANCHOR) {
+            CoalesceAppend(dest, destBytes, &used, (one->kind == IR_SPAN_IMAGE ? "I" : (one->kind == IR_SPAN_ANCHOR ? "N" : "L")));
+            if(one->flags & IR_SPAN_FLAG_MUTE) CoalesceAppend(dest, destBytes, &used, "-");
+            CoalesceAppend(dest, destBytes, &used, "(");
+            for(ui32 byte = 0; byte < one->destBytes && used + 1u < destBytes; ++byte) {
+               dest[used++] = IrDest(document, one->destAt)[byte];
+            }
+            dest[used] = 0;
+            CoalesceAppend(dest, destBytes, &used, ")");
+            if(one->kind != IR_SPAN_IMAGE) continue;
          }
          if(one->fmt & IR_FMT_BOLD) CoalesceAppend(dest, destBytes, &used, "b");
          if(one->fmt & IR_FMT_ITALIC) CoalesceAppend(dest, destBytes, &used, "i");
@@ -162,11 +182,14 @@ void TestRunCoalescer(void) {
                    "<w:r><w:rPr><w:b/></w:rPr><w:t>lo</w:t></w:r></w:p>",
                    "P{b[Hello]}"));
    // A proofErr, a bookmark and an accepted insertion all fall between runs and none of them is a
-   // barrier: after the accept-all pass they are not there at all.
+   // barrier: after the accept-all pass the first and the last are not there at all, and the bookmark
+   // is a span the merge sees straight through. It comes out after the merged text rather than in the
+   // middle of it, because the merge extends the span in front of it -- a link resolves an anchor to
+   // the block it stands in, so which end of the paragraph it settles at costs nothing.
    CHECK(Coalesces("<w:p><w:proofErr w:type=\"spellStart\"/><w:r><w:t>a</w:t></w:r>"
                    "<w:bookmarkStart w:id=\"1\" w:name=\"x\"/><w:r><w:t>b</w:t></w:r>"
                    "<w:ins w:id=\"2\" w:author=\"A\"><w:r><w:t>c</w:t></w:r></w:ins></w:p>",
-                   "P{[abc]}"));
+                   "P{[abc]N(x)}"));
    // Unequal formatting is not merged, which is the other half of the rule.
    CHECK(Coalesces("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>b</w:t></w:r></w:p>", "P{b[a]i[b]}"));
    // A hard break is a barrier: the two sides are different lines and cannot be one span.
@@ -179,6 +202,42 @@ void TestRunCoalescer(void) {
    CHECK(Coalesces("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>A</w:t></w:r><w:r><w:rPr><w:b/><w:bCs/></w:rPr><w:t>B</w:t></w:r>"
                    "<w:r><w:rPr><w:bCs/></w:rPr><w:t>C</w:t></w:r></w:p>",
                    "P{b[ABC]}"));
+
+   CheckGroup("RunCoalescer: what a merge sees through and what stops it");
+   // An anchor is the one span kind a merge reads straight past, and CONVERSION_REFERENCE 5.1 is why:
+   // Word writes _GoBack in the middle of a paragraph, between two fragments of one word, and a merge
+   // that stopped there would emit "**Hel****lo**" exactly as the run fragmentation itself does.
+   CHECK(Coalesces("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hel</w:t></w:r>"
+                   "<w:bookmarkStart w:id=\"1\" w:name=\"_GoBack\"/>"
+                   "<w:r><w:rPr><w:b/></w:rPr><w:t>lo</w:t></w:r></w:p>",
+                   "P{b[Hello]N(_GoBack)}"));
+   // Several of them in a row is the shape that matters, and not only because a producer writes it:
+   // the anchors pile up behind the span every later run merges into, so a pass that looked for its
+   // merge target by stepping back over them would be quadratic in the paragraph's own length.
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r><w:bookmarkStart w:id=\"1\" w:name=\"p\"/>"
+                   "<w:r><w:t>b</w:t></w:r><w:bookmarkStart w:id=\"2\" w:name=\"q\"/>"
+                   "<w:r><w:t>c</w:t></w:r><w:bookmarkStart w:id=\"3\" w:name=\"r\"/>"
+                   "<w:r><w:t>d</w:t></w:r></w:p>",
+                   "P{[abcd]N(p)N(q)N(r)}"));
+   // An image is a barrier and an anchor behind one does not reopen the merge across it.
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r>"
+                   "<w:r><w:pict><v:shape alt=\"i\"><v:imagedata r:id=\"rId2\"/></v:shape></w:pict></w:r>"
+                   "<w:bookmarkStart w:id=\"1\" w:name=\"p\"/><w:r><w:t>b</w:t></w:r></w:p>",
+                   "P{[a]I(rId2)[i]N(p)[b]}"));
+   // A link is the opposite case and must stop one: text on either side of a bracket is not adjacent
+   // in the output, and joining it would carry bytes across a boundary the reader can see.
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r>"
+                   "<w:hyperlink r:id=\"rId5\"><w:r><w:t>b</w:t></w:r></w:hyperlink>"
+                   "<w:r><w:t>c</w:t></w:r></w:p>",
+                   "P{[a]L(rId5)[b]L)[c]}"));
+   // Runs *inside* one link still merge, which is the half of 5.1 the brackets do not touch.
+   CHECK(Coalesces("<w:p><w:hyperlink r:id=\"rId5\"><w:r><w:t>a</w:t></w:r>"
+                   "<w:r><w:t>b</w:t></w:r></w:hyperlink></w:p>",
+                   "P{L(rId5)[ab]L)}"));
+   // Whitespace still hoists out of a formatted span inside a link, so the delimiter can parse.
+   CHECK(Coalesces("<w:p><w:hyperlink r:id=\"rId5\"><w:r><w:rPr><w:b/></w:rPr>"
+                   "<w:t xml:space=\"preserve\">a </w:t></w:r><w:r><w:t>b</w:t></w:r></w:hyperlink></w:p>",
+                   "P{L(rId5)b[a][ b]L)}"));
 
    CheckGroup("RunCoalescer: hoisting whitespace out of a formatted span");
    // CONVERSION_REFERENCE 5.3: "**bold **text" does not parse, so the space moves outside the span.

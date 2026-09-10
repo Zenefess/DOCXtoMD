@@ -5,8 +5,9 @@
  * Created: 2026-08-25
  * Last Modified: 2026-08-25
  * Description: Unit tests for the output-path derivation D7b's operand grammar rests on.
- * To Do: 1) Add the media-directory derivation when M7 has one to derive.
- *        2) Add a case per CONVERT_TARGET reason once M13's Batch owns the pre-flight loop.
+ * To Do: 1) Add a case per CONVERT_TARGET reason once M13's Batch owns the pre-flight loop.
+ *        2) Take the media-directory cases back from TestMediaExtractor if a reader ever looks for them
+ *           here: ConvertMediaDir is Convert's, but what it derives is the media layer's business.
  * Dependencies: BuildGuards.h, Check.h, Convert.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant

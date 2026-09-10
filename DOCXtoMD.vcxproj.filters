@@ -36,7 +36,13 @@
     <ClCompile Include="src\Ir.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\LinkResolver.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\MediaExtractor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\MdEmitter.cpp">
@@ -105,6 +111,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\Ir.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\LinkResolver.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\MediaExtractor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\MdEmitter.h">
