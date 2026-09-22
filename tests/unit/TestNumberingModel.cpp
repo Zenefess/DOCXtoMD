@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-10
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: Unit tests for the numbering part: indirection, overrides, delegation and the counters.
  * To Do: 1) Drive a second part's counters once M10 walks footnotes, which is where the question of
  *           whether they share one table becomes answerable rather than merely stated.
@@ -270,6 +270,47 @@ void TestNumberingModel(void) {
                                    "<x:num x:numId=\"2\"><x:abstractNumId x:val=\"0\"/></x:num></x:numbering>",
                          141u, nullptr) == NUM_OK);
       CHECK(NumFind(&model, 2) == 0);
+      NumClose(&model);
+   }
+   {
+      NUM_MODEL model;
+      // Every numeric attribute padded with leading zeros, which ST_DecimalNumber allows because it is
+      // an xsd:integer. A cap on the value's *length* discarded all of them at once and said nothing:
+      // the w:num lost its w:abstractNumId, so the definition behind it went missing and 5.4 degraded
+      // every level to a bullet. DocWalker's twin reader had the same defect on a w:pPr.
+      cchptr padded = "<w:abstractNum w:abstractNumId=\"0000000001\"><w:lvl w:ilvl=\"000\">"
+                      "<w:start w:val=\"0007\"/><w:numFmt w:val=\"decimal\"/></w:lvl></w:abstractNum>"
+                      "<w:num w:numId=\"000000000004\"><w:abstractNumId w:val=\"0000000001\"/></w:num>";
+
+      NumOpen(&model);
+      CHECK(NumTestLoad(&model, padded, nullptr) == NUM_OK);
+      CHECK(NumFind(&model, 4) >= 0);
+      {
+         cNUM_STEP steps[] = {{4, 0}, {4, 0}};
+
+         CHECK(NumTestMarkers(&model, steps, 2u, "07! 08 "));
+      }
+      NumClose(&model);
+   }
+   {
+      NUM_MODEL model;
+      // The sign branch is why this reader cannot simply be DocReadDecimal, and a padded negative is
+      // where the branch and the cap meet: thirteen characters, so the old cap refused it outright and
+      // the override never fired at all. NumReadOverride clamps a negative start to zero, so the item
+      // numbers from 0 rather than from the definition's own 7.
+      cchptr signed_ = "<w:abstractNum w:abstractNumId=\"1\"><w:lvl w:ilvl=\"0\">"
+                       "<w:start w:val=\"7\"/><w:numFmt w:val=\"decimal\"/></w:lvl></w:abstractNum>"
+                       "<w:num w:numId=\"5\"><w:abstractNumId w:val=\"1\"/>"
+                       "<w:lvlOverride w:ilvl=\"0\"><w:startOverride w:val=\"-000000000003\"/>"
+                       "</w:lvlOverride></w:num>";
+
+      NumOpen(&model);
+      CHECK(NumTestLoad(&model, signed_, nullptr) == NUM_OK);
+      {
+         cNUM_STEP steps[] = {{5, 0}, {5, 0}};
+
+         CHECK(NumTestMarkers(&model, steps, 2u, "00! 01 "));
+      }
       NumClose(&model);
    }
    {

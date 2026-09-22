@@ -424,6 +424,15 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- **A padded value in `numbering.xml` is read again.** `NumParseValue` capped a `w:val` at eleven
+  characters -- ten digits and a sign -- which is the defect below, one layer further in. All eight of
+  its callers seed their destination with -1 and ignore the result, so every discard was silent: a
+  padded `w:abstractNumId` left a `w:num` with no definition behind it and 5.4 bulleted every level of
+  the list, a padded `w:numId` left an instance nothing could resolve, and a padded `w:start`,
+  `w:ilvl`, `w:lvlRestart` or `w:startOverride` lost whatever it specified. The cap is gone and the
+  overflow test is the only bound. The sign branch stays -- it is the one thing this reader has that
+  the other two have no need of, and a padded *negative* `w:startOverride` is where the branch and the
+  cap met, thirteen characters that the cap refused outright so that the override never fired.
 - **A padded `w:outlineLvl`, `w:ilvl` or `w:numId` on a paragraph is read again.** `DocReadDecimal`
   capped the value's *length* -- two characters for a level, ten for an identifier -- so
   `<w:outlineLvl w:val="007"/>` written directly on a `w:pPr` stopped being read and the paragraph
@@ -431,7 +440,7 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   an ST_DecimalNumber, which is an xsd:integer. M8 found this in the *style* path and dropped
   `StyleReadDecimal`'s cap; the walker's twin kept its own, so direct formatting still refused what a
   style accepted. The cap is gone and the overflow test that was always there is the only bound, which
-  is what the two readers now share. A `w:ilvl` of 100 or more is clamped to 8 rather than discarded,
+  is what all three of the project's decimal readers now share. A `w:ilvl` of 100 or more is clamped to 8 rather than discarded,
   which is what the call site's own comment always said it did.
 - The comment on `NumResolveDelegates` described a guard the function does not have. It opened "Two
   guards, and both are needed" and credited a visited set with making a delegation loop unresolvable.

@@ -76,11 +76,18 @@ static cui32 NumHash(csi32 value) {
 
 // Reads an attribute as a decimal integer, reporting whether it was one.
 //
-// A value that is absent, empty, over-long or not all digits leaves the destination alone, which is what
-// keeps "unspecified" and "zero" apart: w:numId 0 is a specification of "no numbering" and a sentinel of
-// 0 for an absence would silently un-cancel it.
+// A value that is absent, empty or not all digits leaves the destination alone, which is what keeps
+// "unspecified" and "zero" apart: w:numId 0 is a specification of "no numbering" and a sentinel of 0
+// for an absence would silently un-cancel it.
 static cbool NumParseValue(cXML_TEXT value, si32ptrc out) {
-   if(!value.bytes || !value.length || value.length > 11u) return false;
+   // No cap on how many characters are read, for DocReadDecimal's reason: every value here is an
+   // ST_DecimalNumber, which is an xsd:integer, and leading zeros are legal in one. A cap on the
+   // value's *length* rather than on its magnitude discards a legal value, and the discard is silent
+   // at all eight call sites, each of which seeds its destination with -1 and ignores the result: a
+   // padded w:abstractNumId left a w:num with no definition and bulleted the whole list, and a padded
+   // w:numId left an instance nothing could resolve. The overflow test below is the real bound, and
+   // the sign branch is why this reader cannot simply be DocReadDecimal.
+   if(!value.bytes || !value.length) return false;
 
    si64 parsed   = 0;
    ui64 at       = 0;
