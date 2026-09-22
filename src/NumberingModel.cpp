@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-10
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: Numbering part parsing, delegation chasing, override folding and the counter pass.
  * To Do: 1) Share one open-addressed index builder with StyleModel and OpcPackage, which write the
  *           same probe three times over.
@@ -418,9 +418,11 @@ static csi32 NumLookup(csi32ptr keys, cui32 count, csi32ptr buckets, cui32 mask,
 // style, that style's own w:pPr/w:numPr names a numId, that numId names a w:num, and that w:num names
 // the abstract definition holding the levels -- which carries a w:styleLink saying so.
 //
-// Two guards, and both are needed. A depth cap terminates, but on its own a two-step loop chased to the
-// cap resolves to an arbitrary member of the loop rather than to nothing, and which member it lands on
-// would depend on the parity of the cap. The visited set is what makes a loop unresolvable instead.
+// One guard, and the depth cap is it. A bare cap would leave a two-step loop resolving to an arbitrary
+// member of itself, on a parity the cap's own value decides -- but every way of leaving this walk bar
+// the one that finds a definition carrying levels leaves delegate at -1, so a loop runs the cap out
+// and lands on the same answer a visited set would have given sixteen steps earlier. The comment on
+// the cap itself, below, says that from the other side.
 static void NumResolveDelegates(NUM_MODELptrc model, cSTYLE_MODELptr styles, csi32ptr keys, csi32ptr buckets, cui32 mask) {
    for(ui32 index = 0; index < model->abstractCount; ++index) {
       si32 walk  = si32(index);

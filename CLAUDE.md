@@ -927,12 +927,9 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
 At M8 they return **133**, **94** and **1334** checks, over the **71** fixtures `make_fixtures.py`
-builds. Those four numbers are the **shim's**, measured on Linux, and M8 has not been run on Windows
-yet: the milestone is `[done-unverified]` and this line is what the next Windows session checks
-against. M7's four were confirmed on Windows on 2026-09-09 and returned 125, 86 and 1195 over 67
-fixtures, which is exactly what the shim had measured beforehand, as has been true at every milestone
-since M3. The three check counts are the interesting
-ones; the fixture count is not evidence of anything -- `make_fixtures.py` is the same Python
+builds. All four were confirmed on Windows on 2026-09-22. The three check counts are the interesting
+ones: they are what the shim had measured on Linux beforehand, exactly, as they have been at every
+milestone since M3. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
 on both platforms -- and is recorded only so a run that builds a different number is noticed.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
@@ -2119,9 +2116,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   claims found that a *muted* link still separated the two runs it stood between, so a bold run either
   side of one emitted `**A****B**` and an entity split across it went unescaped. The three tallies are
   unchanged -- the fix adds two paragraphs to an existing fixture and no new check -- so what the owner
-  ran still describes the tree, but the changed `RunCoalescer`, `Convert` and `MdEmitter` have not been
-  through `/W3`. The marker stays `[done]` on M5's precedent: a verification record is of what was run,
-  and a later bug fix does not un-verify a milestone.
+  ran still describes the tree. The marker stays `[done]` on M5's precedent: a verification record is of
+  what was run, and a later bug fix does not un-verify a milestone. The gap that left -- the changed
+  `RunCoalescer`, `Convert` and `MdEmitter` never having been through `/W3` -- was closed by M8's
+  Windows run on 2026-09-22, which built all three clean along with the rest of the solution.
   - **The three tallies are the shim's, exactly.** 125, 86 and 1195, the same three numbers in the same
     order a Linux session measured before any of this reached a Windows machine. That is the fifth
     milestone running where the shim predicted the real MSVC binary rather than only itself -- and it is
@@ -2214,17 +2212,28 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     `DOCXtoMD.vcxproj`, which is the honest statement of it: the suites run under both sanitizers on
     Linux and under neither on Windows, and turning `/fsanitize=address` on for a Debug build would be
     worth a decision of its own rather than a quiet edit.
-- **M8 `[done-unverified]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne
+- **M8 `[done]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne
   numPr). DoD: the milestone names no commands of its own, so the global five apply; `tests/fixtures/lists`,
   `listcounters`, `listbroken` and `liststyles` are the fixture pairs bullet 4 asks for.
-  **Status**: the code landed from Linux on 2026-09-10 and **has not been built or run on Windows**, so
-  the marker is `[done-unverified]` and the next Windows session verifies rather than reimplements it.
-  What that session must run, and what each returned on the shim beforehand:
-  `msbuild DOCXtoMD.sln /m /p:Configuration=Release /p:Platform=x64` and the same for `Debug`, both of
-  which must build with **no warnings** at `/W3`; `python tests\make_fixtures.py`, which must build **71**
-  fixtures; `python tests\run_container.py` against `x64\Release` and again against `x64\Debug`, **133**
-  checks each; `python tests\run_golden.py`, **94**; and `tests\x64\Release\DOCXtoMD.Tests.exe`, **1334**.
-  Nothing here has been through `/W3`, `/sdl`, `/RTCu`, `/arch:AVX2` or the real `include/` headers.
+  **Status**: the code landed from Linux on 2026-09-10 as `[done-unverified]`, and the owner verified it
+  on Windows on 2026-09-22. Both x64 configurations build with **zero errors and zero warnings**;
+  `python tests\make_fixtures.py` builds all **71** fixtures; `python tests\run_container.py` passes all
+  **133** checks against `x64\Release` and all **133** again against `x64\Debug`;
+  `python tests\run_golden.py` passes all **94**; and `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
+  **1334**. Those six runs discharge the two global bullets no Linux session can reach: bullet 1, zero
+  warnings at `/W3`, and bullet 4, where `run_golden.py` byte-compares the `lists`, `listcounters`,
+  `listbroken` and `liststyles` pairs against an `expected.md` written by hand from the specification
+  before the converter was run at it. Bullets 2, 3 and 5 are mechanical and were checked on Linux, so
+  the marker is `[done]` with nothing outstanding.
+  - **The three tallies are the shim's, exactly.** 133, 94 and 1334, the same three numbers in the same
+    order a Linux session measured before any of this reached a Windows machine, and the fixture count
+    with them. That is the **sixth** milestone running where the shim predicted the real MSVC binary
+    rather than only itself -- and it is worth what it costs precisely because it proves nothing about
+    `/W3`, `/sdl`, `/arch:AVX2` or the real `include/` headers, which is what the owner's run covers
+    instead. The Debug run carries its own half of that: `/RTCu` is where an indeterminate read
+    surfaces, which is how M7's was caught, and Debug is where `mzero`'s aligned 256-bit path over the
+    one `al32` structure M8 adds -- `NUM_MODEL`, pinned by its own `static_assert` -- would fault had
+    the alignment been lost.
   - **What the milestone is, in one line**: a paragraph's `w:numPr` becomes a Markdown list item, with
     real computed numbers, the whole `w:num`/`w:abstractNum`/`w:numStyleLink` indirection behind it,
     `w:lvlOverride`/`w:startOverride`/`w:lvlRestart`, and numbering that arrives through a style chain.
@@ -2282,15 +2291,18 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     demoted a heading to body text. Every one is fixed, and every one is pinned.
   - **Every rule this milestone introduced was mutation-tested**, the way M6 established and M7 repeated:
     the rule is deleted or inverted and all three suites are run over it, and a rule no suite notices is
-    a rule covered by nothing. **Every one of the eight defects above was pinned by nothing when it was
+    a rule covered by nothing. **Every one of the nine defects above was pinned by nothing when it was
     found** — the suites were green with the bug in place, which is exactly what the technique is for —
     and each now fails at least one suite, most of them two. The mutations were applied and the suites
     run by hand rather than by a harness, which is M7's own lesson about trusting the tool that checks.
-  - **What a Linux session cannot reach here**, and what the next Windows session therefore owes: `/W3`
+  - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/W3`
     and its zero-warnings requirement, `/sdl`, `/RTCu`, `/arch:AVX2`, the real `include/` headers, and
     whether `mzero`'s aligned 256-bit path behaves over the one `al32` structure M8 adds — `NUM_MODEL`,
-    pinned by its own `static_assert` like every other. The shim is stricter than Windows where it
-    cannot be identical, and it is not a substitute for any of that.
+    pinned by its own `static_assert` like every other. All of it is now covered: both configurations
+    build warning-free and all six commands return what the shim returned. The shim is stricter than
+    Windows where it cannot be identical, and it was never a substitute for any of that -- what stays
+    Linux-only is the other half of the pair, AddressSanitizer and UndefinedBehaviorSanitizer, neither
+    of which is switched on in `DOCXtoMD.vcxproj`.
 - **M9 `[todo]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.
   `MD_CONTEXT_TABLE_CELL` is the last escaping context with no caller, and it is still provisional. Two
   things M6 built assume no paragraph nests inside another and have to be revisited here: `DocWalker`'s

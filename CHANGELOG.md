@@ -343,6 +343,14 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   type-qualified style roles cost nothing they should not.
 
 ### Fixed
+- The comment on `NumResolveDelegates` described a guard the function does not have. It opened "Two
+  guards, and both are needed" and credited a visited set with making a delegation loop unresolvable.
+  That set was removed during M8's own review, once it was found that it could never change an outcome:
+  every way of leaving the walk but the one that finds a definition carrying levels leaves `delegate` at
+  -1, so a loop runs the depth cap out and lands exactly where the set would have put it sixteen steps
+  earlier. The comment fifteen lines below it already said so, so the file contradicted itself about its
+  own cycle guard. Comment only -- no behaviour changes, and the three suites return the same 133, 94
+  and 1334.
 - **A list that restarts after a nested item no longer merges into the list above it.** Mapping row 17's
   `<!-- -->` is written when an item begins a list a reader already has open at its depth, and M8 asked
   that of the block *immediately above* -- which, for the item after a nested one, sits a level deeper.
