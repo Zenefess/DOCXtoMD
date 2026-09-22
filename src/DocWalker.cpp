@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: The body walk: wrappers, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
@@ -777,12 +777,18 @@ static cbool DocReadBorders(DOC_CONTEXTptrc context, boolptrc rule) {
 }
 
 // Reads the w:val of the element the reader is on as a decimal integer, reporting whether it was one.
-// A value that is absent, empty, over-long or not all digits leaves the destination alone, which is
-// what keeps "the paragraph said nothing" apart from "the paragraph said zero".
-static cbool DocReadDecimal(DOC_CONTEXTptrc context, cui64 maxDigits, si32ptrc out) {
+// A value that is absent, empty or not all digits leaves the destination alone, which is what keeps
+// "the paragraph said nothing" apart from "the paragraph said zero".
+static cbool DocReadDecimal(DOC_CONTEXTptrc context, si32ptrc out) {
    cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
 
-   if(!value.bytes || !value.length || value.length > maxDigits) return false;
+   // No cap on how many digits are read, because ST_DecimalNumber is an xsd:integer and leading zeros
+   // are legal in one. A cap on the value's *length* rather than on its magnitude turns "007" into a
+   // refusal, and every refusal here is silent: a padded w:outlineLvl stopped being a heading, and a
+   // padded w:ilvl lost the level it named. StyleModel's twin dropped its own cap during M8 for this
+   // reason; this is the other half of it. The overflow test below is the real bound and it stops
+   // after ten significant digits whatever the value is padded to.
+   if(!value.bytes || !value.length) return false;
 
    si64 parsed = 0;
 
@@ -814,13 +820,13 @@ static cbool DocReadNumbering(DOC_CONTEXTptrc context, DOC_NUM_REFptrc num) {
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
       if(token != XML_TOKEN_START_ELEMENT) continue;
       if(XmlIsElement(context->reader, XML_NS_W, "numId")) {
-         DocReadDecimal(context, 10u, &num->numId);
+         DocReadDecimal(context, &num->numId);
       } else if(XmlIsElement(context->reader, XML_NS_W, "ilvl")) {
          si32 parsed = 0;
 
          // 0 to 8 is every level the schema has. A deeper one is malformed and is clamped rather than
          // refused, which is CONVERSION_REFERENCE 5.4's whole treatment of a broken numbering value.
-         if(DocReadDecimal(context, 2u, &parsed)) num->level = (parsed > 8 ? 8 : parsed);
+         if(DocReadDecimal(context, &parsed)) num->level = (parsed > 8 ? 8 : parsed);
       }
       if(!XmlSkipElement(context->reader)) return false;
    }
@@ -852,7 +858,7 @@ static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style,
          si32 parsed = 0;
 
          // 9 is body text and anything past it is malformed, so neither is a heading level.
-         if(DocReadDecimal(context, 2u, &parsed) && parsed <= 9) *outline = parsed;
+         if(DocReadDecimal(context, &parsed) && parsed <= 9) *outline = parsed;
       }
       if(!XmlSkipElement(context->reader)) return false;
    }

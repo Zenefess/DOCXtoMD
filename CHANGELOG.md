@@ -341,8 +341,107 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   that compare against it) and `relocated` gain `**bold**` and `**fails**`, and `nostyles` gains
   `***...***`. Every other case is byte-identical, which is what says the escaping restructure and the
   type-qualified style roles cost nothing they should not.
+- `docs/CONVERSION_REFERENCE.md` 5.12 no longer says to "replace invalid sequences with U+FFFD rather
+  than aborting". It says to refuse a part that is not valid UTF-8, naming the part and which rule the
+  bytes broke, which is what the code has always done and what decision D8 ruled. This is the edit the ruling was for:
+  until it, two governing documents told a session opposite things and CLAUDE.md had to carry a standing
+  note not to "fix" either one toward the other. That note is gone with the conflict.
+- `docs/CONVERSION_REFERENCE.md`'s path-traversal bullet now separates the two halves that decision D10
+  found tangled: a relationship **target** of a traversal shape has been refused since M4, while what a
+  ZIP **entry name** of that shape should do is deferred to M11 by the ruling.
+- The roadmap entries for **M11** and **M12** carry the work D10 and D11 handed them, with a definition of
+  done each, so a deferred decision is a scheduled task rather than a note. M11 may not close without
+  recording an answer on entry names; M12's validator must hold `include/`'s exemption in the validator
+  itself rather than only in the CI invocation, so running it by hand cannot produce a different verdict.
+- The `To Do` items that named an unruled decision now name the milestone that owns the work:
+  `Utf.h` drops its "substitute U+FFFD should D8 be ruled that way" item outright, and `ZipReader.h`,
+  `ZipReader.cpp` and `OpcPackage.cpp` point their entry-name items at M11. `OpcPackage.cpp`'s item cited
+  **D9** for a question that was always **D10**'s; that miscitation is corrected.
+- `main.cpp`'s per-input check is a **package** probe rather than a container probe. It resolves the main
+  document part through `_rels/.rels`, loads it through the validating loader, tokenizes it end to end and
+  reports the entry count, the resolved part with its size and element count, and which of styles,
+  numbering, settings, footnotes, endnotes and comments the main part relates to. `src/` now holds no
+  literal part name but the two ISO/IEC 29500-2 guarantees. The two closes are on one path, because the
+  package borrows the reader and a per-branch close would turn the next branch anyone adds into a
+  use-after-free.
+- Every package failure names the part it happened in: `not a valid DOCX; a part is malformed XML, in
+  word/document.xml`. A message that says only that *something* is wrong is not a clear message when a
+  package holds a dozen parts.
+- `Diag`'s local `WideCharToMultiByte` is gone; wide arguments cross to UTF-8 through `Utf` like
+  everything else, which is what the M4 roadmap entry asked for. Its prolog's `To Do` item 2 retires with
+  it.
+- `no-document.docx` inverts from exit 5 to exit 3. At M3 a package missing `word/document.xml` was sound,
+  because only the two guaranteed entry points were required; at M4 `_rels/.rels` names that part and the
+  archive does not contain it, so the package is refused. That inversion is the clearest single sign that
+  the main part is now resolved rather than assumed.
+- The expectation table carries a **`sound`** flag beside the exit code, and `run_container.py`'s
+  independent `zipfile` cross-check selects on it. Until M4 "is this a well-formed ZIP" and "does this
+  exit 5" were the same question; a package can now be a perfectly good archive and still not be a DOCX,
+  and without the flag every new package-level negative would have dropped silently out of the
+  cross-check. The dead body comparison beside it — which compared a value against itself for every row
+  that was not in `SAME_BODY` — is gone.
+
+- `DOCXtoMD.cpp` no longer includes `<iostream>`; it includes `typedefs.h` — resolved through
+  the project's `$(ProjectDir)include` search path — and returns `si32` per r1. A note records that
+  r11 does not reach `main`: the entry point is spelled by the language, not chosen by the author.
+- Source and MSBuild files are now stored in the repository with LF and materialised as CRLF
+  in the working tree. The bytes a checkout produces are unchanged.
+- Exit codes are a named enum (`EXIT_CODE` in `src/Diag.h`) rather than prose in a document. M2 can
+  return 0 (`--help`, `--version`), 1 (usage error), 2 (an input that cannot be opened) and 5. It
+  returns 5, not 0, when the input is readable: the converter arrives across M3 to M11, and exit
+  code 0's published contract is "all inputs converted", which this build cannot honour. `CliParse`
+  returns an `EXIT_CODE` rather than a bool so that a failed allocation reports 5 without printing the
+  usage text — the command line was not the problem — while a real usage error still reports 1 with it.
+- The `--stdout` line of the Target CLI block in `CLAUDE.md` uses an ASCII hyphen where it used an em
+  dash, so the block and the program's usage text are now byte-identical. The sources carry no BOM and
+  the project does not pass `/utf-8`, so a non-ASCII byte in a narrow literal would be read in whatever
+  code page the compiler is running under.
+- `main.cpp`'s per-input check is now a container probe rather than a `CreateFileW` readability test.
+  It opens the input as an OPC package, requires the two part names ISO/IEC 29500-2 guarantees
+  (`[Content_Types].xml` and `_rels/.rels`), inflates and CRC-verifies them, and inflates
+  `word/document.xml` as well when it happens to be there — purely to exercise the inflater on a real
+  stream, since nothing is resolved through relationships until M4's `OpcPackage`. A sound container
+  still exits 5: the converter arrives across M4 to M11, and exit code 0's contract is "all inputs
+  converted".
+- A run in which several inputs fail now returns the **highest** of their per-file verdicts. Exit code 6
+  stays unreachable, because D7c reserves it for a run that converted something.
+
+- A sound container no longer exits 5 saying the converter does not exist. It converts, writes its
+  Markdown and exits 0, and `tests/make_fixtures.py`'s expectation table says so for twenty-four
+  fixtures -- the nineteen sound packages M4 left expecting 5, and the five golden cases M5 adds.
+  The `sound` flag's default moved with it, from `code == 5` to `code == 0`.
+- `src/main.cpp` is wiring again: the M4 package probe is gone, and the per-input loop calls
+  `ConvertFile`.
+- `StyleModel` and `DocWalker` report a container or encoding refusal with the package's own sentence
+  and the package's own exit code, rather than folding every one of them into "the part could not be
+  read" and exit 3. A failed allocation while reading a part is this program's fault, not the
+  document's.
+- Mapping row 1's ruling — heading text is never additionally bolded — is now kept in the walker, which
+  clears the bold bit on a heading's spans. `IR_FMT` is the only channel the emitter has, so leaving it
+  set would have M6 wrapping every heading in delimiters its style already carries.
+- `-o` with a trailing separator names a directory even when there is one input. No Windows file name
+  may end in a separator, so the other reading names something that cannot exist. A session-derived
+  refinement of D7d rather than a departure from it.
 
 ### Fixed
+- **A padded value in `numbering.xml` is read again.** `NumParseValue` capped a `w:val` at eleven
+  characters -- ten digits and a sign -- which is the defect below, one layer further in. All eight of
+  its callers seed their destination with -1 and ignore the result, so every discard was silent: a
+  padded `w:abstractNumId` left a `w:num` with no definition behind it and 5.4 bulleted every level of
+  the list, a padded `w:numId` left an instance nothing could resolve, and a padded `w:start`,
+  `w:ilvl`, `w:lvlRestart` or `w:startOverride` lost whatever it specified. The cap is gone and the
+  overflow test is the only bound. The sign branch stays -- it is the one thing this reader has that
+  the other two have no need of, and a padded *negative* `w:startOverride` is where the branch and the
+  cap met, thirteen characters that the cap refused outright so that the override never fired.
+- **A padded `w:outlineLvl`, `w:ilvl` or `w:numId` on a paragraph is read again.** `DocReadDecimal`
+  capped the value's *length* -- two characters for a level, ten for an identifier -- so
+  `<w:outlineLvl w:val="007"/>` written directly on a `w:pPr` stopped being read and the paragraph
+  silently became body text, and a padded `w:ilvl` lost the level it named. Leading zeros are legal in
+  an ST_DecimalNumber, which is an xsd:integer. M8 found this in the *style* path and dropped
+  `StyleReadDecimal`'s cap; the walker's twin kept its own, so direct formatting still refused what a
+  style accepted. The cap is gone and the overflow test that was always there is the only bound, which
+  is what all three of the project's decimal readers now share. A `w:ilvl` of 100 or more is clamped to 8 rather than discarded,
+  which is what the call site's own comment always said it did.
 - The comment on `NumResolveDelegates` described a guard the function does not have. It opened "Two
   guards, and both are needed" and credited a visited set with making a delegation loop unresolvable.
   That set was removed during M8's own review, once it was found that it could never change an outcome:
@@ -882,92 +981,6 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - Exit code 6. A run that converted at least one input and failed at least one now returns it, as D7c
   says it should. The failures name themselves where they happen, so 6 is a summary rather than the
   only diagnosis.
-
-### Changed
-
-- `docs/CONVERSION_REFERENCE.md` 5.12 no longer says to "replace invalid sequences with U+FFFD rather
-  than aborting". It says to refuse a part that is not valid UTF-8, naming the part and which rule the
-  bytes broke, which is what the code has always done and what decision D8 ruled. This is the edit the ruling was for:
-  until it, two governing documents told a session opposite things and CLAUDE.md had to carry a standing
-  note not to "fix" either one toward the other. That note is gone with the conflict.
-- `docs/CONVERSION_REFERENCE.md`'s path-traversal bullet now separates the two halves that decision D10
-  found tangled: a relationship **target** of a traversal shape has been refused since M4, while what a
-  ZIP **entry name** of that shape should do is deferred to M11 by the ruling.
-- The roadmap entries for **M11** and **M12** carry the work D10 and D11 handed them, with a definition of
-  done each, so a deferred decision is a scheduled task rather than a note. M11 may not close without
-  recording an answer on entry names; M12's validator must hold `include/`'s exemption in the validator
-  itself rather than only in the CI invocation, so running it by hand cannot produce a different verdict.
-- The `To Do` items that named an unruled decision now name the milestone that owns the work:
-  `Utf.h` drops its "substitute U+FFFD should D8 be ruled that way" item outright, and `ZipReader.h`,
-  `ZipReader.cpp` and `OpcPackage.cpp` point their entry-name items at M11. `OpcPackage.cpp`'s item cited
-  **D9** for a question that was always **D10**'s; that miscitation is corrected.
-- `main.cpp`'s per-input check is a **package** probe rather than a container probe. It resolves the main
-  document part through `_rels/.rels`, loads it through the validating loader, tokenizes it end to end and
-  reports the entry count, the resolved part with its size and element count, and which of styles,
-  numbering, settings, footnotes, endnotes and comments the main part relates to. `src/` now holds no
-  literal part name but the two ISO/IEC 29500-2 guarantees. The two closes are on one path, because the
-  package borrows the reader and a per-branch close would turn the next branch anyone adds into a
-  use-after-free.
-- Every package failure names the part it happened in: `not a valid DOCX; a part is malformed XML, in
-  word/document.xml`. A message that says only that *something* is wrong is not a clear message when a
-  package holds a dozen parts.
-- `Diag`'s local `WideCharToMultiByte` is gone; wide arguments cross to UTF-8 through `Utf` like
-  everything else, which is what the M4 roadmap entry asked for. Its prolog's `To Do` item 2 retires with
-  it.
-- `no-document.docx` inverts from exit 5 to exit 3. At M3 a package missing `word/document.xml` was sound,
-  because only the two guaranteed entry points were required; at M4 `_rels/.rels` names that part and the
-  archive does not contain it, so the package is refused. That inversion is the clearest single sign that
-  the main part is now resolved rather than assumed.
-- The expectation table carries a **`sound`** flag beside the exit code, and `run_container.py`'s
-  independent `zipfile` cross-check selects on it. Until M4 "is this a well-formed ZIP" and "does this
-  exit 5" were the same question; a package can now be a perfectly good archive and still not be a DOCX,
-  and without the flag every new package-level negative would have dropped silently out of the
-  cross-check. The dead body comparison beside it — which compared a value against itself for every row
-  that was not in `SAME_BODY` — is gone.
-
-- `DOCXtoMD.cpp` no longer includes `<iostream>`; it includes `typedefs.h` — resolved through
-  the project's `$(ProjectDir)include` search path — and returns `si32` per r1. A note records that
-  r11 does not reach `main`: the entry point is spelled by the language, not chosen by the author.
-- Source and MSBuild files are now stored in the repository with LF and materialised as CRLF
-  in the working tree. The bytes a checkout produces are unchanged.
-- Exit codes are a named enum (`EXIT_CODE` in `src/Diag.h`) rather than prose in a document. M2 can
-  return 0 (`--help`, `--version`), 1 (usage error), 2 (an input that cannot be opened) and 5. It
-  returns 5, not 0, when the input is readable: the converter arrives across M3 to M11, and exit
-  code 0's published contract is "all inputs converted", which this build cannot honour. `CliParse`
-  returns an `EXIT_CODE` rather than a bool so that a failed allocation reports 5 without printing the
-  usage text — the command line was not the problem — while a real usage error still reports 1 with it.
-- The `--stdout` line of the Target CLI block in `CLAUDE.md` uses an ASCII hyphen where it used an em
-  dash, so the block and the program's usage text are now byte-identical. The sources carry no BOM and
-  the project does not pass `/utf-8`, so a non-ASCII byte in a narrow literal would be read in whatever
-  code page the compiler is running under.
-- `main.cpp`'s per-input check is now a container probe rather than a `CreateFileW` readability test.
-  It opens the input as an OPC package, requires the two part names ISO/IEC 29500-2 guarantees
-  (`[Content_Types].xml` and `_rels/.rels`), inflates and CRC-verifies them, and inflates
-  `word/document.xml` as well when it happens to be there — purely to exercise the inflater on a real
-  stream, since nothing is resolved through relationships until M4's `OpcPackage`. A sound container
-  still exits 5: the converter arrives across M4 to M11, and exit code 0's contract is "all inputs
-  converted".
-- A run in which several inputs fail now returns the **highest** of their per-file verdicts. Exit code 6
-  stays unreachable, because D7c reserves it for a run that converted something.
-
-- A sound container no longer exits 5 saying the converter does not exist. It converts, writes its
-  Markdown and exits 0, and `tests/make_fixtures.py`'s expectation table says so for twenty-four
-  fixtures -- the nineteen sound packages M4 left expecting 5, and the five golden cases M5 adds.
-  The `sound` flag's default moved with it, from `code == 5` to `code == 0`.
-- `src/main.cpp` is wiring again: the M4 package probe is gone, and the per-input loop calls
-  `ConvertFile`.
-- `StyleModel` and `DocWalker` report a container or encoding refusal with the package's own sentence
-  and the package's own exit code, rather than folding every one of them into "the part could not be
-  read" and exit 3. A failed allocation while reading a part is this program's fault, not the
-  document's.
-- Mapping row 1's ruling — heading text is never additionally bolded — is now kept in the walker, which
-  clears the bold bit on a heading's spans. `IR_FMT` is the only channel the emitter has, so leaving it
-  set would have M6 wrapping every heading in delimiters its style already carries.
-- `-o` with a trailing separator names a directory even when there is one input. No Windows file name
-  may end in a separator, so the other reading names something that cannot exist. A session-derived
-  refinement of D7d rather than a departure from it.
-
-### Fixed
 - A line end inside a `w:t` reached the Markdown as a line end, so `<w:t>Total&#10;# 5</w:t>` came out
   as a paragraph followed by a heading, and a `w:t` a producer pretty-printed came out as an indented
   code block. WordprocessingML spells a break `w:br`; a newline character inside a `w:t` is interior

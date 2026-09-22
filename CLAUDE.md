@@ -926,8 +926,10 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M8 they return **133**, **94** and **1334** checks, over the **71** fixtures `make_fixtures.py`
-builds. All four were confirmed on Windows on 2026-09-22. The three check counts are the interesting
+At M8 they return **133**, **94** and **1344** checks, over the **71** fixtures `make_fixtures.py`
+builds. 133, 94 and 71 were confirmed on Windows on 2026-09-22, a run whose unit suite returned
+**1334**; the ten checks between that number and this one were added after it, by the padded-decimal
+fixes M8's entry records, and have been run on the shim only. The three check counts are the interesting
 ones: they are what the shim had measured on Linux beforehand, exactly, as they have been at every
 milestone since M3. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
 on both platforms -- and is recorded only so a run that builds a different number is noticed.
@@ -2225,6 +2227,20 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   `listbroken` and `liststyles` pairs against an `expected.md` written by hand from the specification
   before the converter was run at it. Bullets 2, 3 and 5 are mechanical and were checked on Linux, so
   the marker is `[done]` with nothing outstanding.
+  **Two fixes landed after that verification**, the way one did after M7's, and they are one defect in
+  two places. Three readers turn a `w:val` into a number -- `StyleReadDecimal`, `DocReadDecimal` and
+  `NumParseValue` -- and each capped the value's *length* rather than its magnitude, so a value padded
+  with the leading zeros an `xsd:integer` allows was discarded, silently, at every call site that seeds
+  its destination with -1 and ignores the result. M8 had already dropped the styles cap; the other two
+  kept theirs, so direct formatting went on refusing what a style accepted. A paragraph carrying
+  `<w:outlineLvl w:val="007"/>` stopped being a heading and a padded `w:ilvl` lost the depth it named;
+  a padded `w:abstractNumId` left a `w:num` with no definition behind it, which 5.4 degrades to a
+  bullet at every level. All three readers now agree -- the overflow test is the only bound, and
+  `NumParseValue` keeps the sign branch the other two have no need of. Every one of the 71 fixtures
+  converts to the same bytes either way, so the container and golden tallies stand at **133** and
+  **94**; the unit suite gains ten checks and returns **1344**, measured on the shim and not on
+  Windows. The marker stays `[done]` on M5's precedent: a verification record is of what was run, and
+  a later bug fix does not un-verify a milestone.
   - **The three tallies are the shim's, exactly.** 133, 94 and 1334, the same three numbers in the same
     order a Linux session measured before any of this reached a Windows machine, and the fixture count
     with them. That is the **sixth** milestone running where the shim predicted the real MSVC binary
