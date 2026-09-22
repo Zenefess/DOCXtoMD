@@ -3,10 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-09
+ * Last Modified: 2026-09-10
  * Description: The Markdown emitter: one growable UTF-8 buffer, line assembly and the delimiter rules.
  * To Do: 1) Emit the table-cell context at M9, which is the one escaping context with no caller left.
- *        2) Keep a per-line prefix stack when list items nest at M8 and a quote comes to hold one.
+ *        2) Carry the prefix stack into a table cell at M9, where a cell's own blocks nest inside a
+ *           row's and the prefix a list item already writes has to survive being nested again.
  *        3) Size the buffer from the part's byte count rather than growing from a fixed first block.
  *        4) Emit an image's wp:extent size as an HTML img element where a document depends on it (row 23).
  * Dependencies: CliOptions.h, Ir.h, MdEscape.h, typedefs.h

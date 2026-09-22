@@ -3,9 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: XML pull tokenizer: scanning, reference decoding, namespace scoping and the depth caps.
- * To Do: 1) Expose a prefix lookup once mc:Choice's Requires attribute has to be resolved at M7.
+ * To Do: 1) Expose a prefix lookup once mc:Choice's Requires attribute has to be resolved, which M7 did
+ *           not need and which waits on an extension namespace this build understands.
  *        2) Benchmark an AVX2 scan for the next '<' against the byte loop before adopting one (bd1/bd2).
  *        3) Decode a reference straight into the caller's buffer if the scratch ever shows up in a profile.
  * Dependencies: BuildGuards.h, Utf.h, XmlPull.h, typedefs.h, memory management.h, windows.h

@@ -704,7 +704,8 @@ def build_all(verbose=True, writing=True):
 
     for case in ["headings", "toggles", "textflow", "nostyles", "wrappers", "dollars",
                  "fragments", "hoisting", "inline", "code", "quotes", "rules", "monodefault",
-                 "monostyle", "links", "images", "anchors"]:
+                 "monostyle", "links", "images", "anchors",
+                 "lists", "listcounters", "listbroken", "liststyles"]:
         tree = read_part_tree(case)
         write(case + ".docx", build_zip([make_entry(name, raw) for name, raw in tree]))
         expect(case + ".docx", 0, ["wrote", case + ".md"], "the %s golden fixture" % case)

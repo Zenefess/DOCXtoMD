@@ -8,6 +8,81 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M8, lists.** The converter now numbers. `src/NumberingModel.h`/`.cpp` is the module the architecture
+  list names, and it carries one thing that list does not: `NumAssignMarkers`, the pass that turns every
+  list reference the walk recorded into the marker the emitter writes. That puts the numbers in
+  `docs/CONVERSION_REFERENCE.md` 6.2's stage [9] rather than in the stage [6] walk, and the reason is
+  `IrRewind` -- `DocWalker` walks the first `mc:Choice` of an `mc:AlternateContent` speculatively and
+  rewinds it when an `mc:Fallback` follows, an `IR_MARK` carries no walker state, and a table of nine
+  counters per definition cannot be rewound the way a span arena can. A discarded Choice would consume a
+  number the document never showed, which is the defect M6 found in the monospace vote one size larger.
+- Bullet and numbered lists (mapping rows 14 and 15): a paragraph carrying a `w:numPr` becomes `- item`
+  or `1. item` at the level its `w:ilvl` names, with **real computed numbers**. A start is honoured,
+  because CommonMark takes an ordered list's start from its first marker; every counting format is a
+  decimal, because GFM has no other, which is what row 15 asks for.
+- The whole indirection chain, which is the milestone's actual content. A `w:numPr` names a `w:numId`; a
+  `w:num` of that id names a `w:abstractNumId`; a `w:abstractNum` of *that* id carries the levels. A
+  `w:numStyleLink` on the abstract definition delegates to a style, whose own `w:numPr` names another
+  `w:numId`, which resolves to another abstract definition -- Word's "list style" indirection, and the
+  shape a `w:styleLink` definition is pointed at. The chase is bounded at sixteen links exactly as
+  `StyleModel` bounds a `w:basedOn` chain, because the specification sets no limit and malformed files
+  carry loops.
+- `w:lvlOverride` and `w:startOverride` (row 17). An override's `w:lvl` replaces that level of the
+  instance outright; a `w:startOverride` folds into the level's start, because ISO/IEC 29500's gloss on
+  `w:start` is that the value is taken when a level first starts *and whenever it is restarted*. When it
+  fires is a separate question and is a bit per level on the instance: the override resets that level's
+  counter the first time its `w:numId` is used, which is exactly how Word spells "restart numbering".
+- `w:lvlRestart`, which decides what a level's counter does when a shallower one moves: `0` never
+  restarts, `N` restarts only under a level shallower than `N`, and an absent one restarts under any
+  shallower level. Clearing sets a counter back to *unstarted* rather than to a value, so the start that
+  seeds it next is chosen by whichever `w:numId` is in force at that point -- which is what makes an
+  abstract-keyed counter and a num-keyed start agree with each other.
+- Numbering through the style chain (`StyleModel` gained `numId` and `numLevel`): a paragraph style may
+  carry the `w:numPr`, and Word's Multilevel List writes exactly that. It layers nearest-wins over the
+  paragraph's own `w:numPr` and the style's `w:basedOn` chain nearest-wins, like `w:dstrike` rather than
+  by parity, because numbering is not a toggle. No character style takes part: a `w:numPr` is a
+  paragraph property and ISO/IEC 29500-1 puts it in `w:pPr` alone. It is settled *before*
+  `StyleResolveParagraph`'s six early returns, so a paragraph whose style resolves to nothing else still
+  keeps its list membership. **`w:docDefaults` is deliberately not read for it**, and that is a guard
+  rather than an omission: a document default `w:numPr` would make every paragraph in the document an
+  item, which is the exact shape of M6's monospace catastrophe. No producer writes one; the To Do says
+  what a session that wants it must do first.
+- `numId` 0 is "no numbering" (2.4) and cancels whatever the style chain supplied, which is why the test
+  is `> 0` rather than `>= 0`. A `numId` naming a `w:num` the part does not declare, a `w:num` whose
+  abstract definition is missing, and a delegation that loops all degrade rather than refuse: 5.4's
+  "degrade to bullets or plain text, never crash", taking the bullet branch, because the document has
+  said the paragraph is an item and only the format is unknown.
+- `w:numFmt` classification is three-valued and everything hangs off it. `bullet`, and a level whose
+  marker is a picture (`w:lvlPicBulletId`), are bullets; `none` is a marker-less continuation paragraph
+  indented to its item's content column, which is row 16; **everything else, including an absent
+  `w:numFmt` and a token this build has never heard of, is ordered.** ST_NumberFormat holds sixty-odd
+  tokens and every one of them but those two counts, so an unknown token is far likelier to be a
+  counting format than a bullet -- and degrading it to a bullet throws away ordering the counter already
+  has, while degrading it to a decimal loses only a glyph shape row 15 says the renderer discards.
+- Counters are keyed on the resolved **abstract definition** and never on the `w:numId`, which 2.9 states
+  in as many words: two `w:numId`s sharing one abstract definition continue one sequence, which is how
+  Word spells "continue previous list". Together with the num-keyed `w:startOverride` above, that is both
+  halves of the two commands Word's list UI actually offers.
+- `tests/unit/TestNumberingModel.cpp` is the twelfth unit suite: the indirection chain, the refusals,
+  `w:numStyleLink` delegation including a loop, and the counters, the last of these driven through
+  `NumAssignMarkers` from a table of steps and rendered to a compact trace, so a case is one string
+  comparison rather than ten assertions.
+- Four golden fixtures, and each pins something the others cannot. `lists` is the ordinary document --
+  bullets, nesting, an ordered list that starts at three, a third level, a level the document skips over,
+  formatting inside an item, a hard-break continuation, an empty item, a line whose own text would start
+  a bullet, and a `List Paragraph` style carrying no numbering, which is Word's list *look* without the
+  list. `listcounters` is the arithmetic: two `w:numId`s over one abstract definition continuing a single
+  sequence across an interruption, a `w:startOverride` firing once and the `<!-- -->` it then needs,
+  levels counting on their own, `w:lvlRestart` 0 refusing a restart, and a `numFmt none` continuation
+  paragraph. `listbroken` is every way a reference can fail: a dangling `w:numId`, a `w:num` whose
+  abstract definition is missing, a `w:numStyleLink` chased four hops to the definition it lands on, two
+  definitions that delegate to each other, and a sound definition beside them all, unaffected. And
+  `liststyles` is numbering that arrives through the style chain -- a style carrying the `w:numPr`, a
+  style inheriting it through `w:basedOn` and naming only the `w:ilvl`, a `numId` of 0 cancelling it, a
+  numbered heading staying a heading, a quotation that is also an item, and a monospace item that stays
+  an item instead of becoming a fence. **All four `expected.md` files were written by hand from the
+  specification before the converter was run at them**; `lists` and `liststyles` matched on the first run
+  and the other two did not, which is what writing them by hand is for.
 - **M7, hyperlinks and images.** The converter now resolves references. `src/LinkResolver.h`/`.cpp` and
   `src/MediaExtractor.h`/`.cpp` are two new modules; `LinkResolver` turns a relationship id into a
   destination and a bookmark into a GFM anchor, and `MediaExtractor` writes the image parts the document
@@ -145,6 +220,83 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   nothing.
 
 ### Changed
+- **A list item is not a sixth block kind.** `IR_BLOCK` gained four fields -- the `w:numId` the walk
+  read, the level, the number the counter pass settled and a flag byte -- and the kinds are untouched.
+  Being an item of a list is a second fact a document may state about a paragraph whose kind is already
+  something else, which is not a hypothetical: `liststyles` carries a blockquote that is an item and an
+  inline-code paragraph that is an item, and both keep their kind and their marker. A fifth kind would
+  have had to choose. `IrBeginBlock` writes all four, because a block record is never zeroed.
+- **An empty list item is kept.** Word writes them, the counter has already counted one, and dropping
+  the block leaves a hole in the numbers -- 1, 2, 4. So a block carrying a live `w:numId` joins
+  `IR_BLOCK_RULE` and `IR_BLOCK_CODE` as exempt from `IrEndBlock`'s emptiness unwind and from
+  `IrDropEmptyBlocks`, and the emitter writes a bare marker for it, which CommonMark renders as an empty
+  item. `IrHasContent` is the public twin of the test `IrEndBlock` already applied to itself, because the
+  emitter has to ask the same question when it trims a list's two edges.
+- **`MdEmitter` grew the per-line prefix stack its own To Do item 2 asked for**, and it is what makes
+  nesting work rather than a tidiness. A child list must be indented to its parent item's **content
+  column** -- the marker's own width plus the space after it -- so `- ` is two columns, `1. ` is three
+  and `10. ` is four. A fixed two-space step per level is wrong the moment a list reaches item ten,
+  which is not exotic: it flattens the whole list into one level. The stack carries the column each open
+  level's marker actually landed at, so the indentation is computed from what was written.
+- A `w:ilvl` is mapped onto an emitted depth through the stack of levels still open rather than used as
+  one, and two separate things force it. A level the document skipped over would put a marker four
+  columns past its parent's content column, and four columns past it is an indented code block -- the
+  list would not merely look wrong, it would stop being a list. And a run of items that *begins* at a
+  deep `w:ilvl` has no parent to indent under at all, so using the level directly emits a shallower item
+  further in than the deeper one above it and inverts the document's own nesting. 5.4 allows a skip to
+  be normalised to one Markdown level per step, and this is that.
+- An ordered marker is **capped at nine digits**. CommonMark caps an ordered list's start there, and a
+  longer run of digits is not a list marker at all -- `1234567890. a` is a paragraph -- so a counter past
+  the cap saturates rather than wrapping, which is what a hostile `w:start` needs. The counter saturates
+  at the same value, so the model and the emitter cannot disagree about it.
+- Row 17's `<!-- -->` separator is emitted **only between two ordered lists**, and that is a policy
+  rather than an omission. What a merge costs is the second list's start number, which a renderer takes
+  from its first item and would then discard; two bullet lists that merge lose nothing a reader can see,
+  so a comment between them would be markup written for no one. A pair whose marker kinds differ
+  separates itself. It carries the level's own indentation and needs no blank line on either side, both
+  measured rather than assumed.
+- Three shapes inside a list get a blank line in front of them, because each is a block that cannot
+  interrupt a paragraph and would otherwise be read as more of the line above: a marker-less
+  continuation paragraph, a nested list whose first number is not 1, and a nested list whose first item
+  is empty. The last is the worst, and it is silent: a lone `-` under a line of text is a **setext
+  underline**, so the line above it becomes a heading rather than merely losing its structure.
+- `MdSeparate` takes both neighbours instead of one. M6's bare `>` between two consecutive quote blocks
+  is right for two quotations a producer broke in two and wrong for two quoted list items, where it
+  would put a stray `>` between two markers, so it is suppressed when either side is an item.
+  `MdEmitFence` takes a prefix and rolls it back off a line that turned out to be blank, so a fence
+  inside an item is indented without a run of code lines gaining trailing spaces.
+- **`DocWalker` records the reference and not the number**, so `DocWalk` and `DocWalkBytes` gained one
+  parameter rather than a stage: the walk reads the `w:numId` and the `w:ilvl`, `NumAssignMarkers`
+  settles what they come to afterwards, and the model reaches the walker for **one bit only** --
+  whether the `w:numId` names a list this document can resolve. That bit is not fastidiousness, and the
+  Fixed entry below says what it costs to do without. Precedence is settled there, in one function with
+  the reasoning above it: a heading cancels a list outright (5.4, "heading wins", which is the
+  common case rather than an edge one, because Word's Multilevel List puts a `w:numPr` on every heading
+  style), and a `w:numId` of 0 cancels whatever the style chain supplied.
+- **Row 12's font heuristic is switched off for a list item**, on `StyleReadBaseline`'s own reasoning
+  one milestone on: the font is a *guess* at what a paragraph is, and a paragraph carrying a `w:numPr`
+  has already stated it. A list of code lines set in Consolas would otherwise become a run of fences,
+  each having lost its marker. A code *style* is unaffected, because a style is a statement too.
+- `StyleResolveParagraph` takes the paragraph's own `w:numId` and `w:ilvl` and settles them **before**
+  its six early returns, so a paragraph whose style resolves to nothing else still keeps its list
+  membership. `StyleNumberingOf` is what a `w:numStyleLink` is chased through, and `StyleReadDecimal` is
+  one shared reader that `w:outlineLvl` now uses too rather than two spellings of the same three lines --
+  bounded by the value's magnitude and never by its length, which is the Fixed entry on `007` below.
+- `ConvertPackage` resolves the numbering part through the main part's relationships, exactly as it
+  resolves the styles part, and loads it between the styles and the walk. The pipeline is now walk,
+  coalesce, resolve references, resolve anchors, coalesce again, plan the media, **assign the markers**,
+  drop the emptied blocks, emit -- the numbers last of the four passes, because `MediaPlan` can still
+  turn a picture back into alt text and an item's content is not settled until it has.
+- The two independent trace renderers in `TestDocWalker` and `TestRunCoalescer` gained the same notation
+  rather than two: `[level#numId]` before a block letter is the reference the walk read, and
+  `[level=marker]` is what the counter pass settled, with `!` for the first item of a list. They are
+  still independent copies with no shared header, so a field added to one and not the other makes the
+  pair disagree about the same document -- edit both. `TestMdEmitter`'s helper runs `NumAssignMarkers`
+  in the same place `Convert` does, so what the suite measures is still the shape the program produces.
+- **Every pre-existing golden is byte-identical.** Four new fields on every block record, a fourth pass
+  between the coalescer and the emitter, and a prefix threaded through every line the emitter writes,
+  and not one byte of the nineteen cases M7 left behind moved -- which is what says none of it costs
+  anything it should not.
 - **`RunCoalescer` no longer merges across a link's brackets, and no rule in it says so.** 5.1 asks that
   runs be coalesced *within* a hyperlink; M7's link markers are spans, so the two text spans on either
   side of one are simply not adjacent, and the only thing the pass ever merges is a text span with the
@@ -191,6 +343,75 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   type-qualified style roles cost nothing they should not.
 
 ### Fixed
+- The comment on `NumResolveDelegates` described a guard the function does not have. It opened "Two
+  guards, and both are needed" and credited a visited set with making a delegation loop unresolvable.
+  That set was removed during M8's own review, once it was found that it could never change an outcome:
+  every way of leaving the walk but the one that finds a definition carrying levels leaves `delegate` at
+  -1, so a loop runs the depth cap out and lands exactly where the set would have put it sixteen steps
+  earlier. The comment fifteen lines below it already said so, so the file contradicted itself about its
+  own cycle guard. Comment only -- no behaviour changes, and the three suites return the same 133, 94
+  and 1334.
+- **A list that restarts after a nested item no longer merges into the list above it.** Mapping row 17's
+  `<!-- -->` is written when an item begins a list a reader already has open at its depth, and M8 asked
+  that of the block *immediately above* -- which, for the item after a nested one, sits a level deeper.
+  The separator went missing, the two lists merged, and a renderer discarded every number the emitter had
+  written and counted the second list on from the first one's start: a document saying "1." reached the
+  page as "4.". The question is now asked of the open list at that depth, which is what it always meant.
+  Found by a differential oracle over generated documents, and pinned by `tests/fixtures/listcounters`
+  and `TestMdEmitter`; both fail without the rule.
+- **A `w:startOverride` spent at one level no longer loses the restart at another.** An instance's
+  overrides are all applied the first time its `w:numId` is used, so a `numId` first used at a deep level
+  restarts its shallow levels *there* -- and the item that eventually reaches one of them begins a new
+  list several blocks later, with no override at it to point at. `IR_LIST_FIRST` asked whether an
+  override had just fired; it now asks whether the level's counter had to be **seeded** rather than
+  counted on from a value it held, which is the general fact and covers the override as one way of
+  arriving at it. Same corruption as the entry above, through a different door.
+- **A dangling `w:numId` no longer deletes a horizontal rule or a fenced code block.** `DocListSurvives`
+  decided on the raw reference, so a `w:numId` naming no `w:num` still cancelled row 25's rule and row
+  12's font detection -- both of which a real list item cancels because Word draws a *marker* beside the
+  border. A broken numbering graph therefore removed a `---` from the document outright and demoted an
+  all-monospace paragraph from a fence to an inline code span: a defect in a reference losing output that
+  has nothing to do with it, which is the opposite of what CONVERSION_REFERENCE 5.4 asks a dangling
+  reference to do. The walker now takes the numbering model for one bit -- whether the `numId` resolves --
+  and `DocWalk`/`DocWalkBytes` gained a parameter for it. `tests/fixtures/listbroken` pins both halves.
+- **An empty item that has children is no longer trimmed away as an artefact.** A content-free item at
+  either edge of a list is the paragraph a user leaves behind on pressing Enter, and M8 trimmed both --
+  but at the *head* of a run it may be the parent the items after it hang from. Trimmed, its children
+  were promoted to the outer list, and the next shallower item became their sibling rather than their
+  parent's: the document's "7." reached the page as "8.". The head trim now stops at an item the next one
+  is deeper than; the tail needs no such test, because an item at the end of a run has nothing after it to
+  be the parent of. `tests/fixtures/lists` and `TestMdEmitter` pin it.
+- **A content-free continuation no longer swallows the blank line the block before it had earned.** A
+  marker-less item with nothing in it emits nothing, so every question about "the block before this one"
+  has to be asked of the last block that actually put a line out rather than of the previous record. Asked
+  of the record, the blank line a continuation paragraph needs went missing and the continuation became a
+  lazy line of the item above it -- two paragraphs of one item rendered as one, with the break the
+  document had between them gone.
+- **Two marker-less code paragraphs in one item are one fence.** Mapping row 12 merges consecutive
+  all-monospace paragraphs, and two continuations of one item are exactly that; they were emitted as two
+  fences inside one item, which is a document that never existed. A code paragraph carrying a marker of
+  its own still ends the run, because merging it would delete an item.
+- **An empty marker-less continuation no longer emits a second blank line.** It has no marker to stand
+  for it the way an empty *marked* item does, so its line landed on top of the blank line the
+  cannot-interrupt-a-paragraph rule had already written and broke the emitter's own one-blank-line
+  invariant. A code paragraph is the one exception, because an empty one is a blank line of its fence.
+- **A refused numbering part no longer leaves half-read definitions in the model.** `NumLoadBytes`
+  returned early on every failure with whatever it had already read still in place, against its own
+  header's promise that no value but `NUM_OK` means definitions were loaded -- and an instance read
+  before the part broke has no counter key, while a refused load never sizes the counter table those
+  keys index. It now clears the model on the way out and on the way in, the second of which also stops a
+  second load stranding the first one's `numId` index. Not reachable from `Convert`, which refuses the
+  document on a numbering error; reachable from the module's own contract, which is what a caller reads.
+- **`w:outlineLvl` in a style accepts a padded value again.** M8 routed it through a shared decimal
+  reader that capped the value's *length* at two characters, so `<w:outlineLvl w:val="007"/>` -- legal,
+  because ST_DecimalNumber is an xsd:integer and leading zeros are allowed in one -- stopped being read
+  and the style silently became body text instead of a heading. The cap is gone; the overflow test that
+  was always there is the real bound and stops after ten significant digits whatever the padding.
+- The visited set in `NumResolveDelegates` is removed rather than kept, because it could never change an
+  outcome: every exit but the one that finds a definition carrying levels leaves the delegation
+  unresolved, and unresolved is a bullet at every level either way. The cap on the walk is the whole
+  guard, and the comment that said otherwise is corrected rather than left standing.
+
 - **A muted link no longer splits the two runs it stood between.** M7 gave the coalescer two rules that
   are each right on their own and wrong together: a link's brackets are a barrier a merge may not cross,
   and a link whose destination resolves to nothing is muted so that its brackets emit nothing. Muting

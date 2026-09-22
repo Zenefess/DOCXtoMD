@@ -3,10 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: Entry point of the unit-test binary: runs every group and returns the summary's verdict.
  * To Do: 1) Take a group name on the command line so one area can be run alone.
- *        2) Register groups from a table now that there are nine of them.
+ *        2) Register groups from a table now that there are twelve of them.
  * Dependencies: BuildGuards.h, Check.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -27,6 +27,7 @@ void TestUtf(void);
 void TestXmlPull(void);
 void TestOpcPackage(void);
 void TestStyleModel(void);
+void TestNumberingModel(void);
 void TestDocWalker(void);
 void TestRunCoalescer(void);
 void TestLinkResolver(void);
@@ -44,6 +45,7 @@ si32 main(void) {
    TestXmlPull();
    TestOpcPackage();
    TestStyleModel();
+   TestNumberingModel();
    TestDocWalker();
    TestRunCoalescer();
    TestLinkResolver();

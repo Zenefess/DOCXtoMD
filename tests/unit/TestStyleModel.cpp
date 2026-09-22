@@ -3,9 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-09-10
  * Description: Unit tests for name normalization, role detection, basedOn folding and the toggle XOR.
- * To Do: 1) Drive a numbering-bearing style chain once M8 gives w:numPr somewhere to be read into.
+ * To Do: 1) Drive a w:numPr in w:docDefaults once StyleModel carries one, which today it deliberately
+ *           does not -- see the To Do on the declaration and the guard such a fold would need.
  *        2) Add a case per producer from CONVERSION_REFERENCE 5.10 as real exports are collected at M11.
  * Dependencies: BuildGuards.h, Check.h, StyleModel.h, typedefs.h, stdio.h
  * ISA: Scalar
@@ -183,8 +184,8 @@ void TestStyleModel(void) {
    CHECK(StyleCount(&model) == 0);
    CHECK(StyleDefaultParagraph(&model) == -1);
    CHECK(StyleFind(&model, "Heading1") == -1);
-   CHECK(StyleResolveParagraph(&model, -1, -1).headingLevel == 0);
-   CHECK(StyleResolveParagraph(&model, -1, 0).headingLevel == 1u);
+   CHECK(StyleResolveParagraph(&model, -1, -1, -1, -1).headingLevel == 0);
+   CHECK(StyleResolveParagraph(&model, -1, 0, -1, -1).headingLevel == 1u);
    StyleClose(&model);
 
    CHECK(LoadStyles(&model, "") == STYLE_OK);
@@ -217,8 +218,8 @@ void TestStyleModel(void) {
    CHECK(StyleFind(&model, "heading1") == -1); // Identifiers compare exactly; only names fold case
    CHECK(StyleFind(&model, "Nope") == -1);
    CHECK(StyleFind(&model, "") == -1);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Heading1"), -1).headingLevel == 1u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Normal"), -1).headingLevel == 0);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Heading1"), -1, -1, -1).headingLevel == 1u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Normal"), -1, -1, -1).headingLevel == 0);
    StyleClose(&model);
 
    CheckGroup("StyleModel: heading levels and the outline fallback");
@@ -230,20 +231,26 @@ void TestStyleModel(void) {
                             "<w:pPr><w:outlineLvl w:val=\"8\"/></w:pPr></w:style>"
                             "<w:style w:styleId=\"Body\"><w:name w:val=\"Body Text\"/>"
                             "<w:pPr><w:outlineLvl w:val=\"9\"/></w:pPr></w:style>"
+                            "<w:style w:styleId=\"Padded\"><w:name w:val=\"Padded Body\"/>\r\n"
+                            "<w:pPr><w:outlineLvl w:val=\"003\"/></w:pPr></w:style>"
                             "<w:style w:styleId=\"Titled\"><w:name w:val=\"Title\"/></w:style>"
                             "<w:style w:styleId=\"Subtitled\"><w:name w:val=\"Subtitle\"/></w:style>") == STYLE_OK);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "H7"), -1).headingLevel == 6u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "H9"), -1).headingLevel == 6u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Outlined"), -1).headingLevel == 4u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Deep"), -1).headingLevel == 6u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Body"), -1).headingLevel == 0);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Titled"), -1).role == STYLE_ROLE_TITLE);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Titled"), -1).headingLevel == 1u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Subtitled"), -1).headingLevel == 2u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "H7"), -1, -1, -1).headingLevel == 6u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "H9"), -1, -1, -1).headingLevel == 6u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Outlined"), -1, -1, -1).headingLevel == 4u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Deep"), -1, -1, -1).headingLevel == 6u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Body"), -1, -1, -1).headingLevel == 0);
+   // ST_DecimalNumber is an xsd:integer, so leading zeros are legal in one and "003" is three. Reading
+   // the value under a cap on its *length* rather than on its magnitude turns a padded level into a
+   // refusal, and a refusal here is silent: the style stops being a heading and becomes body text.
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Padded"), -1, -1, -1).headingLevel == 4u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Titled"), -1, -1, -1).role == STYLE_ROLE_TITLE);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Titled"), -1, -1, -1).headingLevel == 1u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Subtitled"), -1, -1, -1).headingLevel == 2u);
    // A name that says heading wins over any outline level, and a direct level beats the style's own.
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "H7"), 9).headingLevel == 6u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Outlined"), 0).headingLevel == 1u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Body"), 1).headingLevel == 2u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "H7"), 9, -1, -1).headingLevel == 6u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Outlined"), 0, -1, -1).headingLevel == 1u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Body"), 1, -1, -1).headingLevel == 2u);
    StyleClose(&model);
 
    CheckGroup("StyleModel: basedOn chains and cycles");
@@ -255,12 +262,12 @@ void TestStyleModel(void) {
                             "<w:style w:styleId=\"Self\"><w:name w:val=\"S\"/><w:basedOn w:val=\"Self\"/></w:style>"
                             "<w:style w:styleId=\"LoopA\"><w:name w:val=\"A\"/><w:basedOn w:val=\"LoopB\"/></w:style>"
                             "<w:style w:styleId=\"LoopB\"><w:name w:val=\"B\"/><w:basedOn w:val=\"LoopA\"/></w:style>") == STYLE_OK);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Leaf"), -1).headingLevel == 2u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Over"), -1).headingLevel == 5u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Dangling"), -1).headingLevel == 0);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Self"), -1).headingLevel == 0);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "LoopA"), -1).headingLevel == 0);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "LoopB"), -1).headingLevel == 0);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Leaf"), -1, -1, -1).headingLevel == 2u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Over"), -1, -1, -1).headingLevel == 5u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Dangling"), -1, -1, -1).headingLevel == 0);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Self"), -1, -1, -1).headingLevel == 0);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "LoopA"), -1, -1, -1).headingLevel == 0);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "LoopB"), -1, -1, -1).headingLevel == 0);
    StyleClose(&model);
 
    CheckGroup("StyleModel: toggle XOR across the style chains");
@@ -463,7 +470,7 @@ void TestStyleModel(void) {
                             "<w:name w:val=\"HTML Code\"/></w:style>"
                             "<w:style w:type=\"paragraph\" w:styleId=\"Body\"><w:name w:val=\"Body\"/>"
                             "<w:basedOn w:val=\"CodeChar\"/></w:style>") == STYLE_OK);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Body"), -1).role != STYLE_ROLE_CODE);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Body"), -1, -1, -1).role != STYLE_ROLE_CODE);
 
    // But w:type is optional, and an absent one is a *default* rather than a statement -- so a typeless
    // style keeps its link to a real character style. Comparing the stored types alone would drop it and
@@ -501,7 +508,7 @@ void TestStyleModel(void) {
    CHECK(StyleFind(&model, "A&B") == 0);
    CHECK(StyleFind(&model, "A&amp;B") == -1);
    CHECK(NormalizesTo(StyleName(&model, 0), "heading & 3"));
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "C"), -1).headingLevel == 3u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "C"), -1, -1, -1).headingLevel == 3u);
    StyleClose(&model);
 
    CheckGroup("StyleModel: what a run's formatting is not read from");
@@ -546,6 +553,54 @@ void TestStyleModel(void) {
       StyleClose(&model);
    }
 
+   CheckGroup("StyleModel: a style's own w:numPr, and what cancels it");
+   CHECK(LoadStyles(&model, "<w:style w:type=\"paragraph\" w:styleId=\"Base\">"
+                            "<w:pPr><w:numPr><w:numId w:val=\"7\"/><w:ilvl w:val=\"2\"/></w:numPr></w:pPr></w:style>"
+                            "<w:style w:type=\"paragraph\" w:styleId=\"Child\"><w:basedOn w:val=\"Base\"/></w:style>"
+                            "<w:style w:type=\"paragraph\" w:styleId=\"Deeper\"><w:basedOn w:val=\"Base\"/>"
+                            "<w:pPr><w:numPr><w:ilvl w:val=\"4\"/></w:numPr></w:pPr></w:style>"
+                            "<w:style w:type=\"paragraph\" w:styleId=\"Off\"><w:basedOn w:val=\"Base\"/>"
+                            "<w:pPr><w:numPr><w:numId w:val=\"0\"/></w:numPr></w:pPr></w:style>"
+                            "<w:style w:type=\"numbering\" w:styleId=\"Linked\">"
+                            "<w:pPr><w:numPr><w:numId w:val=\"11\"/></w:numPr></w:pPr></w:style>") == STYLE_OK);
+   {
+      csi32 base   = StyleFind(&model, "Base");
+      csi32 child  = StyleFind(&model, "Child");
+      csi32 deeper = StyleFind(&model, "Deeper");
+      csi32 off    = StyleFind(&model, "Off");
+      si32  level  = 0;
+
+      CHECK(StyleResolveParagraph(&model, base, -1, -1, -1).numId == 7);
+      CHECK(StyleResolveParagraph(&model, base, -1, -1, -1).numLevel == 2);
+      // Inherited down a w:basedOn chain, which is how LibreOffice's ListNumber and the built-in
+      // ListParagraph pattern both reach a paragraph that carries no w:numPr of its own.
+      CHECK(StyleResolveParagraph(&model, child, -1, -1, -1).numId == 7);
+      CHECK(StyleResolveParagraph(&model, child, -1, -1, -1).numLevel == 2);
+      // The two halves fold independently: a style naming only the level keeps the inherited list.
+      CHECK(StyleResolveParagraph(&model, deeper, -1, -1, -1).numId == 7);
+      CHECK(StyleResolveParagraph(&model, deeper, -1, -1, -1).numLevel == 4);
+      // A w:numId of 0 folds like any other value, because "no numbering" has to be able to cancel what
+      // a w:basedOn parent supplied. Reading it as an absence would silently un-cancel it.
+      CHECK(StyleResolveParagraph(&model, off, -1, -1, -1).numId == 0);
+      // What the paragraph itself named wins outright, half by half.
+      CHECK(StyleResolveParagraph(&model, base, -1, 9, -1).numId == 9);
+      CHECK(StyleResolveParagraph(&model, base, -1, 9, -1).numLevel == 2);
+      CHECK(StyleResolveParagraph(&model, base, -1, -1, 5).numId == 7);
+      CHECK(StyleResolveParagraph(&model, base, -1, -1, 5).numLevel == 5);
+      CHECK(StyleResolveParagraph(&model, base, -1, 0, -1).numId == 0);
+      // A style declaring no numbering at all reports none, which is what leaves a List Paragraph with
+      // no w:numPr anywhere an ordinary paragraph rather than a list.
+      CHECK(StyleResolveParagraph(&model, -1, -1, -1, -1).numId == -1);
+      // The lookup a numbering part's w:numStyleLink follows. Its w:type is deliberately not checked.
+      CHECK(StyleNumberingOf(&model, "Linked", &level) == 11);
+      CHECK(level == -1);
+      CHECK(StyleNumberingOf(&model, "Base", &level) == 7);
+      CHECK(level == 2);
+      CHECK(StyleNumberingOf(&model, "Missing", &level) < 0);
+      CHECK(level == -1);
+   }
+   StyleClose(&model);
+
    CheckGroup("StyleModel: the result sentences track their enumeration");
    CHECK(StyleResultText(nullptr, nullptr, STYLE_OK)[0] != 0);
    CHECK(StyleTextIs(StyleResultText(nullptr, nullptr, STYLE_ERROR_ROOT), "the style part's root element is not w:styles"));
@@ -556,9 +611,9 @@ void TestStyleModel(void) {
    CHECK(LoadStyles(&model, "<w:style w:styleId=\"Heading3\"/>"
                             "<w:style w:type=\"nonsense\" w:styleId=\"Odd\"><w:name w:val=\"heading 2\"/></w:style>"
                             "<w:style w:styleId=\"NoId\"><w:name w:val=\"heading 4\"/></w:style>") == STYLE_OK);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Heading3"), -1).headingLevel == 3u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Odd"), -1).headingLevel == 2u);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "NoId"), -1).headingLevel == 4u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Heading3"), -1, -1, -1).headingLevel == 3u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Odd"), -1, -1, -1).headingLevel == 2u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "NoId"), -1, -1, -1).headingLevel == 4u);
    StyleClose(&model);
 
    CheckGroup("StyleModel: identifiers found through the index, not by scanning");
@@ -591,14 +646,14 @@ void TestStyleModel(void) {
       CHECK(StyleFind(&model, "PREFIXPREFIXPREFIX") == -1);
       CHECK(StyleFind(&model, "") == -1);
       CHECK(StyleFind(&model, nullptr) == -1);
-      CHECK(StyleResolveParagraph(&model, StyleFind(&model, "PREFIXPREFIXPREFIX4"), -1).headingLevel == 4u);
+      CHECK(StyleResolveParagraph(&model, StyleFind(&model, "PREFIXPREFIXPREFIX4"), -1, -1, -1).headingLevel == 4u);
       StyleClose(&model);
    }
    // A duplicated identifier still resolves to the first record, which is what the scan did.
    CHECK(LoadStyles(&model, "<w:style w:styleId=\"Twice\"><w:name w:val=\"heading 1\"/></w:style>"
                             "<w:style w:styleId=\"Twice\"><w:name w:val=\"heading 5\"/></w:style>") == STYLE_OK);
    CHECK(StyleFind(&model, "Twice") == 0);
-   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Twice"), -1).headingLevel == 1u);
+   CHECK(StyleResolveParagraph(&model, StyleFind(&model, "Twice"), -1, -1, -1).headingLevel == 1u);
    StyleClose(&model);
 
    CheckGroup("StyleModel: an identifier longer than the walker's lookup key");
@@ -621,7 +676,7 @@ void TestStyleModel(void) {
       CHECK(LoadStyles(&model, part) == STYLE_OK);
       // The lookup key DocFindStyle would build is 255 Ls, and it has to find the style.
       CHECK(StyleFind(&model, key) == 0);
-      CHECK(StyleResolveParagraph(&model, StyleFind(&model, key), -1).headingLevel == 1u);
+      CHECK(StyleResolveParagraph(&model, StyleFind(&model, key), -1, -1, -1).headingLevel == 1u);
       StyleClose(&model);
    }
 }

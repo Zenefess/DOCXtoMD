@@ -3,10 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: Unit tests for the body walk: wrappers, run content, and the formatting bits on a span.
  * To Do: 1) Add table cases as M9 gives the walker something to build from one; M7's hyperlinks,
- *           pictures and bookmarks are driven below.
+ *           pictures and bookmarks and M8's numbering are driven below.
  *        2) Drive the field state machine's traces once M10 replaces today's skip-it-whole handling.
  * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, StyleModel.h, typedefs.h
  * ISA: Scalar
@@ -30,6 +30,13 @@ static constexpr cchptr STYLE_QUOTE = "<w:style w:type=\"paragraph\" w:styleId=\
 static constexpr cchptr STYLE_CODE  = "<w:style w:type=\"paragraph\" w:styleId=\"SC\"><w:name w:val=\"Source Code\"/></w:style>";
 static constexpr cchptr STYLE_SPAN  = "<w:style w:type=\"character\" w:styleId=\"CC\"><w:name w:val=\"Code\"/></w:style>";
 
+// A paragraph style carrying numbering, and a heading style carrying it, for the cases that have to
+// show where a w:numPr may come from and what cancels it. Spelled in halves for the column limit.
+static constexpr cchptr STYLE_LIST_BASE = "<w:style w:type=\"paragraph\" w:styleId=\"LN\">"; // The opening tag
+static constexpr cchptr STYLE_LIST_BODY = "<w:pPr><w:numPr><w:numId w:val=\"4\"/><w:ilvl w:val=\"1\"/></w:numPr></w:pPr></w:style>";
+static constexpr cchptr STYLE_NUMH_BASE = "<w:style w:type=\"paragraph\" w:styleId=\"NH\"><w:name w:val=\"heading 1\"/>";
+static constexpr cchptr STYLE_NUMH_BODY = "<w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr></w:style>";
+
 // A heading style based on the quote style, for the case that has to show which of the two wins. Named
 // in halves so no line reaches the column limit once the formatter has joined what it can.
 static constexpr cchptr STYLE_QH_BASE = "<w:style w:type=\"paragraph\" w:styleId=\"QH\">"; // The opening tag
@@ -52,6 +59,16 @@ static constexpr cchptr WALK_HEAD = "<w:document xmlns:w=\"http://schemas.openxm
 #define DRAWING_SHUT "/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"
 static constexpr cchptr WALK_TAIL = "</w:body></w:document>";
 
+// The numbering part every case here resolves against. The walk consults it for one bit only -- whether
+// a w:numId names a list this document can resolve -- because a reference that resolves to nothing must
+// not cancel the horizontal rule of row 25 or the monospace detection of row 12, both of which a real
+// list item does cancel. numId 4 and numId 9 resolve; every other identifier is dangling.
+#define WALK_NUM(id) "<w:num w:numId=\"" id "\"><w:abstractNumId w:val=\"0\"/></w:num>"
+
+static constexpr cchptr WALK_NUMS = "<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+                                    "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\">"
+                                    "<w:numFmt w:val=\"decimal\"/></w:lvl></w:abstractNum>" WALK_NUM("4") WALK_NUM("9") "</w:numbering>";
+
 // Bytes before the terminator.
 static cui64 WalkLength(cchptr text) {
    ui64 length = 0;
@@ -68,6 +85,51 @@ static void WalkAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr text)
    dest[*used] = 0;
 }
 
+// Writes one unsigned number into a buffer and reports how many bytes it took. Check.h deliberately
+// pulls in no I/O -- it needs only typedefs.h -- so a trace cannot reach for snprintf.
+static cui64 WalkNumber(chptrc dest, ui32 value) {
+   char digits[12];
+   ui64 count = 0;
+   ui64 used  = 0;
+
+   do {
+      digits[count++] = char('0' + (value % 10u));
+      value /= 10u;
+   } while(value && count < sizeof(digits));
+   while(count) dest[used++] = digits[--count];
+   return used;
+}
+
+// Writes a block's list membership, in whichever of its two forms the block is in. Before
+// NumAssignMarkers a block carries the *reference* the walk read and renders as [<level>#<numId>];
+// afterwards it carries the marker and renders as [<level>=<marker>] -- "-" for a bullet, the number
+// for an ordered item, nothing at all for a marker-less continuation -- with a trailing "!" for an item
+// that opens a list the one before it was not part of.
+static cui64 WalkList(cIR_BLOCKptr block, chptrc dest) {
+   ui64 used = 0;
+
+   if(block->listNumId < 0 && !(block->listFlags & IR_LIST_ITEM)) return 0;
+   dest[used++] = '[';
+   dest[used++] = char('0' + block->listLevel);
+   if(block->listFlags & IR_LIST_ITEM) {
+      dest[used++] = '=';
+      if(block->listFlags & IR_LIST_PLAIN) used += 0; // A continuation carries no marker to render
+      else if(!(block->listFlags & IR_LIST_ORDERED)) dest[used++] = '-';
+      else used += WalkNumber(dest + used, block->listNumber);
+      if(block->listFlags & IR_LIST_FIRST) dest[used++] = '!';
+   } else {
+      dest[used++] = '#';
+      used += WalkNumber(dest + used, ui32(block->listNumId));
+   }
+   dest[used++] = ']';
+   return used;
+}
+
+// A block kind neither this renderer nor its twin in the other suite spells would come out as an
+// ordinary paragraph, which is a plausible trace rather than an obviously wrong one -- exactly the
+// failure CLAUDE.md warns of in saying the two are independent copies that must both be edited.
+static_assert(ui32(IR_BLOCK_KIND_COUNT) == 5u, "TestDocWalker: the trace renderer must spell every block kind; add the new one here.");
+
 // Renders the whole intermediate representation into one compact trace, so a case is one string
 // comparison rather than ten assertions. A heading is H<level>{...} and a paragraph is P{...}; inside
 // a block, [text] is a text span, | is a hard break, and the letters before a bracket are its
@@ -75,15 +137,17 @@ static void WalkAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr text)
 // letters are Q for a blockquote, C for a line of a fenced block and R for a horizontal rule.
 // M7's three span kinds are L(dest) for a link start and L) for its end, I(source)[alt] for an
 // image, and N(name) for a bookmark anchor; a muted anchor -- one nothing links to -- is N-(name).
+// M8's list membership stands in front of the block letter: [<level>#<numId>] is the reference the
+// walk read, and [<level>=<marker>] is what NumAssignMarkers made of it.
 static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
    ui64 used = 0;
 
    dest[0] = 0;
    for(ui32 index = 0; index < IrBlockCount(document); ++index) {
       cIR_BLOCKptr block = IrBlockAt(document, index);
-      char         head[8];
+      char         head[24];
 
-      ui64 at = 0;
+      ui64 at = WalkList(block, head);
 
       if(block->kind == IR_BLOCK_HEADING) {
          head[at++] = 'H';
@@ -91,7 +155,8 @@ static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
       } else if(block->kind == IR_BLOCK_QUOTE) head[at++] = 'Q';
       else if(block->kind == IR_BLOCK_CODE) head[at++] = 'C';
       else if(block->kind == IR_BLOCK_RULE) head[at++] = 'R';
-      else head[at++] = 'P';
+      else if(block->kind == IR_BLOCK_PARAGRAPH) head[at++] = 'P';
+      else head[at++] = '?';
       head[at++] = '{';
       head[at]   = 0;
       WalkAppend(dest, destBytes, &used, head);
@@ -162,17 +227,29 @@ static cbool TracedAs(cchptr styleBody, cchptr body, cchptr wanted) {
          return false;
       }
    }
+   NUM_MODEL numbering;
+   ui64      numberUsed = 0;
+
+   NumOpen(&numbering);
+   while(WALK_NUMS[numberUsed]) ++numberUsed;
+   if(NumLoadBytes(&numbering, (cui8ptr)WALK_NUMS, numberUsed, nullptr) != NUM_OK) {
+      NumClose(&numbering);
+      StyleClose(&styles);
+      return false;
+   }
    IrOpen(&document);
 
-   cWALK_STATUS status = DocWalkBytes(&document, &styles, (cui8ptr)part, used);
+   cWALK_STATUS status = DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, used);
 
    if(status.result != WALK_OK) {
       IrClose(&document);
+      NumClose(&numbering);
       StyleClose(&styles);
       return false;
    }
    WalkTrace(&document, trace, sizeof(trace));
    IrClose(&document);
+   NumClose(&numbering);
    StyleClose(&styles);
 
    ui64 index = 0;
@@ -185,13 +262,16 @@ static cbool TracedAs(cchptr styleBody, cchptr body, cchptr wanted) {
 static cWALK_RESULT WalkedTo(cchptr part) {
    STYLE_MODEL styles;
    IR_DOCUMENT document;
+   NUM_MODEL   numbering;
 
    StyleOpen(&styles);
+   NumOpen(&numbering);
    IrOpen(&document);
 
-   cWALK_STATUS status = DocWalkBytes(&document, &styles, (cui8ptr)part, WalkLength(part));
+   cWALK_STATUS status = DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, WalkLength(part));
 
    IrClose(&document);
+   NumClose(&numbering);
    StyleClose(&styles);
    return status.result;
 }
@@ -678,6 +758,106 @@ void TestDocWalker(void) {
                   "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr>"
                   "<w:bookmarkStart w:id=\"0\" w:name=\"a\"/></w:p>",
                   "P{N(a)}R{}"));
+
+   CheckGroup("DocWalker: a w:numPr is read as the reference it is");
+   // The walk records what the paragraph wrote and resolves nothing: whether the identifier names a list
+   // is NumAssignMarkers's question, asked after the walk because a counter cannot be rewound.
+   {
+      cchptr flat   = "<w:p><w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>";
+      cchptr deep   = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"2\"/><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                      "<w:r><w:t>a</w:t></w:r></w:p>";
+      cchptr deeper = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"40\"/><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                      "<w:r><w:t>a</w:t></w:r></w:p>";
+
+      CHECK(TracedAs(nullptr, flat, "[0#4]P{[a]}"));
+      CHECK(TracedAs(nullptr, deep, "[2#4]P{[a]}"));
+      // 0 to 8 is every level the schema has, and a deeper one is clamped rather than refused.
+      CHECK(TracedAs(nullptr, deeper, "[8#4]P{[a]}"));
+   }
+   // A w:numPr with no w:numId names no list, so nothing is recorded at all.
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"1\"/></w:numPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "P{[a]}"));
+   // An empty numbered paragraph still gets its block: a marker on a line of its own is what Word draws,
+   // and IrEndBlock would otherwise unwind it like any other empty paragraph.
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr></w:p>", "[0#4]P{}"));
+   CHECK(TracedAs(nullptr, "<w:p></w:p>", ""));
+
+   CheckGroup("DocWalker: where numbering comes from and what cancels it");
+   {
+      char styled[512];
+      ui64 used = 0;
+
+      styled[0] = 0;
+      WalkAppend(styled, sizeof(styled), &used, STYLE_LIST_BASE);
+      WalkAppend(styled, sizeof(styled), &used, STYLE_LIST_BODY);
+      // A style's own w:pPr carries numbering, which is how LibreOffice's ListNumber works and how the
+      // built-in ListParagraph pattern is written.
+      CHECK(TracedAs(styled, "<w:p><w:pPr><w:pStyle w:val=\"LN\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "[1#4]P{[a]}"));
+      // The paragraph's own w:numPr wins outright, and each half of it falls through on its own: a
+      // producer that changes the level without changing the list writes only the w:ilvl.
+      CHECK(TracedAs(styled,
+                     "<w:p><w:pPr><w:pStyle w:val=\"LN\"/><w:numPr><w:ilvl w:val=\"3\"/></w:numPr></w:pPr>"
+                     "<w:r><w:t>a</w:t></w:r></w:p>",
+                     "[3#4]P{[a]}"));
+      CHECK(TracedAs(styled,
+                     "<w:p><w:pPr><w:pStyle w:val=\"LN\"/><w:numPr><w:numId w:val=\"9\"/></w:numPr></w:pPr>"
+                     "<w:r><w:t>a</w:t></w:r></w:p>",
+                     "[1#9]P{[a]}"));
+      // w:numId 0 is a specification of "no numbering" and cancels what the style chain supplied, which
+      // is the whole reason 0 is reserved -- reading it as an absence would silently un-cancel it.
+      CHECK(TracedAs(styled,
+                     "<w:p><w:pPr><w:pStyle w:val=\"LN\"/><w:numPr><w:numId w:val=\"0\"/></w:numPr></w:pPr>"
+                     "<w:r><w:t>a</w:t></w:r></w:p>",
+                     "P{[a]}"));
+   }
+   {
+      cchptr adrift = "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr>"
+                      "<w:numPr><w:numId w:val=\"7\"/></w:numPr></w:pPr></w:p>";
+      cchptr living = "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr>"
+                      "<w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr></w:p>";
+
+      // A w:numId that names no w:num cancels nothing, because the paragraph is an item of nothing.
+      // Row 25's rule and row 12's font detection are suppressed by the list *marker* Word draws beside
+      // the border, and a reference that resolves to nothing draws none. Decided on the reference alone,
+      // a broken numbering graph deleted the horizontal rule from the document outright -- a defect in a
+      // reference losing output that has nothing to do with it, which is the opposite of what
+      // CONVERSION_REFERENCE 5.4 asks a dangling one to do. numId 7 names nothing; numId 4 is a list.
+      CHECK(TracedAs(nullptr, adrift, "R{}"));
+      CHECK(TracedAs(nullptr, living, "[0#4]P{}"));
+   }
+   {
+      char styled[512];
+      ui64 used = 0;
+
+      styled[0] = 0;
+      WalkAppend(styled, sizeof(styled), &used, STYLE_NUMH_BASE);
+      WalkAppend(styled, sizeof(styled), &used, STYLE_NUMH_BODY);
+      // CONVERSION_REFERENCE 5.4: a heading carrying numbering is a heading and nothing else. Word's
+      // Multilevel List linked to headings puts a w:numPr on every Heading N style, so without this
+      // every heading in such a document would become a list item and its structure would invert.
+      CHECK(TracedAs(styled, "<w:p><w:pPr><w:pStyle w:val=\"NH\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "H1{[a]}"));
+   }
+   // A quotation and a line of code both keep their marker: a paragraph may legitimately be an item of a
+   // list and be one of those, so only a heading cancels the numbering.
+   CHECK(TracedAs(STYLE_QUOTE,
+                  "<w:p><w:pPr><w:pStyle w:val=\"Q\"/><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                  "<w:r><w:t>a</w:t></w:r></w:p>",
+                  "[0#4]Q{[a]}"));
+   CHECK(TracedAs(STYLE_CODE,
+                  "<w:p><w:pPr><w:pStyle w:val=\"SC\"/><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                  "<w:r><w:t>a</w:t></w:r></w:p>",
+                  "[0#4]C{[a]}"));
+   // Row 12's monospace *guess* does not overrule a statement: a list of code lines set in Consolas is
+   // still a list, where the same paragraph without the w:numPr would be a fence.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                  "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a</w:t></w:r></w:p>",
+                  "[0#4]P{c[a]}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a</w:t></w:r></w:p>", "C{c[a]}"));
+   // Row 25's rule is about a paragraph that came to nothing, and one wearing a list marker did not.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr>"
+                  "<w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>",
+                  "[0#4]P{}"));
 
    CheckGroup("DocWalker: the horizontal rule of mapping row 25");
    CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>", "R{}"));

@@ -3,10 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: Unit tests for the context-aware escaping writer and the line-start and heading passes.
  * To Do: 1) Add the table-cell pipe cases against a real table once M9 emits one.
- *        2) Check the link-destination rule against the targets real producers write, at M7.
+ *        2) Check the link-destination rule against the targets real producers write, once M11's
+ *           producer-variance corpus makes a real one available to check against.
  * Dependencies: BuildGuards.h, Check.h, MdEscape.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant

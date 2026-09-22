@@ -97,6 +97,7 @@
     <ClCompile Include="..\src\MediaExtractor.cpp" />
     <ClCompile Include="..\src\MdEmitter.cpp" />
     <ClCompile Include="..\src\MdEscape.cpp" />
+    <ClCompile Include="..\src\NumberingModel.cpp" />
     <ClCompile Include="..\src\OpcPackage.cpp" />
     <ClCompile Include="..\src\RunCoalescer.cpp" />
     <ClCompile Include="..\src\StyleModel.cpp" />
@@ -111,6 +112,7 @@
     <ClCompile Include="unit\TestMdEmitter.cpp" />
     <ClCompile Include="unit\TestMediaExtractor.cpp" />
     <ClCompile Include="unit\TestMdEscape.cpp" />
+    <ClCompile Include="unit\TestNumberingModel.cpp" />
     <ClCompile Include="unit\TestOpcPackage.cpp" />
     <ClCompile Include="unit\TestRunCoalescer.cpp" />
     <ClCompile Include="unit\TestStyleModel.cpp" />
@@ -130,6 +132,7 @@
     <ClInclude Include="..\src\MediaExtractor.h" />
     <ClInclude Include="..\src\MdEmitter.h" />
     <ClInclude Include="..\src\MdEscape.h" />
+    <ClInclude Include="..\src\NumberingModel.h" />
     <ClInclude Include="..\src\OpcPackage.h" />
     <ClInclude Include="..\src\RunCoalescer.h" />
     <ClInclude Include="..\src\StyleModel.h" />

@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-10
  * Description: Unit tests for adjacent-run merging, whitespace hoisting and the order of the two.
  * To Do: 1) Add the field-result barrier when M10 stops a merge crossing one; M7's link barrier is
  *           driven below, and an anchor's transparency to a merge beside it.
@@ -42,6 +42,16 @@ static constexpr cchptr COALESCE_TAIL = "</w:body></w:document>";
 static constexpr cchptr STYLES_HEAD = "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">";
 static constexpr cchptr STYLES_TAIL = "</w:styles>";
 
+// The numbering part every case here resolves against. The walk consults it for one bit only -- whether
+// a w:numId names a list this document can resolve -- because a reference that resolves to nothing must
+// not cancel the horizontal rule of row 25 or the monospace detection of row 12, both of which a real
+// list item does cancel. numId 4 and numId 9 resolve; every other identifier is dangling.
+#define WALK_NUM(id) "<w:num w:numId=\"" id "\"><w:abstractNumId w:val=\"0\"/></w:num>"
+
+static constexpr cchptr WALK_NUMS = "<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+                                    "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\">"
+                                    "<w:numFmt w:val=\"decimal\"/></w:lvl></w:abstractNum>" WALK_NUM("4") WALK_NUM("9") "</w:numbering>";
+
 // Bytes before the terminator.
 static cui64 CoalesceLength(cchptr text) {
    ui64 length = 0;
@@ -58,18 +68,64 @@ static void CoalesceAppend(chptrc dest, cui64 destBytes, ui64ptrc used, cchptr t
    dest[*used] = 0;
 }
 
+// Writes one unsigned number into a buffer and reports how many bytes it took. Check.h deliberately
+// pulls in no I/O -- it needs only typedefs.h -- so a trace cannot reach for snprintf.
+static cui64 CoalesceNumber(chptrc dest, ui32 value) {
+   char digits[12];
+   ui64 count = 0;
+   ui64 used  = 0;
+
+   do {
+      digits[count++] = char('0' + (value % 10u));
+      value /= 10u;
+   } while(value && count < sizeof(digits));
+   while(count) dest[used++] = digits[--count];
+   return used;
+}
+
+// Writes a block's list membership, in whichever of its two forms the block is in. Before
+// NumAssignMarkers a block carries the *reference* the walk read and renders as [<level>#<numId>];
+// afterwards it carries the marker and renders as [<level>=<marker>] -- "-" for a bullet, the number
+// for an ordered item, nothing at all for a marker-less continuation -- with a trailing "!" for an item
+// that opens a list the one before it was not part of.
+static cui64 CoalesceList(cIR_BLOCKptr block, chptrc dest) {
+   ui64 used = 0;
+
+   if(block->listNumId < 0 && !(block->listFlags & IR_LIST_ITEM)) return 0;
+   dest[used++] = '[';
+   dest[used++] = char('0' + block->listLevel);
+   if(block->listFlags & IR_LIST_ITEM) {
+      dest[used++] = '=';
+      if(block->listFlags & IR_LIST_PLAIN) used += 0; // A continuation carries no marker to render
+      else if(!(block->listFlags & IR_LIST_ORDERED)) dest[used++] = '-';
+      else used += CoalesceNumber(dest + used, block->listNumber);
+      if(block->listFlags & IR_LIST_FIRST) dest[used++] = '!';
+   } else {
+      dest[used++] = '#';
+      used += CoalesceNumber(dest + used, ui32(block->listNumId));
+   }
+   dest[used++] = ']';
+   return used;
+}
+
+// A block kind neither this renderer nor its twin in the other suite spells would come out as an
+// ordinary paragraph, which is a plausible trace rather than an obviously wrong one -- exactly the
+// failure CLAUDE.md warns of in saying the two are independent copies that must both be edited.
+static_assert(ui32(IR_BLOCK_KIND_COUNT) == 5u, "TestRunCoalescer: the trace renderer must spell every block kind; add the new one here.");
+
 // Renders the coalesced representation into one compact trace, in the notation TestDocWalker uses and
 // two letters wider: c is a code span and the block letters are P, H<level>, Q, C and R. M7's span
 // kinds render the same way here: L(dest) and L) for a link, I(source)[alt] for an image, N(name) for
-// a bookmark anchor.
+// a bookmark anchor. M8's list membership stands in front of the block letter in the same two forms
+// TestDocWalker spells: [<level>#<numId>] before the counter pass, [<level>=<marker>] after it.
 static void CoalesceTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
    ui64 used = 0;
 
    dest[0] = 0;
    for(ui32 index = 0; index < IrBlockCount(document); ++index) {
       cIR_BLOCKptr block = IrBlockAt(document, index);
-      char         head[8];
-      ui64         at = 0;
+      char         head[24];
+      ui64         at = CoalesceList(block, head);
 
       if(block->kind == IR_BLOCK_HEADING) {
          head[at++] = 'H';
@@ -77,7 +133,8 @@ static void CoalesceTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes
       } else if(block->kind == IR_BLOCK_QUOTE) head[at++] = 'Q';
       else if(block->kind == IR_BLOCK_CODE) head[at++] = 'C';
       else if(block->kind == IR_BLOCK_RULE) head[at++] = 'R';
-      else head[at++] = 'P';
+      else if(block->kind == IR_BLOCK_PARAGRAPH) head[at++] = 'P';
+      else head[at++] = '?';
       head[at++] = '{';
       head[at]   = 0;
       CoalesceAppend(dest, destBytes, &used, head);
@@ -148,17 +205,29 @@ static cbool CoalescesAs(cchptr styleBody, cchptr body, cchptr wanted) {
          return false;
       }
    }
+   NUM_MODEL numbering;
+   ui64      numberUsed = 0;
+
+   NumOpen(&numbering);
+   while(WALK_NUMS[numberUsed]) ++numberUsed;
+   if(NumLoadBytes(&numbering, (cui8ptr)WALK_NUMS, numberUsed, nullptr) != NUM_OK) {
+      NumClose(&numbering);
+      StyleClose(&styles);
+      return false;
+   }
    IrOpen(&document);
 
-   cWALK_STATUS status = DocWalkBytes(&document, &styles, (cui8ptr)part, used);
+   cWALK_STATUS status = DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, used);
 
    if(status.result != WALK_OK || !RunCoalesce(&document)) {
       IrClose(&document);
+      NumClose(&numbering);
       StyleClose(&styles);
       return false;
    }
    CoalesceTrace(&document, trace, sizeof(trace));
    IrClose(&document);
+   NumClose(&numbering);
    StyleClose(&styles);
 
    ui64 index = 0;
@@ -311,6 +380,22 @@ void TestRunCoalescer(void) {
                      "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">q </w:t></w:r>"
                      "<w:r><w:t>r</w:t></w:r></w:p>",
                      "Q{b[q][ r]}"));
+
+   CheckGroup("RunCoalescer: a list item is an ordinary paragraph to this pass");
+   // Its leading whitespace is *not* the indentation of code -- the indentation is the emitter's, built
+   // from the marker -- so a list item hoists exactly as a paragraph does and a fence still does not.
+   CHECK(CoalescesAs(nullptr,
+                     "<w:p><w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                     "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">bold </w:t></w:r>"
+                     "<w:r><w:t>rest</w:t></w:r></w:p>",
+                     "[0#4]P{b[bold][ rest]}"));
+   // Two runs inside one item merge, and the per-block reset keeps a merge out of the next one.
+   CHECK(CoalescesAs(nullptr,
+                     "<w:p><w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                     "<w:r><w:t>Hel</w:t></w:r><w:r><w:t>lo</w:t></w:r></w:p>"
+                     "<w:p><w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                     "<w:r><w:t>there</w:t></w:r></w:p>",
+                     "[0#4]P{[Hello]}[0#4]P{[there]}"));
 
    CheckGroup("RunCoalescer: code spans and the two halves of row 11");
    // Row 11 drops bold and italic from a code run, and the bits are cleared in the *walker* so that two

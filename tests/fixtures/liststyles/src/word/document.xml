@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Numbering may come from a paragraph style rather than from the paragraph.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="ListNumber"/></w:pPr><w:r><w:t>An item whose style carries the w:numPr.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="ListNumberDeep"/></w:pPr><w:r><w:t>One whose style inherits the list and names only the level.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="ListNumber"/></w:pPr><w:r><w:t>Back out again.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="ListNumber"/><w:numPr><w:numId w:val="0"/></w:numPr></w:pPr><w:r><w:t>A numId of 0 cancels what the style supplied.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="ListParagraph"/></w:pPr><w:r><w:t>A List Paragraph with no numbering anywhere is not a list either.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="NumberedHeading"/></w:pPr><w:r><w:t>A numbered heading is a heading</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Word's multilevel list linked to headings puts a w:numPr on every heading style.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Quote"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>A quotation may be an item of a list as well.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Quote"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>And so may the one after it.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Consolas"/></w:rPr><w:t>A monospace item stays an item.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Row 12's font heuristic is a guess, and a w:numPr is a statement.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

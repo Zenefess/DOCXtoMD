@@ -25,10 +25,10 @@ below.
 ## Current state (do not assume more exists)
 
 - `src/` — **exists** and holds the CLI skeleton (M2), the container layer (M3), the XML and package
-  layer (M4), the converter (M5/M6) and M7's reference resolution: thirty-six files, all
+  layer (M4), the converter (M5/M6), M7's reference resolution and M8's lists: thirty-eight files, all
   CRLF, tab-free, ASCII-only, none over 150 columns, each carrying a validated r17 prolog at `v0.1.0`
   with `ISA: Scalar`. Unlike
-  `include/`, `src/` is **not** exempt from the repository style, and all thirty-six are committed in
+  `include/`, `src/` is **not** exempt from the repository style, and all thirty-eight are committed in
   the shape `.clang-format` produces — running the formatter over them is a verified no-op, so a
   format-on-save cannot manufacture a diff. Keep it that way: format after editing, then re-check the
   r17 prolog, since the formatter has no opinion about it. Two shapes are worth copying because they
@@ -233,14 +233,77 @@ below.
     is seeded with the empty string, without which a style declaring no `w:basedOn` inherits whichever
     identifier happened to be stored first — a real defect the golden fixtures missed and the unit
     suite caught, because every fixture's first style is the one they would wrongly have inherited.
+    Since M8 a style also carries a `w:numPr`, which is how Word's Multilevel List reaches a document:
+    `numId` and `numLevel` layer nearest-wins over the run of the `w:basedOn` chain like `w:dstrike`
+    rather than by parity, because numbering is not a toggle, and `-1` means unspecified while **0 is a
+    real value** meaning "no numbering". `StyleResolveParagraph` takes the paragraph's own pair and
+    settles them **before** its six early returns, so a paragraph whose style resolves to nothing else
+    still keeps its list membership. `w:docDefaults` is deliberately **not** read for it, and that is a
+    guard rather than an omission: a document default `w:numPr` would make every paragraph in the
+    document an item, which is the shape of M6's monospace catastrophe. No producer writes one; the
+    header's To Do says what a session that wants it must build first.
+  - `NumberingModel.h`/`NumberingModel.cpp` — `numbering.xml` as resolved per-`numId` levels, and the
+    counter pass that turns them into markers. The indirection is the milestone: a `w:numPr` names a
+    `w:numId`, a `w:num` of that id names a `w:abstractNumId`, a `w:abstractNum` of *that* id carries the
+    levels, and a `w:numStyleLink` on the abstract definition delegates to a style whose own `w:numPr`
+    names another `w:numId` — Word's list-style indirection, chased through `StyleNumberingOf` and
+    bounded at sixteen links exactly as `StyleModel` bounds a `w:basedOn` chain, because the
+    specification sets no limit and malformed files carry loops. A `w:lvlOverride` replaces a level of
+    one instance outright, and a `w:startOverride` folds into that level's **start** rather than being
+    kept as a one-shot seed, because ISO/IEC 29500's own gloss on `w:start` is that the value is taken
+    when a level first starts *and whenever it is restarted*; *when* it fires is the separate question,
+    and it is a bit per level on the instance, applied the first time that `numId` is used. Counters are
+    keyed on the resolved **abstract** definition and never on the `numId`, which 2.9 states in as many
+    words — two `numId`s over one abstract definition continue one sequence, which is how Word spells
+    "continue previous list", while a `startOverride` on a new `numId` over the same definition is how it
+    spells "restart at 1". Both halves are needed and they are the two commands Word's list UI offers.
+    `w:numFmt` collapses to three values, because GFM can spell a bullet and a decimal and nothing else:
+    `bullet` (and a level whose marker is a `w:lvlPicBulletId` picture) is a bullet, `none` is a
+    marker-less continuation paragraph, and **everything else — an unrecognised token and an absent
+    `w:numFmt` alike — is ordered**, because every one of ST_NumberFormat's sixty-odd tokens but those
+    two counts, and degrading an unknown one to a bullet would throw away ordering the counter already
+    has while degrading it to a decimal loses only a glyph the renderer discards anyway. Every way the
+    graph can break degrades rather than refuses (5.4): a `numId` no `w:num` declares is not numbered at
+    all, and a missing abstract definition or a delegation loop is a bullet at every level, because the
+    document has said the paragraph is an item and only the format is unknown. A **present** part that
+    is malformed is still a refusal, on `StyleLoad`'s reasoning — 5.4's latitude is about a broken
+    *reference*, not about bytes that are not well-formed XML. A refusal leaves **no definitions
+    behind it**, which the header promises and which is a safety rule rather than tidiness: an instance
+    read before the part broke has no counter key, and a refused load never sizes the counter table
+    those keys index. A load clears the model on the way in as well as on the way out, which is the
+    same rule from the other side and is what keeps a second load from stranding the first one's index.
+    `NumFind` goes through an
+    open-addressed index built once at load, for the reason M5 found in `StyleFind` and M7 found twice
+    more in `OpcPackage`. `NumAssignMarkers` is the pass, and it is a pass rather than part of the walk
+    because of `IrRewind`: `DocWalker` walks the first `mc:Choice` of an `mc:AlternateContent`
+    speculatively and rewinds it when an `mc:Fallback` follows, an `IR_MARK` carries no walker state,
+    and a table of nine counters per definition cannot be unwound the way a span arena can — a discarded
+    Choice would consume a number the document never showed, which is M6's monospace-vote defect one size
+    larger. It also puts the numbers where `docs/CONVERSION_REFERENCE.md` 6.2 puts them, in stage [9].
+    Incrementing a level clears every deeper one subject to that level's own `w:lvlRestart` — `0` never,
+    `N` only under a level shallower than `N`, absent under any shallower level — and clearing sets a
+    counter back to *unstarted* rather than to a value, so the start that seeds it next is chosen by
+    whichever `numId` is in force there, which is what makes an abstract-keyed counter and a num-keyed
+    start agree. A counter saturates at `NUM_MAX_NUMBER`, nine digits, which is where CommonMark stops
+    reading an ordered marker: a tenth digit is not a list at all, so a hostile `w:start` costs a wrong
+    number rather than a lost list.
   - `Ir.h`/`Ir.cpp` — the intermediate representation the walker builds, RunCoalescer rewrites and the
     emitter reads: blocks and spans as arrays of POD records over two growable byte arenas -- one for
     span text and, since M7, a second for destinations and anchor names -- each addressed by offset so a
     growth invalidates nothing. The split is load-bearing rather than tidy: every text span of a block
     lies end to end in the text arena, which is the invariant `RunCoalescer` merges on, and a destination
     written between two runs would put a gap in the middle of it. Five block kinds since M6 — paragraph, heading, quote, code
-    and rule — and two of them are exempt from the emptiness test: a rule is an empty paragraph by
-    construction, and an empty code paragraph is a blank line inside a fence. `IrEndBlock` trims a
+    and rule — and **M8 added no sixth**: a block carries the `numId` the walk read, its level, the
+    number the counter pass settled and a flag byte instead, because being an item of a list is a second
+    fact a document may state about a paragraph whose kind is already something else. That is not a
+    hypothetical — `tests/fixtures/liststyles` carries a blockquote that is an item and an inline-code
+    paragraph that is an item, and a sixth kind would have had to choose between the two facts. Three
+    kinds of block are exempt from the emptiness test: a rule is an empty paragraph by
+    construction, an empty code paragraph is a blank line inside a fence, and an **empty list item** is a
+    marker on a line of its own — Word writes them, the counter has already counted one, and unwinding
+    the block would leave a hole in the numbers. `IrHasContent` is the public twin of the test
+    `IrEndBlock` applies to itself, because the emitter asks the same question when it trims a list's two
+    edges, and `IrSetListRef` is what the walker records a reference through. `IrEndBlock` trims a
     block's leading and trailing break spans — except inside a fence, where a break *is* a newline and
     no marker is written for it, so the reason to trim one never arises and trimming loses a line — and
     then unwinds the whole block — records, spans and arena — when nothing but ASCII whitespace is left,
@@ -291,6 +354,26 @@ below.
     bitmap a drawn shape, a chart wall or a table cell is *painted with*, and taking it emitted a shape's
     wallpaper as the figure the paragraph shows — which also contradicted the "comes to nothing" rule,
     since a drawn shape is exactly what that names.
+    Since M8 the walk also reads `w:numPr`, and what it records is the **reference** — the `w:numId` and
+    the `w:ilvl` — rather than a number, which `NumAssignMarkers` settles afterwards. It does take the
+    numbering model, for **one bit only**: whether a `w:numId` names a list this document can resolve.
+    That is not fastidiousness. A reference that resolves to nothing is not an item of anything, so it
+    must cancel neither row 25's horizontal rule nor row 12's font detection — decided on the raw
+    reference, a broken numbering graph deleted a `---` from the document outright and demoted a fence
+    to an inline code span, which is a defect in a *reference* losing output that has nothing to do with
+    it. Precedence is settled here in `DocListSurvives`: a **heading cancels a list outright**, which
+    5.4 rules in as many words and which is the common case rather than an edge one, because Word's
+    Multilevel List linked to headings puts a `w:numPr` on every `Heading N` style and without the rule
+    every heading in such a document becomes an item and the structure inverts; and a `w:numId` of 0 is a
+    specification of "no numbering" that cancels whatever the style chain supplied, which is why the test
+    is `> 0` and not `>= 0`. A quote style and a code style are *not* cancelled — a paragraph may be both
+    — but **row 12's font heuristic is**, on `StyleReadBaseline`'s own reasoning one milestone on: the
+    font is a guess at what a paragraph is and a `w:numPr` is a statement, so a list of code lines set in
+    Consolas stays a list instead of becoming a run of fences that have each lost their marker. A
+    paragraph carrying a live `w:numPr` also gets its block even when it held nothing, because a marker
+    on a line of its own is content — which is the same reason it is not the row 25 horizontal rule when
+    it carries a lone bottom border as well: Word draws the marker and the border both, and emitting
+    `---` there would delete the item and invent a rule the document never had.
     What is skipped whole and why:
     `w:tbl` (M9), `w:instrText` and `w:fldChar` (M10's field state machine),
     `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
@@ -398,6 +481,48 @@ below.
     stays two spans, and measuring them apart sizes the fence at three, which the content's own three
     then closes. Its outermost blank lines are trimmed by whether a block holds a byte worth a line of
     its own, not by its byte count, so a code paragraph of nothing but padding does not open the fence.
+    M8 gave it the **per-line prefix stack** its own To Do item 2 asked for, and it is what makes nesting
+    work rather than a tidiness. A child list must be indented to its parent item's **content column** —
+    the marker's own width plus the space after it — so `- ` is two columns, `1. ` is three and `10. ` is
+    four; a fixed two-space step is wrong the moment a list reaches item ten, which is not exotic,
+    because it flattens the whole list into one level. The stack carries the column each open level's
+    marker actually landed at, so the indentation is computed from what was written, and a `w:ilvl` is
+    mapped onto an emitted depth **through the stack of levels still open** rather than used as one. Two
+    separate things force that. A level the document skipped over would put a marker four columns past
+    its parent's content column, and four past it is an indented code block — the list would not merely
+    look wrong, it would stop being a list (5.4 allows a skip to be normalised to one Markdown level per
+    step, and this is that). And a run of items that *begins* at a deep `w:ilvl` has no parent to indent
+    under at all, so using the level directly emits a shallower item further in than the deeper one above
+    it and inverts the document's own nesting. An ordered marker is capped at nine digits, where
+    CommonMark stops reading one. Row 17's `<!-- -->` separator is written between two **ordered** lists
+    only, at the level's own indentation and with no blank line on either side: what a merge costs is the
+    second list's start number, which two bullet lists do not have, so a comment between those would be
+    markup written for no one, and a pair whose marker kinds differ separates itself. Three shapes inside
+    a list take a blank line in front of them because each is a block that cannot interrupt a paragraph —
+    a marker-less continuation paragraph, a nested list whose first number is not 1, and a nested list
+    whose first item is empty. The last is the worst and it is silent: a lone `-` under a line of text is
+    a **setext underline**, so the line above becomes a heading rather than merely losing its structure.
+    A quotation that is also an item takes its marker first and its `> ` after it, and `MdSeparate` takes
+    both neighbours now rather than one, because M6's bare `>` between two consecutive quote blocks is
+    right for a quotation a producer broke in two and wrong for two quoted items, where it would put a
+    stray `>` between two markers. `MdEmitFence` takes a prefix and rolls it back off a line that turned
+    out to be blank, so a fence inside an item is indented without its blank lines gaining trailing
+    spaces. A run of items is grouped the way a run of code paragraphs is, because what separates two
+    items of one list is nothing at all and no block separator can write that; the run of code
+    paragraphs now stops *before* an item, so a fence inside an item is emitted in its item rather than
+    at column zero, and a run of marker-less code continuations whose lines land in one column is one
+    fence rather than several, which is row 12's merge inside an item. A content-free item is a marker
+    on a line of its own in the middle of a list and
+    nothing at all at either **end** of one, so a list's two edges are trimmed: an empty last item is
+    the paragraph a user leaves behind on pressing Enter to get out of a list, and an empty first one is
+    the same artefact at the top — **unless the item after it is deeper**, in which case it is the
+    parent those items hang from, and trimming it promotes them to the outer list where the next
+    shallower item becomes their sibling and a renderer counts it on from their numbers. A marker-less
+    continuation with nothing in it is skipped whole, because it has no marker to stand for it the way
+    an empty *marked* item does; and because it is skipped, every question about "the block before this
+    one" is asked of the last block that actually **emitted a line** rather than of the previous record
+    — the two are not the same, and reading the record suppressed a blank line the block before it had
+    earned, merging two paragraphs of one item into one.
   - `LinkResolver.h`/`LinkResolver.cpp` — where a reference becomes a destination, and where correctness
     rule 1 is kept for content. `LinkResolveRefs` looks a relationship id up in the part it was read in,
     because ids are scoped per part; a hyperlink to an External target becomes that URI (with the
@@ -463,14 +588,20 @@ below.
     picture it names and does not have, which is the right way round -- the text is what the conversion
     was for -- and the run still reports a failure. No archive entry name ever reaches disk, which is
     correctness rule 10's other half.
-  - `Convert.h`/`Convert.cpp` — the per-file pipeline: container, package, relationships, styles, walk,
-    coalesce, resolve, plan the media, emit, write, extract. This is the function one worker runs when M13
+  - `Convert.h`/`Convert.cpp` — the per-file pipeline: container, package, relationships, styles,
+    numbering, walk, coalesce, resolve, plan the media, number the items, emit, write, extract. This is
+    the function one worker runs when M13
     adds the bounded pool, which is why it
-    is a module and not a lump of `main.cpp`. The four passes between the coalescer and the emitter run in
+    is a module and not a lump of `main.cpp`. The numbering part is resolved through the main part's
+    relationships exactly as the styles part is, by `ConvertNumberingPart` over `OPC_REL_NUMBERING`, and
+    an absent one is legal and yields an empty model. The five passes between the coalescer and the
+    emitter run in
     the one order that works: references resolve against the part they were read in, anchors resolve once
     every reference is a destination (a heading's slug is numbered over the whole document), the media plan
-    turns a part name into a path and can turn a picture back into its alt text, and dropping the emptied
-    blocks last is what restores the invariant the emitter rests on — that every block it is handed
+    turns a part name into a path and can turn a picture back into its alt text, `NumAssignMarkers` runs
+    after that because an item's content is not settled until a picture has had its last chance to become
+    alt text, and dropping the emptied blocks last is what restores the invariant the emitter rests on —
+    that every block it is handed
     produces at least one byte. `ConvertOutputPath` is pure and allocation-free and is
     therefore what the unit suite hammers: D7d's rule is `-o` as a filename for one input and a
     directory for several, otherwise the input's own path with its extension replaced. A trailing
@@ -494,7 +625,7 @@ below.
     replaces, so it lives there until then.
   - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, option handling, the input loop and the
     exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
-  - **What the binary does at M7**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+  - **What the binary does at M8**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
     input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and which
     part broke it**, an output that cannot be written exits 4, and a sound package is **converted** and
@@ -504,12 +635,17 @@ below.
     that converted something and failed something exits **6**, which D7c reserves for exactly that; a
     run in which everything failed returns the highest of their verdicts. Since M7 a document that draws
     pictures also writes them, into `<stem>_media\` beside the `.md` or into `--media-dir`, and says how
-    many in a note; `--no-images` turns that off and keeps the alt text.
-  - **What M7 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
+    many in a note; `--no-images` turns that off and keeps the alt text. M8 changes none of that surface:
+    a numbering part is one more optional part, and a document whose lists are broken converts rather
+    than refusing, so no new exit code and no new note arrived with it.
+  - **What M8 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
     escaping that keeps all of it from being re-read as markup; bold, italic,
     strikethrough, superscript, subscript, inline code, fenced code blocks, blockquotes and the
-    horizontal rule; and — new at M7 — hyperlinks, bookmark anchors, heading slugs, images and the media
-    files they come from. Lists, tables, notes and fields arrive at M8 through M10 and are
+    horizontal rule; hyperlinks, bookmark anchors, heading slugs, images and the media
+    files they come from; and — new at M8 — bullet and numbered **lists**, nested by `w:ilvl`, with real
+    computed numbers, the whole `w:num`/`w:abstractNum`/`w:numStyleLink` indirection behind them,
+    `w:lvlOverride`/`w:startOverride`/`w:lvlRestart`, and numbering that arrives through a paragraph
+    style. Tables, notes and fields arrive at M9 and M10 and are
     skipped until then, which means `w:tbl`, `w:instrText`, `w:fldChar`, the
     note references, `w:sym` and `m:oMath` are all still skipped whole. Underline, highlight, colour and
     size are dropped by policy and always will be (mapping rows 8 and 9).
@@ -530,10 +666,10 @@ below.
   and both build clean at `/W3`. No OutDir override. Both configs also define
   `WIN32_LEAN_AND_MEAN;NOMINMAX` — added at M2, when `<windows.h>` first entered the project; neither
   hides a header this project needs, because `winnls.h` (`WideCharToMultiByte`) and `wincon.h`
-  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Eighteen
-  `<ClCompile>`s, all `src\…`, and twenty-four `<ClInclude>`s: the six `include\…` headers and eighteen
+  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Nineteen
+  `<ClCompile>`s, all `src\…`, and twenty-five `<ClInclude>`s: the six `include\…` headers and nineteen
   `src\…` ones.
-- `DOCXtoMD.vcxproj.filters` — lists the eighteen `src\*.cpp` files under Source Files and all twenty-four
+- `DOCXtoMD.vcxproj.filters` — lists the nineteen `src\*.cpp` files under Source Files and all twenty-five
   headers under Header Files, in the same order as the `.vcxproj`. Every `<ClCompile Include="…">` and
   `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character; keep it that way, or
   the IDE tree stops reflecting the build. The tree is deliberately flat — there is no `src` filter
@@ -548,7 +684,7 @@ below.
   because MSBuild's default is `$(SolutionDir)`-relative: without the pin the test binary lands in
   `x64\Release\` when the solution is built and in `tests\x64\Release\` when the project is, and a
   definition-of-done command cannot name a path that moves. The main project still sets no OutDir. It
-  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the fourteen files in
+  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the fifteen files in
   `tests\unit\`.
 - Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
   Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
@@ -640,7 +776,7 @@ below.
   `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
   code and the message; `run_golden.py` converts every golden and byte-compares it. All three
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
-  a POSIX host — run them as `python tests/<name>.py`. There are **nineteen** part trees under
+  a POSIX host — run them as `python tests/<name>.py`. There are **twenty-three** part trees under
   `fixtures/`: `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`,
   `nostyles` and `wrappers`, `dollars`, which D12 added, and M6's eight — `fragments` (mid-word run
   splits across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting` (a trailing space
@@ -662,7 +798,22 @@ below.
   a reference that names no relationship at all) and `anchors`
   (a bookmark in a heading, one mid-paragraph, an unreferenced `_GoBack`, a link to a bookmark nothing
   defines, two headings that must be numbered apart, a bookmark between paragraphs, and one name declared
-  twice, where the first carries the anchor and the second emits nothing).
+  twice, where the first carries the anchor and the second emits nothing). M8 adds four, and each pins
+  something the others cannot. `lists` is the ordinary document — bullets, nesting, an ordered list that
+  starts at three, a third level, a level the document skips over, formatting inside an item, a
+  hard-break continuation, an empty item, a line whose own text would start a bullet, and a
+  `List Paragraph` style carrying no numbering, which is Word's list *look* without the list.
+  `listcounters` is the arithmetic: two `w:numId`s over one abstract definition continuing a single
+  sequence across an interruption, a `w:startOverride` firing once and the `<!-- -->` it then needs,
+  levels counting on their own, `w:lvlRestart` 0 refusing a restart, and a `numFmt none` continuation
+  paragraph. `listbroken` is every way the graph can fail — a dangling `w:numId`, a `w:num` whose
+  abstract definition is missing, a `w:numStyleLink` chased four hops to the definition it lands on, two
+  definitions that delegate to each other, and a sound definition beside them all, unaffected.
+  `liststyles` is numbering that arrives through the style chain — a style carrying the `w:numPr`, a
+  style inheriting it through `w:basedOn` and naming only the `w:ilvl`, a `numId` of 0 cancelling it, a
+  numbered heading staying a heading, a quotation that is also an item, and a monospace item that stays
+  an item instead of becoming a fence. `w:lvlRestart` with a **value** is the one rule of M8 that is
+  pinned at the unit level only, because a fixture for it would say nothing the counters fixture does not.
   `make_fixtures.py` also synthesises `media-binary.docx`, whose one media part holds every byte value,
   so that the byte path to disk is proved rather than assumed. Each case has an `expected.md` beside its
   `src/`, and every one was
@@ -671,7 +822,11 @@ below.
   was authored as the regression pin for a defect a review had just found, so each failed against the
   build as it stood and passed once its guard landed. Of M7's three, `links` and `images` matched first
   time and `anchors` did not: it is how `[nowhere]()` — what a link to a bookmark the document does not
-  define was emitting — was found, which is the whole reason for writing one by hand.
+  define was emitting — was found, which is the whole reason for writing one by hand. Of M8's four,
+  `lists` and `liststyles` matched first time and the other two did not, for the same reason and to the
+  same benefit: `listcounters` is how a nested run that *begins* at a deep `w:ilvl` was found to emit the
+  shallower item further in than the deeper one above it, and `listbroken` is how a `<!-- -->` was found
+  between two bullet lists that had nothing to separate.
   `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
   `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
   `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
@@ -695,19 +850,21 @@ below.
   same question as "does it exit 5" and no longer is, because a package can be a perfectly good archive
   and still not be a DOCX — without the flag every new package-level negative would silently drop out of
   the `zipfile` cross-check.
-- `tests/unit/` — **exists** as of M4, doubled at M5, gained a ninth suite at M6 and an eleventh at M7:
+- `tests/unit/` — **exists** as of M4, doubled at M5, gained a ninth suite at M6, an eleventh at M7 and
+  a twelfth at M8:
   `Check.h`/`Check.cpp` (one `CHECK` macro, a
   group heading and a pass/fail summary, over `typedefs.h` and `<stdio.h>` and nothing else — the header
   itself needs only `typedefs.h`, so a suite that includes it pulls in no I/O), `TestMain.cpp`, and one
   suite per module — `TestUtf.cpp`, `TestXmlPull.cpp`, `TestOpcPackage.cpp`, `TestStyleModel.cpp`,
-  `TestDocWalker.cpp`, `TestRunCoalescer.cpp`, `TestLinkResolver.cpp`, `TestMediaExtractor.cpp`,
-  `TestMdEscape.cpp`, `TestMdEmitter.cpp`,
+  `TestNumberingModel.cpp`, `TestDocWalker.cpp`, `TestRunCoalescer.cpp`, `TestLinkResolver.cpp`,
+  `TestMediaExtractor.cpp`, `TestMdEscape.cpp`, `TestMdEmitter.cpp`,
   `TestConvert.cpp`. Every case is driven from a string literal;
   nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
   works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
   character data, `$` is the end and `!n` is refusal *n* — so one string per case reads better than ten
-  assertions. `src/` carries six result-sentence tables, and four of them — `Utf`, `XmlPull`,
-  `OpcPackage` and `StyleModel` — are pinned against their enums by comparing specific rows against
+  assertions. `src/` carries seven result-sentence tables, and five of them — `Utf`, `XmlPull`,
+  `OpcPackage`, `StyleModel` and `NumberingModel` — are pinned against their enums by comparing
+  specific rows against
   the exact sentence, because a sentence table and the enum indexing it drift apart silently; that
   check caught a real one-row misalignment during M4, and an M5 review caught the `OpcPackage` pair
   asserting only that the sentence was non-null, which `OpcResultText` can never return. `DocWalker`
@@ -721,12 +878,20 @@ below.
   rule. `TestDocWalker` and `TestRunCoalescer` share it, which is what makes the pair readable: the
   first shows the fragmentation the walker preserves, the second shows the same document merged. M7
   extended it again rather than inventing one: `L(dest)` opens a link and `L)` closes it, `I(source)[alt]`
-  is an image, `N(name)` is a bookmark anchor and `N-(name)` one that has been muted. The two renderers
-  are independent copies with no shared header, so a kind added to one and not the other makes the pair
-  disagree about the same document — edit both.
+  is an image, `N(name)` is a bookmark anchor and `N-(name)` one that has been muted. M8 extended it once
+  more: `[level#numId]` before a block letter is the list reference the walk read, and `[level=marker]`
+  is what `NumAssignMarkers` settled — a `-` for a bullet, digits for a number, empty for a marker-less
+  continuation — with a `!` for the first item of a list. The two renderers
+  are independent copies with no shared header, so a kind or a field added to one and not the other makes
+  the pair
+  disagree about the same document — edit both. Each carries a `static_assert` on the block-kind count,
+  so a sixth kind cannot be added without both traces being told about it.
   `TestMdEmitter`'s helper runs every pass `Convert.cpp` runs, in the same order, so what it measures is
   the shape the program really produces; with no package a relationship resolves to nothing, so a
   `w:anchor` link is the half of M7 the emitter suite can reach and the rest is the goldens' to prove.
+  Since M8 it runs `NumAssignMarkers` in that order too, over a numbering part the case supplies as a
+  literal, which is what lets the emitter's list rules — the content-column indent, the `<!-- -->`, the
+  three blank-line shapes and the setext hazard — be driven without a package.
 - **Not yet created** (GCS obligations, see Roadmap): `bench/` and CI. Do not reference them as if they
   exist. Everything else this section names does exist, `tests/run_golden.py` included.
 
@@ -761,8 +926,8 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M7 they return **125**, **86** and **1195** checks, over the **67** fixtures `make_fixtures.py`
-builds. All four were confirmed on Windows on 2026-09-09. The three check counts are the interesting
+At M8 they return **133**, **94** and **1334** checks, over the **71** fixtures `make_fixtures.py`
+builds. All four were confirmed on Windows on 2026-09-22. The three check counts are the interesting
 ones: they are what the shim had measured on Linux beforehand, exactly, as they have been at every
 milestone since M3. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
 on both platforms -- and is recorded only so a run that builds a different number is noticed.
@@ -1078,13 +1243,33 @@ forbidden; before D6 it was.
   `volatile ui32` with unconditional full barriers — there is no `std::atomic` and no memory-order
   argument to document. Record the locking contract in the prolog instead; adopting `std::atomic`
   anywhere would need a new decision.
-- **M4's coverage gap is still open, and M7 did not close it.** `OpcFindRelById` is exercised on every
+- **M4's coverage gap is still open, and neither M7 nor M8 closed it.** `OpcFindRelById` is exercised on
+  every
   hyperlink and every picture, but the claim it exists to support -- that relationship ids are scoped
   per part, so `rId3` in `document.xml` and `rId3` in `footnotes.xml` are unrelated -- still has no
   test, because M7 loads exactly one part's relationships. It gets one at **M10**, when the footnote
   walk loads a second part's. Note what M7 did add: `LinkResolver` now builds its id index over one
   part, taking `partIndex` from the caller, so the scoping is in the *shape* of the code as well as in
-  `OpcPackage`'s -- but a shape is not a test.
+  `OpcPackage`'s -- but a shape is not a test. M8 reads a *third* part (`numbering.xml`) and still does
+  not close it, because nothing in a numbering part is reached through a relationship id.
+- **Three M8 limits are declared and reachable by no test, and that is stated rather than carried
+  quietly.** `NUM_MAX_ABSTRACT` and `NUM_MAX_NUMS` refuse a part declaring more than 4,096 definitions,
+  and `NUM_MAX_DELEGATE` bounds a `w:numStyleLink` chase at sixteen links. None of the three thresholds
+  is driven by a test. The delegation one is the subtler of them: a **cycle** is pinned at both the unit
+  and the golden level, and since M8's review the cap is the whole guard that catches it -- the visited
+  set that used to sit beside it could never change an outcome, because every exit but the one that
+  finds a definition carrying levels leaves the delegation unresolved, and unresolved is a bullet at
+  every level either way. So what is untested is the threshold rather than the behaviour: a cycle runs
+  the cap out and lands where a visited set would have put it sixteen steps earlier. The two
+  4,096 caps are unreachable from a suite whose whole point is that every case is one readable string: a
+  literal declaring 4,097 definitions is about a megabyte of source. `NUM_ERROR_LIMIT`'s sentence is
+  pinned against its enum row like every other, so the refusal path is wired even where the threshold is
+  not driven. Generated fixtures would settle all three and are the obvious thing for **M11** to add,
+  where hostile input is the milestone rather than a footnote.
+- **`w:lvlRestart` with a value is pinned at the unit level only.** `0` (never restart) and an absent one
+  (restart under any shallower level) are both driven by `tests/fixtures/listcounters`; `N` is driven by
+  `TestNumberingModel` alone, because a fixture for it would exercise nothing the counters fixture does
+  not already show and would cost a reader a second document to hold in their head.
 - **Two M7 rules are live and pinned by nothing, and both are stated rather than quietly carried.**
   `MdFormatAhead` reports `IR_FMT_NONE` for a markup span, which is the same reasoning as
   `MdEdgeAhead`'s and is right for the same reason -- a `[` between two emphasis spans separates their
@@ -1159,7 +1344,16 @@ implementation session must respect:
 | Inline code | `` ` `` — via code-named character styles or monospace `rFonts`. Code wins over bold and italic, and the bits are cleared in the **walker** so that two runs coming out as the same code span coalesce; left set, their backtick delimiters would meet and a renderer would read the pair as one span |
 | Code block | Fenced ``` — consecutive all-monospace paragraphs merge into one fence, whose length is one more than the longest backtick run inside it and never fewer than three. No info string: the language is not recoverable. An empty code paragraph is a blank line of the fence, and is trimmed only where it falls at either end of one |
 | Quote styles | `> ` blockquote — Quote, Intense Quote, Block Text and LibreOffice's Quotations, by name, never by indent. Two consecutive quote paragraphs are separated by a bare `>` rather than a blank line, so a quotation a producer broke in two stays one blockquote: session-derived at M6, and the one exception to the blank line between blocks |
-| Bullet / numbered lists | `-` / real computed numbers (`3.` honors start); nested by `ilvl` |
+| Bullet / numbered lists | `-` / real computed numbers (`3.` honors start); nested by `ilvl`. Counters are keyed on the resolved **abstract definition**, never on the `numId`, so two `numId`s over one definition continue one sequence (2.9); a `w:startOverride` is keyed by `numId` instead and fires the first time that `numId` is used. Those are the two commands Word's list UI offers |
+| A `w:numFmt` this build does not recognise, and an absent one | **Ordered**, a decimal. Every ST_NumberFormat token but `bullet` and `none` counts, so an unknown one is far likelier to be a counting format than a bullet — and reading it as a bullet throws away ordering the counter already has, while reading it as a decimal loses only a glyph shape row 15 says the renderer discards. A level whose marker is a `w:lvlPicBulletId` picture is a bullet. Session-derived at M8 |
+| A paragraph that is both a heading and a list item | The heading. 5.4 rules it outright, and it is the common case rather than an edge one: Word's Multilevel List linked to headings puts a `w:numPr` on every `Heading N` style, so without the rule every heading in such a document becomes an item and the structure inverts |
+| A paragraph that is both a list item and a quotation, a fence, or all-monospace | An item, keeping its kind — `- > quoted` and a fence inside its item. But row 12's **font heuristic** is switched off for an item, on the same reasoning as its monospace-baseline guard: the font is a guess at what a paragraph is and a `w:numPr` is a statement, so a list of code lines set in Consolas stays a list rather than becoming fences that have each lost their marker. A code *style* is unaffected. Session-derived at M8 |
+| A `w:numId` of 0, and a `w:numId` naming a `w:num` the part does not declare | Not a list at all — 0 is a specification of "no numbering" (2.4) and cancels whatever the style chain supplied, and a dangling reference degrades the way 5.4 asks every broken reference to. A `w:num` whose abstract definition is missing, and a `w:numStyleLink` delegation that loops, keep the item and take a **bullet**: the document has said the paragraph is an item and only the format is unknown |
+| An empty list item | A bare marker on a line of its own, which CommonMark renders as an empty `<li>`. Word writes them, and the counter has already counted one, so dropping the block leaves a hole in the numbers. Trimmed off a list's two **edges**, where an empty item is the paragraph a user leaves behind on pressing Enter to get out of a list. Session-derived at M8 |
+| A child list's indentation | The parent item's **content column** — the marker's own width plus one space, so 2 under `- `, 3 under `1. ` and 4 under `10. `. A fixed step per level flattens the whole list the moment it reaches item ten. A `w:ilvl` the document skips over is normalised to one Markdown level per step (5.4), because four columns past a parent's content column is an indented code block and the list stops being a list |
+| An ordered marker past nine digits | Capped there, and the counter saturates at the same value. CommonMark stops reading an ordered marker at nine digits, so a tenth makes the paragraph stop being a list at all: a hostile `w:start` costs a wrong number rather than a lost list |
+| Two adjacent lists that must not merge | `<!-- -->` at the level's own indentation, with no blank line either side (row 17) — but **only between two ordered lists**. What a merge costs is the second list's start number, which two bullet lists do not have, so a comment between those would be markup written for no one; a pair whose marker kinds differ separates itself. Session-derived at M8 |
+| A marker-less continuation paragraph, a nested list starting at a number other than 1, and a nested list whose first item is empty | Each takes a blank line in front of it, because each is a block that cannot interrupt a paragraph. The last matters most and fails silently: a lone `-` under a line of text is a **setext underline**, so the line above becomes a heading rather than merely losing its structure |
 | Tables | GFM pipe tables; header = first row (or `tblHeader`); cell breaks → `<br>`; merged → padded GFM cells (gridSpan: content in first cell + empty pads; vMerge continue: empty cell; HTML `<table>` under `--tables=html-on-merge`); nested → HTML `<table>` fallback |
 | Hyperlinks | `[text](url)` external, `[text](#anchor)` internal (GFM heading slugs). A slug is github-slugger's rule exactly: lower case, then everything outside Unicode L, M, **Nd** and connector punctuation removed, then each space to a hyphen — over the heading's content with the padding at its two ends stripped, as an ATX heading's own parsing strips it. `Nd` and not all of `N`: the renderer removes the superscripts, the vulgar fractions and the Roman numerals |
 | A hyperlink whose destination resolves to nothing | The text, with no brackets — a dangling `r:id`, a target inside the package, a bookmark the document does not define. Session-derived at M7 and the same shape reference 5.4 gives a dangling numbering reference: degrade, never refuse. A hyperlink with no *content* goes the same way, which 5.6 asks for outright |
@@ -1185,12 +1379,13 @@ implementation session must respect:
 | A picture inside a fenced code block | Its alt text, as literal text of the fence, and no file extracted. A fence emits its text and nothing else, so an extracted picture would be one no line of the document refers to. Session-derived at M7 |
 | `#`, `%` or `?` in a **generated** media path | Percent-encoded. The three bytes `MD_CONTEXT_LINK_DEST` leaves alone in a producer's own target, because that target arrives already encoded far more often than it arrives holding a literal one — which is not true of a name derived from `draft #2.docx` |
 
-## Planned architecture (`docs/`, `include/`, `tests/` and nineteen `src/` modules exist — build the rest by Roadmap)
+## Planned architecture (`docs/`, `include/`, `tests/` and twenty `src/` modules exist — build the rest by Roadmap)
 
-**Written so far (M2 + M3 + M4 + M5 + M6 + M7)**: `src/main.cpp`, `src/BuildGuards.h`,
+**Written so far (M2 + M3 + M4 + M5 + M6 + M7 + M8)**: `src/main.cpp`, `src/BuildGuards.h`,
 `src/CliOptions.h`/`.cpp`, `src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`,
 `src/ZipReader.h`/`.cpp`, `src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp`, `src/OpcPackage.h`/`.cpp`,
-`src/StyleModel.h`/`.cpp`, `src/Ir.h`/`.cpp`, `src/DocWalker.h`/`.cpp`, `src/RunCoalescer.h`/`.cpp`,
+`src/StyleModel.h`/`.cpp`, `src/NumberingModel.h`/`.cpp`, `src/Ir.h`/`.cpp`, `src/DocWalker.h`/`.cpp`,
+`src/RunCoalescer.h`/`.cpp`,
 `src/LinkResolver.h`/`.cpp`, `src/MediaExtractor.h`/`.cpp`,
 `src/MdEscape.h`/`.cpp`, `src/MdEmitter.h`/`.cpp` and `src/Convert.h`/`.cpp`, plus everything already in
 `docs/`, `include/` and `tests/`. Every other entry below is still to be written — do not reference one
@@ -1206,6 +1401,11 @@ what lets the unit suite drive it — the test project compiles every `src\*.cpp
 to see all of it at once — which neither the streaming walker nor the per-block emitter can do. 6.3 puts
 that work in stage [9] and maps it onto `RunCoalescer`/`MdEmitter`; giving it a module of its own is a
 divergence, recorded here and in the module's own header rather than left to be discovered.
+`NumberingModel` **is** in 6.3's list, but half of what it does is not where 6.3 puts it: the counters
+are a pass over the finished document rather than state the stage [6] walk carries, for the reason its
+header gives — `IrRewind` unwinds a speculative `mc:Choice` and a counter table cannot be unwound with
+it. That lands the numbers in stage [9] beside `LinkResolver`'s, which is the same shape and the same
+reason, and it is recorded here and in the module's header for the same reason too.
 
 ```
 src/
@@ -1228,13 +1428,16 @@ src/
    OpcPackage.h/.cpp     [Content_Types].xml + rels graphs; part lookup; r:id resolution
                          [written at M4]
    StyleModel.h/.cpp     styles.xml → resolved-props cache (basedOn chains, toggle XOR, name normalization)
-                         [written at M5]
-   NumberingModel.h/.cpp numbering.xml → per-numId levels with overrides; runtime counters
+                         [written at M5; a style's own w:numPr at M8]
+   NumberingModel.h/.cpp numbering.xml → per-numId levels with overrides; the counter pass
+                         [written at M8. The counters are a pass over the finished document, not walk
+                         state — see the divergence note above]
    Ir.h/.cpp             intermediate representation (blocks/spans) — the walker never emits Markdown
-                         [written at M5; the .cpp is a session addition, see above]
+                         [written at M5; the .cpp is a session addition, see above; the list fields on
+                         a block at M8, which added no sixth block kind]
    DocWalker.h/.cpp      document walk → IR (tracked changes, sdt, AlternateContent) [written at M5;
-                         hyperlinks, pictures and bookmarks at M7]; the footnote walk and the field
-                         state machine arrive at M10
+                         hyperlinks, pictures and bookmarks at M7; w:numPr read as a reference at M8];
+                         the footnote walk and the field state machine arrive at M10
    RunCoalescer.h/.cpp   adjacent-run merging + whitespace hoisting  [written at M6]. The effective
                          format is resolved one stage earlier, in DocWalker, which is where the run
                          properties are — a divergence from CONVERSION_REFERENCE 6.2's [7]+[8], noted
@@ -1244,9 +1447,11 @@ src/
                          addition, see above]
    MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)  [written at M5]
    MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing  [written at M5;
-                         the delimiters, the block kinds and the flanking fallback at M6]
-   Convert.h/.cpp        one file end to end: container → package → styles → walk → coalesce → resolve
-                         → plan → emit → write → extract, plus D7b's output-path derivation and M7's
+                         the delimiters, the block kinds and the flanking fallback at M6; the per-line
+                         prefix stack and the list rules at M8]
+   Convert.h/.cpp        one file end to end: container → package → styles → numbering → walk →
+                         coalesce → resolve → plan → number → emit → write → extract, plus D7b's
+                         output-path derivation and M7's
                          media-directory derivation. M13's Batch calls this per worker
                          [written at M5; a session addition, see above]
    MediaExtractor.h/.cpp referenced media parts → disk; content-type extensions; dedup; safe names
@@ -1256,12 +1461,12 @@ src/
                          exit-code mapping. MT-safe from M13: every worker reports through this one
                          sink, so it locks then (D6). Reentrant at M2
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
-                         run_container.py [make_fixtures.py written at M3 and extended at M4, M5, M6
-                         and M7; run_container.py written at M3 and extended at M4]; run_golden.py
+                         run_container.py [make_fixtures.py written at M3 and extended at M4, M5, M6,
+                         M7 and M8; run_container.py written at M3 and extended at M4]; run_golden.py
                          [written at M5, with the media table and the media options at M7];
                          unit/ holds the CHECK header and one suite per module, built by
                          tests/DOCXtoMD.Tests.vcxproj [written at M4, five more suites at M5, a
-                         ninth at M6, an eleventh at M7]
+                         ninth at M6, an eleventh at M7, a twelfth at M8]
 bench/                   GCS p4 microbenches (create with the first performance claim)
 docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
 include/                 the six owner-authored shared headers (already here); on the include path
@@ -1274,8 +1479,9 @@ code plus the CRT/Win32 and the six shared headers in `include/`, which every mo
 Allocation-conscious modules (GCS p2 hot set): `Inflate`, `ZipReader`, `XmlPull` (zero-allocation
 steady state), `DocWalker`, `RunCoalescer`, `MdEmitter` (single growable buffer), `Utf` — all
 allocating through `memory management.h`. The parsed-once models (`StyleModel`, `NumberingModel`,
-`OpcPackage`, `CliOptions`) use the same allocators but are not hot, and so do the two M7 passes:
-`LinkResolver` allocates one name index and one slug index per document, and `MediaExtractor` one plan.
+`OpcPackage`, `CliOptions`) use the same allocators but are not hot, and so do the three passes above
+the walk: `LinkResolver` allocates one name index and one slug index per document, `MediaExtractor` one
+plan, and `NumAssignMarkers` one counter table sized by the numbering part rather than by the document.
 
 Under D6, **`Batch` and `Diag` are the only `MT-safe` modules**. Everything that converts a document
 — `Utf`, `Inflate`, `Crc32`, `ZipReader`, `XmlPull`, `OpcPackage`, `StyleModel`, `NumberingModel`,
@@ -1910,9 +2116,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   claims found that a *muted* link still separated the two runs it stood between, so a bold run either
   side of one emitted `**A****B**` and an entity split across it went unescaped. The three tallies are
   unchanged -- the fix adds two paragraphs to an existing fixture and no new check -- so what the owner
-  ran still describes the tree, but the changed `RunCoalescer`, `Convert` and `MdEmitter` have not been
-  through `/W3`. The marker stays `[done]` on M5's precedent: a verification record is of what was run,
-  and a later bug fix does not un-verify a milestone.
+  ran still describes the tree. The marker stays `[done]` on M5's precedent: a verification record is of
+  what was run, and a later bug fix does not un-verify a milestone. The gap that left -- the changed
+  `RunCoalescer`, `Convert` and `MdEmitter` never having been through `/W3` -- was closed by M8's
+  Windows run on 2026-09-22, which built all three clean along with the rest of the solution.
   - **The three tallies are the shim's, exactly.** 125, 86 and 1195, the same three numbers in the same
     order a Linux session measured before any of this reached a Windows machine. That is the fifth
     milestone running where the shim predicted the real MSVC binary rather than only itself -- and it is
@@ -2005,7 +2212,97 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     `DOCXtoMD.vcxproj`, which is the honest statement of it: the suites run under both sanitizers on
     Linux and under neither on Windows, and turning `/fsanitize=address` on for a Debug build would be
     worth a decision of its own rather than a quiet edit.
-- **M8 `[todo]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne numPr).
+- **M8 `[done]` Lists** — `NumberingModel` (indirection, overrides, restarts, style-borne
+  numPr). DoD: the milestone names no commands of its own, so the global five apply; `tests/fixtures/lists`,
+  `listcounters`, `listbroken` and `liststyles` are the fixture pairs bullet 4 asks for.
+  **Status**: the code landed from Linux on 2026-09-10 as `[done-unverified]`, and the owner verified it
+  on Windows on 2026-09-22. Both x64 configurations build with **zero errors and zero warnings**;
+  `python tests\make_fixtures.py` builds all **71** fixtures; `python tests\run_container.py` passes all
+  **133** checks against `x64\Release` and all **133** again against `x64\Debug`;
+  `python tests\run_golden.py` passes all **94**; and `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
+  **1334**. Those six runs discharge the two global bullets no Linux session can reach: bullet 1, zero
+  warnings at `/W3`, and bullet 4, where `run_golden.py` byte-compares the `lists`, `listcounters`,
+  `listbroken` and `liststyles` pairs against an `expected.md` written by hand from the specification
+  before the converter was run at it. Bullets 2, 3 and 5 are mechanical and were checked on Linux, so
+  the marker is `[done]` with nothing outstanding.
+  - **The three tallies are the shim's, exactly.** 133, 94 and 1334, the same three numbers in the same
+    order a Linux session measured before any of this reached a Windows machine, and the fixture count
+    with them. That is the **sixth** milestone running where the shim predicted the real MSVC binary
+    rather than only itself -- and it is worth what it costs precisely because it proves nothing about
+    `/W3`, `/sdl`, `/arch:AVX2` or the real `include/` headers, which is what the owner's run covers
+    instead. The Debug run carries its own half of that: `/RTCu` is where an indeterminate read
+    surfaces, which is how M7's was caught, and Debug is where `mzero`'s aligned 256-bit path over the
+    one `al32` structure M8 adds -- `NUM_MODEL`, pinned by its own `static_assert` -- would fault had
+    the alignment been lost.
+  - **What the milestone is, in one line**: a paragraph's `w:numPr` becomes a Markdown list item, with
+    real computed numbers, the whole `w:num`/`w:abstractNum`/`w:numStyleLink` indirection behind it,
+    `w:lvlOverride`/`w:startOverride`/`w:lvlRestart`, and numbering that arrives through a style chain.
+    `src/NumberingModel.h`/`.cpp` is the new module and `tests/unit/TestNumberingModel.cpp` the twelfth
+    suite; `Ir`, `StyleModel`, `DocWalker`, `MdEmitter` and `Convert` each gained the part of it that
+    belongs to them, and no sixth block kind was added — see the `Ir` bullet for why.
+  - **Verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII only,
+    CRLF and ≤150 columns on all thirty-eight `src/` files and all fifteen `tests/unit/` ones;
+    `clang-format --style=file` a verified no-op on every one of the fifty-three; both
+    `.vcxproj`/`.filters` pairs well-formed XML, mutually byte-identical in their `Include=` paths and
+    order, and every listed file present on disk.
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1334**
+    checks, `tests/run_golden.py` all **94** and `tests/run_container.py` all **133**, every one of them
+    **twice** — plain, and under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on,
+    with no diagnostic from either.
+  - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`,
+    M4 from expat and M5 through M7 from `markdown-it-py`. M8's claim is about *numbers*, so the oracle
+    generates documents with random numbering parts, converts them, re-parses the emitted Markdown with
+    `markdown-it-py` and compares the list structure a reader would actually see — every item's rendered
+    number, its marker kind, the order of the text and whether the nesting the document asked for was
+    ever inverted — against an independent Python model of 2.9 and 5.4 written from the specification.
+    Roughly **14,000** documents agree, 250 of them under both sanitizers. The harness is scratch and
+    **the commit does not carry it**; what it leaves behind is the fixtures and unit cases it motivated.
+  - **The emitter's own rules were settled empirically rather than reasoned about.** Every claim about
+    what CommonMark does with a list — that a child indents to its parent's *content column* and not by
+    a fixed step, that an ordered marker stops being one at ten digits, that `<!-- -->` splits two lists
+    with no blank line around it, that a nested ordered list whose first number is not 1 cannot
+    interrupt a paragraph, and that a lone `-` under a line of text is a **setext underline** — was run
+    through `markdown-it-py` before a line of the emitter was written.
+  - **What the oracle found, none of it reachable from the fixtures as they stood.** Two defects in the
+    same shape, each losing the document's own numbers: a list that **restarts after a nested item** got
+    no `<!-- -->`, because the separator asked whether the block *immediately above* was an ordered
+    sibling and that block sits one level deeper — so the two lists merged and a renderer renumbered the
+    second from the first one's start. And a `w:startOverride` **spent at a level other than the item's
+    own** restarted that level's counter without marking the item first, so the same merge happened with
+    no override at the item to point at. The fix for the second is the general fact rather than the
+    special case: what makes an item the head of a list is that its counter had to be *seeded*.
+  - **What a 105-agent adversarial review found on top of that**, run over seven dimensions with every
+    finding verified on the code before it was fixed. Its skeptic stages died on a session limit, so
+    every finding below was confirmed or refuted by hand instead, which is the only reason any of it is
+    reported as settled. Three more defects lose output. A **dangling `w:numId` cancelled row 25's
+    horizontal rule and row 12's font detection**, because the walker decided on the raw reference
+    rather than on a resolvable one — a broken numbering graph deleted a `---` outright and demoted a
+    fence to an inline code span, which is a defect in a reference losing output that has nothing to do
+    with it. An **empty item that has deeper items after it was trimmed** as the artefact a user leaves
+    behind on pressing Enter, but it is the *parent* those items hang from: its children were promoted
+    to the outer list and the next shallower item became their sibling, so the document's `7.` reached
+    the page as `8.`. And a **content-free continuation suppressed the blank line the block before it
+    had earned**, because the guard read the previous record rather than the last block that emitted a
+    line — two paragraphs of one item merged into one. Beside those: two consecutive marker-less code
+    paragraphs in one item emitted two fences where row 12 merges them; an empty marker-less
+    continuation emitted a second blank line; a refused `NumLoadBytes` left half-read definitions in the
+    model against its own header, and a second load stranded the first one's index; and M8 had narrowed
+    `w:outlineLvl` parsing to two digits, so a zero-padded `007` — legal in an xsd:integer — silently
+    demoted a heading to body text. Every one is fixed, and every one is pinned.
+  - **Every rule this milestone introduced was mutation-tested**, the way M6 established and M7 repeated:
+    the rule is deleted or inverted and all three suites are run over it, and a rule no suite notices is
+    a rule covered by nothing. **Every one of the nine defects above was pinned by nothing when it was
+    found** — the suites were green with the bug in place, which is exactly what the technique is for —
+    and each now fails at least one suite, most of them two. The mutations were applied and the suites
+    run by hand rather than by a harness, which is M7's own lesson about trusting the tool that checks.
+  - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/W3`
+    and its zero-warnings requirement, `/sdl`, `/RTCu`, `/arch:AVX2`, the real `include/` headers, and
+    whether `mzero`'s aligned 256-bit path behaves over the one `al32` structure M8 adds — `NUM_MODEL`,
+    pinned by its own `static_assert` like every other. All of it is now covered: both configurations
+    build warning-free and all six commands return what the shim returned. The shim is stricter than
+    Windows where it cannot be identical, and it was never a substitute for any of that -- what stays
+    Linux-only is the other half of the pair, AddressSanitizer and UndefinedBehaviorSanitizer, neither
+    of which is switched on in `DOCXtoMD.vcxproj`.
 - **M9 `[todo]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.
   `MD_CONTEXT_TABLE_CELL` is the last escaping context with no caller, and it is still provisional. Two
   things M6 built assume no paragraph nests inside another and have to be revisited here: `DocWalker`'s
