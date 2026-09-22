@@ -926,8 +926,10 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M8 they return **133**, **94** and **1334** checks, over the **71** fixtures `make_fixtures.py`
-builds. All four were confirmed on Windows on 2026-09-22. The three check counts are the interesting
+At M8 they return **133**, **94** and **1339** checks, over the **71** fixtures `make_fixtures.py`
+builds. 133, 94 and 71 were confirmed on Windows on 2026-09-22, a run whose unit suite returned
+**1334**; the five checks between that number and this one were added after it, by the padded-decimal
+fix M8's entry records, and have been run on the shim only. The three check counts are the interesting
 ones: they are what the shim had measured on Linux beforehand, exactly, as they have been at every
 milestone since M3. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
 on both platforms -- and is recorded only so a run that builds a different number is noticed.
@@ -1270,6 +1272,15 @@ forbidden; before D6 it was.
   (restart under any shallower level) are both driven by `tests/fixtures/listcounters`; `N` is driven by
   `TestNumberingModel` alone, because a fixture for it would exercise nothing the counters fixture does
   not already show and would cost a reader a second document to hold in their head.
+- **`NumberingModel` still caps a value's length, which is the defect `DocReadDecimal` was just fixed
+  for.** `NumParseValue` refuses a `w:val` longer than eleven bytes -- ten digits and a sign -- so a
+  zero-padded value inside `numbering.xml` is discarded exactly as a padded one on a `w:pPr` used to
+  be, across all eight of its callers: `w:ilvl`, `w:start`, `w:lvlRestart`, `w:abstractNumId`,
+  `w:startOverride` and `w:numId`. It is the lower-severity half of the pair -- eleven bytes of
+  padding is far less likely than three, and the overflow test behind the cap is the real bound
+  either way -- and it degrades the way 5.4 asks rather than refusing the part. It is recorded rather
+  than fixed because it was found while fixing the walker's twin and sits outside what that change
+  was asked to cover. A fix must keep the sign branch, which `DocReadDecimal` does not have.
 - **Two M7 rules are live and pinned by nothing, and both are stated rather than quietly carried.**
   `MdFormatAhead` reports `IR_FMT_NONE` for a markup span, which is the same reasoning as
   `MdEdgeAhead`'s and is right for the same reason -- a `[` between two emphasis spans separates their
@@ -2225,6 +2236,16 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   `listbroken` and `liststyles` pairs against an `expected.md` written by hand from the specification
   before the converter was run at it. Bullets 2, 3 and 5 are mechanical and were checked on Linux, so
   the marker is `[done]` with nothing outstanding.
+  **One fix landed after that verification**, the way one did after M7's: `DocReadDecimal` capped the
+  *length* of a `w:val` rather than its magnitude, so a padded `w:outlineLvl`, `w:ilvl` or `w:numId`
+  written directly on a `w:pPr` was refused outright -- a paragraph carrying `<w:outlineLvl w:val="007"/>`
+  silently stopped being a heading, and a padded `w:ilvl` lost the depth it named. M8 had found that
+  same defect in the *style* path and dropped `StyleReadDecimal`'s cap, but the walker's twin kept its
+  own, so direct formatting went on refusing what a style accepted. Every one of the 71 fixtures
+  converts to the same bytes either way, so the container and golden tallies stand at **133** and
+  **94**; the unit suite gains five checks and returns **1339**, and that number has been measured on
+  the shim and not on Windows. The marker stays `[done]` on M5's precedent: a verification record is of
+  what was run, and a later bug fix does not un-verify a milestone.
   - **The three tallies are the shim's, exactly.** 133, 94 and 1334, the same three numbers in the same
     order a Linux session measured before any of this reached a Windows machine, and the fixture count
     with them. That is the **sixth** milestone running where the shim predicted the real MSVC binary

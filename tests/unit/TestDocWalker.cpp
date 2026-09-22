@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: Unit tests for the body walk: wrappers, run content, and the formatting bits on a span.
  * To Do: 1) Add table cases as M9 gives the walker something to build from one; M7's hyperlinks,
  *           pictures and bookmarks and M8's numbering are driven below.
@@ -328,6 +328,11 @@ void TestDocWalker(void) {
    CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:outlineLvl w:val=\"2\"/></w:pPr><w:r><w:t>t</w:t></w:r></w:p>", "H3{[t]}"));
    CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:outlineLvl w:val=\"9\"/></w:pPr><w:r><w:t>t</w:t></w:r></w:p>", "P{[t]}"));
    CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:outlineLvl w:val=\"x\"/></w:pPr><w:r><w:t>t</w:t></w:r></w:p>", "P{[t]}"));
+   // ST_DecimalNumber is an xsd:integer, so leading zeros are legal in one and "003" is three. Reading
+   // the value under a cap on its *length* rather than on its magnitude makes a padded level a refusal,
+   // and the refusal is silent: the paragraph stops being a heading and becomes body text. M8 fixed the
+   // style path and TestStyleModel pins it there; this is the paragraph's own w:outlineLvl.
+   CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:outlineLvl w:val=\"003\"/></w:pPr><w:r><w:t>t</w:t></w:r></w:p>", "H4{[t]}"));
    CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:pStyle w:val=\"Absent\"/></w:pPr><w:r><w:t>t</w:t></w:r></w:p>", "P{[t]}"));
 
    CheckGroup("DocWalker: the formatting bits on a span");
@@ -779,6 +784,31 @@ void TestDocWalker(void) {
    // An empty numbered paragraph still gets its block: a marker on a line of its own is what Word draws,
    // and IrEndBlock would otherwise unwind it like any other empty paragraph.
    CHECK(TracedAs(nullptr, "<w:p><w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr></w:p>", "[0#4]P{}"));
+   // A padded w:ilvl and a padded w:numId are the same xsd:integer question as w:outlineLvl above: a
+   // cap on the value's length refuses a legal value, and every refusal here is silent. A padded
+   // identifier stops the paragraph being an item at all; a padded level loses the depth it named.
+   {
+      cchptr padded  = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"002\"/><w:numId w:val=\"004\"/></w:numPr></w:pPr>"
+                       "<w:r><w:t>a</w:t></w:r></w:p>";
+      cchptr hundred = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"100\"/><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+                       "<w:r><w:t>a</w:t></w:r></w:p>";
+      cchptr wide    = "<w:p><w:pPr><w:numPr><w:numId w:val=\"000000000004\"/></w:numPr></w:pPr>"
+                       "<w:r><w:t>a</w:t></w:r></w:p>";
+      cchptr past    = "<w:p><w:pPr><w:numPr><w:numId w:val=\"2147483648\"/></w:numPr></w:pPr>"
+                       "<w:r><w:t>a</w:t></w:r></w:p>";
+
+      CHECK(TracedAs(nullptr, padded, "[2#4]P{[a]}"));
+      // Three digits is past what the old cap allowed at all, so a level that deep was discarded and
+      // the paragraph fell back to the style chain. It is clamped now, which is what the call site's
+      // own comment and StyleModel's twin have both said all along.
+      CHECK(TracedAs(nullptr, hundred, "[8#4]P{[a]}"));
+      // Twelve characters, past the old ten-character cap: where a cap on length and a cap on
+      // magnitude visibly part company.
+      CHECK(TracedAs(nullptr, wide, "[0#4]P{[a]}"));
+      // The overflow test is the only bound left and it still holds: 2^31 does not fit an si32, so the
+      // value is refused and the reference stays unspecified rather than wrapping to a negative one.
+      CHECK(TracedAs(nullptr, past, "P{[a]}"));
+   }
    CHECK(TracedAs(nullptr, "<w:p></w:p>", ""));
 
    CheckGroup("DocWalker: where numbering comes from and what cancels it");
