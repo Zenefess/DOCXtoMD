@@ -3,11 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: Unit tests for the arena, the blank-line discipline, delimiters and every block kind.
- * To Do: 1) Add the pipe-table cases when M9 gives a cell a line of its own.
- *        2) Drive a fence inside a list item that also holds text, which needs the code paragraph and
- *           the text to be one item, and so waits for M9's block children.
+ * To Do: 1) Drive a fence inside a list item that also holds text, which needs the code paragraph and
+ *           the text to be one item, and so waits for a block that can hold children.
+ *        2) Drive a picture and a real external link inside a table cell, which needs a package.
  *        3) Drive an image with a real destination once a package can be built without an archive;
  *           with no package a reference resolves to nothing, so only the anchor half is reachable here.
  * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, LinkResolver.h, MdEmitter.h,
@@ -66,6 +66,22 @@ static constexpr cchptr STYLE_SPAN = "<w:style w:type=\"character\" w:styleId=\"
 
 static constexpr cchptr NUMS = NUM_A NUM_B NUM_C NUM_D NUM_E NUM_F NUM_G NUM_H NUM_I NUM_J NUM_K NUM_L NUM_M;
 
+// M9's table cases. A cell holding one run is what most of them are built from.
+#define CELL(t)    "<w:tc><w:p><w:r><w:t>" t "</w:t></w:r></w:p></w:tc>"
+#define ROW1(a)    "<w:tr>" CELL(a) "</w:tr>"
+#define ROW2(a, b) "<w:tr>" CELL(a) CELL(b) "</w:tr>"
+#define GRID(n)    "<w:tblGrid>" n "</w:tblGrid>"
+#define COL        "<w:gridCol/>"
+#define WIDE2      "<w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>"
+#define VRESTART   "<w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>"
+#define VMERGED    "<w:tcPr><w:vMerge/></w:tcPr>"
+#define WIDE2V     "<w:tcPr><w:gridSpan w:val=\"2\"/><w:vMerge w:val=\"restart\"/></w:tcPr>"
+#define GOBACK     "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"_GoBack\"/><w:bookmarkEnd w:id=\"1\"/></w:p>"
+#define ABCD       "<w:tr>" CELL("a") CELL("b") "</w:tr><w:tr>" CELL("c") CELL("d") "</w:tr></w:tbl>"
+#define T1         "<w:tbl>" GRID(COL)
+#define T2         "<w:tbl>" GRID(COL COL)
+#define CELLS(c)   "<w:tr><w:tc>" c "</w:tc></w:tr></w:tbl>"
+
 // One numbered paragraph: its level, its numId and its text. Two halves, for the same reason.
 #define NUM_PR(level, id)     "<w:numPr><w:ilvl w:val=\"" level "\"/><w:numId w:val=\"" id "\"/></w:numPr>"
 #define ITEM_HEAD(level, id)  "<w:p><w:pPr>" NUM_PR(level, id) "</w:pPr>"
@@ -110,7 +126,7 @@ static cbool EmitText(IR_DOCUMENTptrc document, cchptr text) {
 
 // Converts one body, with an optional styles part and an optional numbering part in front of it,
 // straight through to Markdown.
-static cbool ConvertsWith(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cHARD_BREAK hardBreak) {
+static cbool ConvertsUnder(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cHARD_BREAK hardBreak, cTABLE_MODE tables) {
    char part[4096];
    ui64 used = 0;
 
@@ -167,7 +183,7 @@ static cbool ConvertsWith(cchptr styleBody, cchptr numberBody, cchptr body, cchp
       }
    }
    IrOpen(&document);
-   MdOpen(&emitter, hardBreak);
+   MdOpen(&emitter, hardBreak, tables);
 
    cWALK_STATUS status  = DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, used);
    bool         matched = false;
@@ -197,6 +213,18 @@ static cbool ConvertsWith(cchptr styleBody, cchptr numberBody, cchptr body, cchp
 }
 
 // Converts one body with no styles part, under a chosen hard-break policy.
+// The same under the default table policy, which is every case but the ones that name --tables.
+static cbool ConvertsWith(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cHARD_BREAK hardBreak) {
+   return ConvertsUnder(styleBody, numberBody, body, wanted, hardBreak, TABLE_MODE_GFM);
+}
+
+// Converts under the html-on-merge policy, which is the one thing --tables changes.
+static cbool Merged(cchptr body, cchptr wanted) {
+   cTABLE_MODE html = TABLE_MODE_HTML_ON_MERGE;
+
+   return ConvertsUnder(nullptr, nullptr, body, wanted, HARD_BREAK_BACKSLASH, html);
+}
+
 static cbool ConvertsTo(cchptr body, cchptr wanted, cHARD_BREAK hardBreak) { return ConvertsWith(nullptr, nullptr, body, wanted, hardBreak); }
 
 // Converts one body with the default hard-break policy, which is what all but one case wants.
@@ -266,7 +294,7 @@ void TestMdEmitter(void) {
    MD_EMITTER emitter;
 
    IrOpen(&document);
-   MdOpen(&emitter, HARD_BREAK_BACKSLASH);
+   MdOpen(&emitter, HARD_BREAK_BACKSLASH, TABLE_MODE_GFM);
    CHECK(MdEmitDocument(&emitter, &document) == MD_OK);
    CHECK(MdByteCount(&emitter) == 0);
 
@@ -282,7 +310,7 @@ void TestMdEmitter(void) {
 
    CHECK(EmitText(&document, "b"));
    CHECK(IrEndBlock(&document, two));
-   MdOpen(&emitter, HARD_BREAK_BACKSLASH);
+   MdOpen(&emitter, HARD_BREAK_BACKSLASH, TABLE_MODE_GFM);
    CHECK(MdEmitDocument(&emitter, &document) == MD_OK);
    CHECK(EmittedIs(&emitter, "a\n\n## b\n"));
    MdClose(&emitter);
@@ -318,7 +346,7 @@ void TestMdEmitter(void) {
          CHECK(EmitText(&many, "  text  "));
          CHECK(IrEndBlock(&many, at));
       }
-      MdOpen(&writer, HARD_BREAK_BACKSLASH);
+      MdOpen(&writer, HARD_BREAK_BACKSLASH, TABLE_MODE_GFM);
       CHECK(MdEmitDocument(&writer, &many) == MD_OK);
       CHECK(MdByteCount(&writer) > 0);
       CHECK(MdBytes(&writer)[0] != '\n');
@@ -807,4 +835,148 @@ void TestMdEmitter(void) {
                 "<w:p>" IN_CODE "<w:bookmarkStart w:id=\"1\" w:name=\"m\"/>"
                 "<w:hyperlink w:anchor=\"m\"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>",
                 "```\nx\n```\n"));
+
+   CheckGroup("MdEmitter: a GFM pipe table");
+   // The delimiter row is what makes the lines around it a table at all, and GFM reads one only where
+   // it holds exactly as many cells as the header -- so it is written from the table's own width.
+   CHECK(Converts("<w:tbl>" GRID(COL COL) ROW2("a", "b") ROW2("c", "d") "</w:tbl>", "| a | b |\n| --- | --- |\n| c | d |\n"));
+   // A one-row table is a legal GFM table with a header and no body.
+   CHECK(Converts("<w:tbl>" GRID(COL) ROW1("a") "</w:tbl>", "| a |\n| --- |\n"));
+   // A row holding fewer cells than the grid is padded to it, which is what keeps the delimiter row's
+   // width true for every row and the table a table.
+   CHECK(Converts("<w:tbl>" GRID(COL COL COL) ROW2("a", "b") "</w:tbl>", "| a | b |  |\n| --- | --- | --- |\n"));
+   // Alignment comes from the first row's own w:jc, spread over the columns each cell covers.
+   CHECK(Converts("<w:tbl>" GRID(COL COL) "<w:tr><w:tc><w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p></w:tc>"
+                                          "<w:tc><w:p><w:pPr><w:jc w:val=\"right\"/></w:pPr><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "| a | b |\n| :---: | ---: |\n"));
+   // A pipe ends a cell wherever it stands, so it is escaped in a cell's text and inside a code span
+   // alike -- the second is the one escape GFM honours inside one.
+   CHECK(Converts("<w:tbl>" GRID(COL) ROW1("a | b") "</w:tbl>", "| a \\| b |\n| --- |\n"));
+   CHECK(Styled(STYLE_SPAN, T1 CELLS("<w:p><w:r><w:rPr>" CODE_STYLE "</w:rPr><w:t>a | b</w:t></w:r></w:p>"), "| `a \\| b` |\n| --- |\n"));
+   // A pipe table's cell is inline content, so a hard break and a paragraph boundary are both "<br>"
+   // and nothing a cell holds can be a block.
+   CHECK(Converts(T1 CELLS("<w:p><w:r><w:t>a</w:t><w:br/><w:t>b</w:t></w:r></w:p>"), "| a<br>b |\n| --- |\n"));
+   CHECK(Converts(T1 CELLS("<w:p><w:r><w:t>a</w:t></w:r></w:p><w:p><w:r><w:t>b</w:t></w:r></w:p>"), "| a<br>b |\n| --- |\n"));
+   // A break with nothing after it is dropped in a cell exactly as it is in a paragraph: a cell is one
+   // line by construction, so a trailing "<br>" is a line ending on a line that has no next one. The
+   // padding that hid it goes first, and the two are stripped in a loop because either may follow the
+   // other -- line 335 above is the same rule outside a table.
+   CHECK(Converts(T1 CELLS("<w:p><w:r><w:t>a</w:t><w:br/></w:r></w:p>"), "| a |\n| --- |\n"));
+   CHECK(Converts(T1 CELLS("<w:p><w:r><w:t>a</w:t><w:br/><w:t xml:space=\"preserve\">   </w:t></w:r></w:p>"), "| a |\n| --- |\n"));
+   // The raw-HTML form holds a cell in the output buffer rather than in the line buffer, so it trims
+   // the same two things from a different place. Left alone it emitted "<th>a<br>   </th>", a blank
+   // line inside the cell that the pipe form of the same document does not have.
+   {
+      cchptr trail = T1 "<w:tr><w:tc><w:p><w:r><w:t>a</w:t><w:br/>"
+                        "<w:t xml:space=\"preserve\">   </w:t></w:r></w:p></w:tc></w:tr>"
+                        "<w:tr><w:tc>" VRESTART "<w:p/></w:tc></w:tr></w:tbl>";
+
+      CHECK(Merged(trail, "<table>\n<tr><th>a</th></tr>\n<tr><td></td></tr>\n</table>\n"));
+   }
+   // A cell whose only paragraph is empty is an empty cell and not a "<br>" a reader sees.
+   CHECK(Converts("<w:tbl>" GRID(COL COL) "<w:tr>" CELL("a") "<w:tc><w:p/></w:tc></w:tr></w:tbl>", "| a |  |\n| --- | --- |\n"));
+   // A blank line stands between a table and whatever is on either side of it, or the paragraph after
+   // it would be read as one more row and the table before it would merge into this one.
+   CHECK(Converts("<w:p><w:r><w:t>before</w:t></w:r></w:p><w:tbl>" GRID(COL) ROW1("a") "</w:tbl>"
+                                                                                       "<w:p><w:r><w:t>after</w:t></w:r></w:p>",
+                  "before\n\n| a |\n| --- |\n\nafter\n"));
+   CHECK(Converts("<w:tbl>" GRID(COL) ROW1("a") "</w:tbl><w:tbl>" GRID(COL) ROW1("b") "</w:tbl>", "| a |\n| --- |\n\n| b |\n| --- |\n"));
+
+   CheckGroup("MdEmitter: what a cell does with a block it cannot carry");
+   // A list item keeps its marker as literal text, because losing "1." from a cell loses the count.
+   CHECK(Listed(NUMS,
+                "<w:tbl>" GRID(COL) "<w:tr><w:tc>"
+                                    "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"2\"/></w:numPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>"
+                                    "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"2\"/></w:numPr></w:pPr><w:r><w:t>b</w:t></w:r></w:p>"
+                                    "</w:tc></w:tr></w:tbl>",
+                "| 3. a<br>4. b |\n| --- |\n"));
+   // A code paragraph has no fence to become in a cell, so it becomes the inline form of one.
+   CHECK(Styled(STYLE_CODE, T1 CELLS("<w:p>" IN_CODE "<w:r><w:t>a();</w:t></w:r></w:p>"), "| `a();` |\n| --- |\n"));
+   // A quotation and a heading keep only what they say: a "> " or a "#" in a cell is literal text.
+   CHECK(Styled(STYLE_QUOTE, T1 CELLS("<w:p><w:pPr><w:pStyle w:val=\"Q\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>"), "| a |\n| --- |\n"));
+
+   // D12's scope is the assembled line, and a cell is one line of its row however many paragraphs it
+   // holds -- so the count is taken over the whole cell. Counted per block instead, these two hold one
+   // dollar each, neither is escaped, and GitHub reads "$5<br>and $10" as math: exactly the corruption
+   // D12 was ruled to fix, arriving through a door M9 opened.
+   CHECK(Converts(T2 "<w:tr><w:tc><w:p><w:r><w:t>costs $5</w:t></w:r></w:p>"
+                     "<w:p><w:r><w:t>and $10</w:t></w:r></w:p></w:tc>" CELL("b") "</w:tr></w:tbl>",
+                  "| costs \\$5<br>and \\$10 | b |\n| --- | --- |\n"));
+   // A hard break with nothing after it is dropped inside a cell as it is everywhere else: a trailing
+   // "<br>" is a line ending in a cell that has no next line.
+   CHECK(Converts(T1 CELLS("<w:p><w:r><w:t>a</w:t></w:r><w:r><w:br/></w:r></w:p>"), "| a |\n| --- |\n"));
+
+   CheckGroup("MdEmitter: a merge padded into the grid");
+   // CONVERSION_REFERENCE row 19's policy A: the content lands in the first column the cell covers and
+   // every other column it covers is an empty pad, so no row is ever narrower than the delimiter row.
+   CHECK(Converts("<w:tbl>" GRID(COL COL) ROW2("a", "b") "<w:tr><w:tc>" WIDE2 "<w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "| a | b |\n| --- | --- |\n| wide |  |\n"));
+   // A vertical merge's continuation is an empty cell, because that is what Word draws.
+   CHECK(Converts("<w:tbl>" GRID(COL) "<w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr>"
+                                      "<w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p><w:r><w:t>ignored</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "| a |\n| --- |\n|  |\n"));
+
+   // A block dropped *before* a table moves every block after it down, and a cell names its blocks by
+   // index -- so IrDropEmptyBlocks shifting a table's records by the delta that applies where it stands
+   // is what keeps a cell pointing at its own content. Word writes a _GoBack nothing points at into
+   // every document it saves, so the paragraph here is the ordinary case rather than a contrived one;
+   // without the shift this table reads its neighbours' blocks and the whole document slides.
+   {
+      cchptr shifted = GOBACK T2 ABCD "<w:p><w:r><w:t>after</w:t></w:r></w:p>";
+
+      CHECK(Converts(shifted, "| a | b |\n| --- | --- |\n| c | d |\n\nafter\n"));
+   }
+
+   CheckGroup("MdEmitter: the raw-HTML fallback");
+   // A nested table has no pipe form at all, so it takes the fallback whatever --tables says.
+   CHECK(Converts("<w:tbl>" GRID(COL) "<w:tr><w:tc><w:tbl>" GRID(COL) ROW1("in") "</w:tbl><w:p/></w:tc></w:tr></w:tbl>",
+                  "<table>\n<tr><th><table>\n<tr><th>in</th></tr>\n</table>\n</th></tr>\n</table>\n"));
+   // A merge takes it only under html-on-merge, and then it keeps the merge rather than padding it.
+   CHECK(Merged("<w:tbl>" GRID(COL COL) ROW2("a", "b") "<w:tr><w:tc>" WIDE2 "<w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                "<table>\n<tr><th>a</th><th>b</th></tr>\n<tr><td colspan=\"2\">wide</td></tr>\n</table>\n"));
+   CHECK(Merged("<w:tbl>" GRID(COL COL) "<w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc>" CELL(
+                    "b") "</w:tr>"
+                         "<w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc>" CELL("c") "</w:tr></w:tbl>",
+                "<table>\n<tr><th rowspan=\"2\">a</th><th>b</th></tr>\n<tr><td>c</td></tr>\n</table>\n"));
+   // Inside a raw-HTML block no Markdown is parsed, so every delimiter is an element and every escape
+   // an entity -- and a pipe is inert there, because no row is being split.
+   CHECK(Merged(T2 CELLS(WIDE2 "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>a &amp; b</w:t></w:r><w:r><w:t> | c</w:t></w:r></w:p>"),
+                "<table>\n<tr><th colspan=\"2\"><strong>a &amp; b</strong> | c</th></tr>\n</table>\n"));
+   // A w:vMerge continuation whose merge nothing above it still covers -- a row spanning across the
+   // column the merge was opened in breaks the chain, and producers write one -- is an ordinary empty
+   // cell and not nothing at all. Dropped, it would leave the row a column short, which is the
+   // silently narrower table row 19 forbids. Found by the grid oracle, which no fixture would have.
+   {
+      cchptr broken = T2 "<w:tr><w:tc>" VRESTART "<w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc>"
+                         "<w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr>"
+                         "<w:tr><w:tc>" WIDE2 "<w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc></w:tr>"
+                         "<w:tr><w:tc>" VMERGED "<w:p/></w:tc>"
+                         "<w:tc><w:p><w:r><w:t>c</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+
+      CHECK(Merged(broken, "<table>\n<tr><th>a</th><th>b</th></tr>\n<tr><td colspan=\"2\">wide</td></tr>\n"
+                           "<tr><td></td><td>c</td></tr>\n</table>\n"));
+   }
+   // A vertical merge whose restart is WIDER than the row continuing it. A rowspan can only promise a
+   // rectangle, so it is written only where every column the restart covers is continued -- counted at
+   // the restart's first column alone, this claimed both columns of the last row, the browser's own
+   // grid algorithm then put "beside" in a third column, and the raw-HTML form rendered one column
+   // wider than the pipe form of the same document. Found by the grid oracle once its generator was
+   // widened to put a w:vMerge restart on a cell spanning more than one column.
+   {
+      cchptr ragged = T2 "<w:tr><w:tc>" WIDE2 "<w:p><w:r><w:t>head</w:t></w:r></w:p></w:tc></w:tr>"
+                         "<w:tr><w:tc>" WIDE2V "<w:p><w:r><w:t>merged</w:t></w:r></w:p></w:tc></w:tr>"
+                         "<w:tr><w:tc>" VMERGED "<w:p/></w:tc>" CELL("beside") "</w:tr></w:tbl>";
+
+      CHECK(Merged(ragged, "<table>\n<tr><th colspan=\"2\">head</th></tr>\n"
+                           "<tr><td colspan=\"2\">merged</td></tr>\n"
+                           "<tr><td></td><td>beside</td></tr>\n</table>\n"));
+      // The same table with the continuation covering the whole span keeps its rowspan, which is what
+      // makes the case above a rule about raggedness rather than about merges that span columns.
+      cchptr square = T2 "<w:tr><w:tc>" WIDE2 "<w:p><w:r><w:t>head</w:t></w:r></w:p></w:tc></w:tr>"
+                         "<w:tr><w:tc>" WIDE2V "<w:p><w:r><w:t>merged</w:t></w:r></w:p></w:tc></w:tr>"
+                         "<w:tr><w:tc><w:tcPr><w:gridSpan w:val=\"2\"/><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>";
+
+      CHECK(Merged(square, "<table>\n<tr><th colspan=\"2\">head</th></tr>\n"
+                           "<tr><td colspan=\"2\" rowspan=\"2\">merged</td></tr>\n<tr></tr>\n</table>\n"));
+   }
 }

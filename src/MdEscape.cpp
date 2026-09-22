@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-26
+ * Last Modified: 2026-09-22
  * Description: The escaping rules themselves: one measuring and writing core, and the line-start pass.
  * To Do: 1) Add the pipe rule to the line-start pass when a table can put one at the head of a line.
  *        2) Fold U+00A0 into the line-start whitespace tests if a producer is found starting a line with one.
@@ -30,6 +30,17 @@ static constexpr cchptr MD_HEX_DIGITS = "0123456789ABCDEF";
 // The bytes the inline rules backslash-escape wherever they stand. Pitfall 4 is why the list is
 // unconditional: a literal one of these landing beside a delimiter the emitter wrote merges with it.
 static constexpr cchptr MD_INLINE_ESCAPED = "\\*_`[]~";
+
+// The four bytes a raw-HTML block cannot carry literally, and the entity each becomes. An ampersand
+// would open a reference, a less-than an element, a greater-than would close one and a quotation mark
+// would close an attribute -- the last so that one rule serves an element's text and its attributes
+// alike, which is what stops a writer applying the wrong of two rules in the wrong of two places.
+static constexpr cchar  MD_HTML_BYTES[]    = {'&', '<', '>', '"'};
+static constexpr cchptr MD_HTML_ENTITIES[] = {"&amp;", "&lt;", "&gt;", "&quot;"};
+
+constexpr cui64 MD_HTML_ENTITY_COUNT = sizeof(MD_HTML_ENTITIES) / sizeof(MD_HTML_ENTITIES[0]);
+
+static_assert(sizeof(MD_HTML_BYTES) == MD_HTML_ENTITY_COUNT, "MdEscape: the byte and entity tables have drifted apart.");
 
 // The bytes a link destination percent-encodes. The percent sign itself is deliberately absent: a
 // target arrives already encoded far more often than it arrives holding a literal percent, and
@@ -114,12 +125,36 @@ static void MdPut(chptr dest, cui64 destBytes, ui64ptrc used, cchar byte) {
 }
 
 // Escapes one run of text into dest, or measures it when dest is null.
-static cui64 MdEscapeCore(chptr dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars) {
+static cui64 MdEscapeCore(chptr dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars, cbool pipes) {
    ui64 used = 0;
 
    if(!text) return 0;
    if(context == MD_CONTEXT_CODE_SPAN || context == MD_CONTEXT_CODE_BLOCK) {
-      for(ui64 index = 0; index < byteCount; ++index) MdPut(dest, destBytes, &used, text[index]);
+      for(ui64 index = 0; index < byteCount; ++index) {
+         // The pipe is the one byte a code span in a table cell escapes, and the one escape GFM
+         // honours inside one: a row is split into cells before any inline content is parsed, so a
+         // literal pipe there ends the cell and the table stops being a table.
+         if(pipes && text[index] == '|') MdPut(dest, destBytes, &used, '\\');
+         MdPut(dest, destBytes, &used, text[index]);
+      }
+      return used;
+   }
+   // Inside a raw-HTML block nothing Markdown says is true: the block runs to the next blank line and
+   // every byte of it is passed through, so a backslash would be a backslash a reader sees. The four
+   // bytes that could close an element or an attribute become entities, and nothing else changes.
+   if(context == MD_CONTEXT_HTML_BLOCK) {
+      for(ui64 index = 0; index < byteCount; ++index) {
+         cchptr entity = nullptr;
+
+         for(ui64 at = 0; at < MD_HTML_ENTITY_COUNT && !entity; ++at) {
+            if(text[index] == MD_HTML_BYTES[at]) entity = MD_HTML_ENTITIES[at];
+         }
+         if(!entity) {
+            MdPut(dest, destBytes, &used, text[index]);
+            continue;
+         }
+         for(cchptr walk = entity; *walk; ++walk) MdPut(dest, destBytes, &used, *walk);
+      }
       return used;
    }
    if(context == MD_CONTEXT_LINK_DEST) {
@@ -149,7 +184,9 @@ static cui64 MdEscapeCore(chptr dest, cui64 destBytes, cchptr text, cui64 byteCo
    for(ui64 index = 0; index < byteCount; ++index) {
       cchar byte = text[index];
 
-      if(MdAlwaysEscaped(byte) || (context == MD_CONTEXT_TABLE_CELL && byte == '|') || (byte == '$' && dollars)) {
+      cbool bar = (byte == '|' && (pipes || context == MD_CONTEXT_TABLE_CELL));
+
+      if(MdAlwaysEscaped(byte) || bar || (byte == '$' && dollars)) {
          MdPut(dest, destBytes, &used, '\\');
          MdPut(dest, destBytes, &used, byte);
          continue;
@@ -184,12 +221,12 @@ cui64 MdEscapeCountDollars(cchptr text, cui64 byteCount) {
    return found;
 }
 
-cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars) { // Measuring is writing
-   return MdEscapeCore(nullptr, 0, text, byteCount, context, dollars);
+cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars, cbool pipes) { // Measuring is writing
+   return MdEscapeCore(nullptr, 0, text, byteCount, context, dollars, pipes);
 }
 
-cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars) {
-   cui64 wanted = MdEscapeCore(dest, destBytes, text, byteCount, context, dollars);
+cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars, cbool pipes) {
+   cui64 wanted = MdEscapeCore(dest, destBytes, text, byteCount, context, dollars, pipes);
 
    return (wanted > destBytes ? destBytes : wanted);
 }

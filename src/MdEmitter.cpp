@@ -3,12 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: Line assembly, inline delimiters, the blank-line discipline and every block kind's shape.
  * To Do: 1) Emit a fenced block inside a *quote*, which no block kind can express today: a paragraph
  *           is a quotation or a fence and never both, so only a list item reaches a prefixed fence.
- *        2) Emit a table's pipe rows through MD_CONTEXT_TABLE_CELL at M9, which has no caller yet.
- *        3) Size the buffer from the part's byte count rather than growing from a fixed first block.
+ *        2) Size the buffer from the part's byte count rather than growing from a fixed first block.
+ *        3) Show a cell's nested list structure, which the pipe form flattens because GFM has no
+ *           spelling for indentation inside a cell.
  * Dependencies: BuildGuards.h, CliOptions.h, Ir.h, MdEmitter.h, MdEscape.h, Utf.h, typedefs.h,
  *               memory management.h, windows.h
  * ISA: Scalar
@@ -67,6 +68,14 @@ constexpr cui8 MD_LIST_NUMBERS = 2u; // An ordered list is open, and its start i
 // losing a document's text over its indentation would be a poor trade.
 constexpr cui64 MD_MAX_PREFIX = 160u;
 
+// What a cell's paragraphs are joined by, and what a hard break inside one becomes. A pipe table's row
+// is one line by construction, so every break in it has to be the element (mapping row 26).
+static constexpr cchptr MD_CELL_BREAK = "<br>";
+
+// The shortest run of hyphens a GFM delimiter row's cell may hold. Three is not required -- one would
+// do -- but three is what every producer writes and what a reader expects to see.
+constexpr cui64 MD_DELIMITER_DASHES = 3u;
+
 // The separator that keeps two adjacent lists from becoming one. Mapping row 17 names it, and it needs
 // no blank line on either side: an HTML block start line is not paragraph-continuation text, so it
 // closes the list above it where it stands and leaves both lists tight.
@@ -120,12 +129,12 @@ static cbool MdAppendText(MD_EMITTERptrc emitter, cchptr text) {
 // fenced code block is the only one: its content is literal, so it needs neither the line-start pass nor
 // a delimiter around it -- but it still goes through the escaping writer, because correctness rule 6
 // says walker and emitter code never concatenate raw text into the output.
-static cbool MdAppendEscaped(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cMD_CONTEXT context) {
-   cui64 wanted = MdEscapeMeasure(bytes, byteCount, context, false);
+static cbool MdAppendEscaped(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cMD_CONTEXT context, cbool pipes) {
+   cui64 wanted = MdEscapeMeasure(bytes, byteCount, context, false, pipes);
 
    if(!wanted) return true;
    if(!MdGrow(emitter, &emitter->out, &emitter->capacity, emitter->used + wanted)) return false;
-   emitter->used += MdEscapeWrite(emitter->out + emitter->used, wanted, bytes, byteCount, context, false);
+   emitter->used += MdEscapeWrite(emitter->out + emitter->used, wanted, bytes, byteCount, context, false, pipes);
    return true;
 }
 
@@ -167,12 +176,12 @@ static cbool MdLineRun(MD_EMITTERptrc emitter, cchar byte, cui64 count) {
 }
 
 // Escapes text into the line for the context it is standing in.
-static cbool MdLineEscaped(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cMD_CONTEXT context, cbool dollars) {
-   cui64 wanted = MdEscapeMeasure(bytes, byteCount, context, dollars);
+static cbool MdLineEscaped(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cMD_CONTEXT context, cbool dollars, cbool pipes) {
+   cui64 wanted = MdEscapeMeasure(bytes, byteCount, context, dollars, pipes);
 
    if(!wanted) return true;
    if(!MdGrow(emitter, &emitter->line, &emitter->lineCapacity, emitter->lineUsed + wanted)) return false;
-   emitter->lineUsed += MdEscapeWrite(emitter->line + emitter->lineUsed, wanted, bytes, byteCount, context, dollars);
+   emitter->lineUsed += MdEscapeWrite(emitter->line + emitter->lineUsed, wanted, bytes, byteCount, context, dollars, pipes);
    return true;
 }
 
@@ -451,8 +460,8 @@ static cMD_CONTEXT MdSpanContext(cui32 fmt, cbool safe, cbool inLink) {
 // strikethrough or the vertical alignment, because those wrap a code span perfectly well in GFM and
 // dropping them would lose formatting the reference never asked to lose. The strikethrough changes
 // spelling when it wraps anything at all -- see MdStrikeAsHtml for why "~~" cannot survive there.
-static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cui32 fmt, // The span itself
-                         cbool dollars, cMD_EDGE ahead, cui32 nextFmt, cbool inLink) {     // What stands around it
+static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cui32 fmt,          // The span itself
+                         cbool dollars, cMD_EDGE ahead, cui32 nextFmt, cbool inLink, cbool pipes) { // What stands around it
    if(!byteCount) return true;
 
    // A superscript or a subscript is an HTML element, and an element shields everything inside it from
@@ -484,7 +493,7 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
 
    cMD_CONTEXT context = MdSpanContext(fmt, safe, inLink);
 
-   if(fmt == IR_FMT_NONE) return MdLineEscaped(emitter, bytes, byteCount, context, dollars);
+   if(fmt == IR_FMT_NONE) return MdLineEscaped(emitter, bytes, byteCount, context, dollars, pipes);
    if(fmt & IR_FMT_SUPER) {
       if(!MdLineText(emitter, "<sup>")) return false;
    } else if(fmt & IR_FMT_SUB) {
@@ -501,7 +510,7 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
 
       if(!MdLineRun(emitter, '`', ticks)) return false;
       if(pad && !MdLineText(emitter, " ")) return false;
-      if(!MdLineEscaped(emitter, bytes, byteCount, context, dollars)) return false;
+      if(!MdLineEscaped(emitter, bytes, byteCount, context, dollars, pipes)) return false;
       if(pad && !MdLineText(emitter, " ")) return false;
       if(!MdLineRun(emitter, '`', ticks)) return false;
    } else {
@@ -516,7 +525,7 @@ static cbool MdWriteSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, 
       cchptr close    = (emphHtml ? htmlShut : markdown);
 
       if(!MdLineText(emitter, open)) return false;
-      if(!MdLineEscaped(emitter, bytes, byteCount, context, dollars)) return false;
+      if(!MdLineEscaped(emitter, bytes, byteCount, context, dollars, pipes)) return false;
       if(!MdLineText(emitter, close)) return false;
    }
    if((fmt & IR_FMT_STRIKE) && !MdLineText(emitter, (strikeHtml ? "</del>" : "~~"))) return false;
@@ -545,7 +554,7 @@ typedef MD_LINK *const MD_LINKptrc;
 // The destination is percent-encoded rather than backslash-escaped, which is MD_CONTEXT_LINK_DEST and
 // CONVERSION_REFERENCE 4.1's rule for it: a backslash inside a destination is a literal byte of the
 // URL, so the only escape a destination has is the one the URL syntax already provides.
-static cbool MdCloseLink(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, MD_LINKptrc link) {
+static cbool MdCloseLink(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, MD_LINKptrc link, cbool pipes) {
    if(!link->open) return true;
    link->open = false;
    // Nothing was written between the brackets. LinkResolve mutes a link whose content is empty, but a
@@ -556,7 +565,7 @@ static cbool MdCloseLink(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, MD_LI
       return true;
    }
    if(!MdLineText(emitter, "](")) return false;
-   if(!MdLineEscaped(emitter, IrDest(document, link->destAt), link->destBytes, MD_CONTEXT_LINK_DEST, false)) return false;
+   if(!MdLineEscaped(emitter, IrDest(document, link->destAt), link->destBytes, MD_CONTEXT_LINK_DEST, false, pipes)) return false;
    return MdLineText(emitter, ")");
 }
 
@@ -566,9 +575,9 @@ static cbool MdCloseLink(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, MD_LI
 // parentheses. An anchor is the raw HTML element mapping row 22 asks for where a bookmark does not
 // sit at a heading; its name has already been sanitised to the bytes an attribute and a fragment can
 // both carry, so there is nothing left here to escape.
-static cbool MdWriteMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_SPANptr span, MD_LINKptrc link, cbool dollars) {
+static cbool MdWriteMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_SPANptr span, MD_LINKptrc link, cbool dollars, cbool pipes) {
    if(span->kind == IR_SPAN_LINK_START) {
-      if(!MdCloseLink(emitter, document, link)) return false;
+      if(!MdCloseLink(emitter, document, link, pipes)) return false;
       // An exclamation mark immediately in front of a link's '[' makes the pair an *image* marker, so
       // "see this!" followed by a link renders as a broken picture and the link text disappears. This
       // is CONVERSION_REFERENCE 4.2's pitfall 7, and MdEscape leaves it here on purpose: the mark is
@@ -586,16 +595,16 @@ static cbool MdWriteMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR
       link->open      = true;
       return true;
    }
-   if(span->kind == IR_SPAN_LINK_END) return MdCloseLink(emitter, document, link);
+   if(span->kind == IR_SPAN_LINK_END) return MdCloseLink(emitter, document, link, pipes);
    if(span->kind == IR_SPAN_ANCHOR) {
       if(!MdLineText(emitter, "<a id=\"")) return false;
       if(!MdLineAppend(emitter, IrDest(document, span->destAt), span->destBytes)) return false;
       return MdLineText(emitter, "\"></a>");
    }
    if(!MdLineText(emitter, "![")) return false;
-   if(!MdLineEscaped(emitter, IrText(document, span->textAt), span->textBytes, MD_CONTEXT_ALT_TEXT, dollars)) return false;
+   if(!MdLineEscaped(emitter, IrText(document, span->textAt), span->textBytes, MD_CONTEXT_ALT_TEXT, dollars, pipes)) return false;
    if(!MdLineText(emitter, "](")) return false;
-   if(!MdLineEscaped(emitter, IrDest(document, span->destAt), span->destBytes, MD_CONTEXT_LINK_DEST, false)) return false;
+   if(!MdLineEscaped(emitter, IrDest(document, span->destAt), span->destBytes, MD_CONTEXT_LINK_DEST, false, pipes)) return false;
    return MdLineText(emitter, ")");
 }
 
@@ -697,7 +706,7 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
       if(!span || MdSpanIsSilent(span)) continue;
       if(span->kind != IR_SPAN_TEXT) {
          if(span->kind == IR_SPAN_BREAK) continue;
-         if(!MdWriteMarker(emitter, document, span, link, dollars)) return false;
+         if(!MdWriteMarker(emitter, document, span, link, dollars, false)) return false;
          started = true;
          continue;
       }
@@ -713,7 +722,7 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
       cMD_EDGE ahead   = MdEdgeAhead(document, block, index + 1u, to);
       cui32    nextFmt = MdFormatAhead(document, block, index + 1u, to);
 
-      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt, link->open)) return false;
+      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt, link->open, false)) return false;
       started = true;
    }
    // The line ends, so anything still open has to be closed on it. The trailing padding goes after
@@ -721,7 +730,7 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
    // a space the trim would then have to reach past.
    cbool carried = link->open;
 
-   if(!MdCloseLink(emitter, document, link)) return false;
+   if(!MdCloseLink(emitter, document, link, false)) return false;
    link->open = carried;
    while(emitter->lineUsed && MdIsPad(emitter->line[emitter->lineUsed - 1u])) emitter->lineUsed -= 1u;
    return true;
@@ -753,7 +762,7 @@ static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document,
             if(!MdLineText(emitter, " ")) return false;
             pending = false;
          }
-         if(!MdWriteMarker(emitter, document, span, &link, dollars)) return false;
+         if(!MdWriteMarker(emitter, document, span, &link, dollars, false)) return false;
          started = true;
          continue;
       }
@@ -778,10 +787,10 @@ static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document,
       cMD_EDGE ahead   = MdEdgeAhead(document, block, index + 1u, block->spanCount);
       cui32    nextFmt = MdFormatAhead(document, block, index + 1u, block->spanCount);
 
-      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt, link.open)) return false;
+      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt, link.open, false)) return false;
       started = true;
    }
-   if(!MdCloseLink(emitter, document, &link)) return false;
+   if(!MdCloseLink(emitter, document, &link, false)) return false;
    while(emitter->lineUsed && MdIsPad(emitter->line[emitter->lineUsed - 1u])) emitter->lineUsed -= 1u;
    return true;
 }
@@ -1055,7 +1064,7 @@ static cbool MdEmitFence(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32
          // content is literal -- and a picture has nothing a fence could show, so both are dropped
          // and only the text a code paragraph is made of is written out.
          if(span->kind != IR_SPAN_TEXT) continue;
-         if(!MdAppendEscaped(emitter, IrText(document, span->textAt), span->textBytes, MD_CONTEXT_CODE_BLOCK)) return false;
+         if(!MdAppendEscaped(emitter, IrText(document, span->textAt), span->textBytes, MD_CONTEXT_CODE_BLOCK, false)) return false;
       }
       if(emitter->used == bodyAt) emitter->used = lineAt;
       if(!MdAppendByte(emitter, '\n')) return false;
@@ -1259,6 +1268,554 @@ static cbool MdEmitList(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32 
    return true;
 }
 
+//-- Tables
+
+// Whether one table has to be written as raw HTML. A table holding another has no pipe form at all, so
+// it takes the fallback under either policy; a table holding a merge has one that pads, and --tables
+// is what chooses between padding it and keeping the merge.
+static cbool MdTableAsHtml(cMD_EMITTERptr emitter, cIR_TABLEptr table) {
+   if(table->flags & IR_TABLE_NESTED) return true;
+   return (table->flags & IR_TABLE_MERGED) && emitter->tables == TABLE_MODE_HTML_ON_MERGE;
+}
+
+// Whether a block puts anything in a cell. It is IrHasContent's question rather than the narrower one a
+// fence asks, because a cell holding nothing but a picture or a live bookmark is not an empty cell.
+static cbool MdCellBlockHasContent(cIR_DOCUMENTptr document, cIR_BLOCKptr block) {
+   if(!block) return false;
+   if(block->kind == IR_BLOCK_TABLE) return true;
+   return IrHasContent(document, block->spanAt, block->spanAt + block->spanCount);
+}
+
+// Writes one block of a cell into the line, in the spelling a pipe table can carry.
+//
+// A pipe table's cell is inline content and nothing else, so the block structure inside one is
+// flattened rather than dropped: a list item keeps its marker as literal text, because losing "3." from
+// a cell loses the document's own count; a code paragraph becomes a code span, which is the inline form
+// of the fence it would otherwise have been; and a heading, a quotation and a horizontal rule keep only
+// what they say, because "#" and "> " in a cell are literal text a reader would have to ignore.
+static cbool MdCellBlock(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block, cbool dollars) {
+   MD_LINK link    = {0, 0, 0, false};
+   cbool   code    = (block->kind == IR_BLOCK_CODE);
+   bool    started = false;
+   bool    pending = false; // A break seen but not yet written, in case nothing follows it
+
+   // A marked item keeps its marker as literal text. Losing "3." from a cell loses the document's own
+   // count, and there is nowhere else in a pipe table to put it; a marker-less continuation has none.
+   if((block->listFlags & IR_LIST_ITEM) && !(block->listFlags & IR_LIST_PLAIN)) {
+      char  marker[MD_MAX_MARKER];
+      cui64 used = MdListMarker(block, marker);
+
+      if(!MdLineEscaped(emitter, marker, used, MD_CONTEXT_TABLE_CELL, dollars, true)) return false;
+      started = true;
+   }
+   for(ui32 index = 0; index < block->spanCount; ++index) {
+      cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
+
+      if(!span || MdSpanIsSilent(span)) continue;
+      if(span->kind == IR_SPAN_BREAK) {
+         // A pipe table's row is one line by construction, so a hard break inside a cell is the
+         // element and never the backslash or the two spaces --hard-break chooses between. It is held
+         // rather than written, because a break with nothing after it is dropped -- a trailing "<br>"
+         // is a line ending inside a cell that has no next line.
+         if(started) pending = true;
+         continue;
+      }
+      if(span->kind != IR_SPAN_TEXT) {
+         if(pending && !MdLineText(emitter, MD_CELL_BREAK)) return false;
+         pending = false;
+         if(!MdWriteMarker(emitter, document, span, &link, dollars, true)) return false;
+         started = true;
+         continue;
+      }
+
+      cchptr bytes = IrText(document, span->textAt);
+      ui64   start = 0;
+
+      if(!started) {
+         while(start < span->textBytes && MdIsPad(bytes[start])) ++start;
+      }
+      if(start >= span->textBytes) continue;
+      if(pending && !MdLineText(emitter, MD_CELL_BREAK)) return false;
+      pending = false;
+
+      // A code paragraph has no fence to become inside a cell, so it becomes the inline form of one.
+      cui32    fmt     = (code ? span->fmt | IR_FMT_CODE : span->fmt);
+      cMD_EDGE ahead   = MdEdgeAhead(document, block, index + 1u, block->spanCount);
+      cui32    nextFmt = MdFormatAhead(document, block, index + 1u, block->spanCount);
+
+      if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, fmt, dollars, ahead, nextFmt, link.open, true)) return false;
+      started = true;
+   }
+   if(!MdCloseLink(emitter, document, &link, true)) return false;
+   while(emitter->lineUsed && MdIsPad(emitter->line[emitter->lineUsed - 1u])) emitter->lineUsed -= 1u;
+   return true;
+}
+
+// Whether one cell holds two or more dollar signs, which is D12's whole rule at a cell's own scope.
+// A cell is one line of the emitted row however many paragraphs it holds, so the count is taken over
+// all of them: counted per block, "costs $5" and "and $10" in two paragraphs are one dollar each and
+// neither is escaped, which restores exactly the corruption D12 was ruled to fix. A dollar inside a
+// code span does not count, and a code *paragraph* becomes a code span here, so neither does one of
+// those.
+static cbool MdCellDollars(cIR_DOCUMENTptr document, cIR_CELLptr cell) {
+   ui64 found = 0;
+
+   for(ui32 index = 0; index < cell->blockCount; ++index) {
+      cIR_BLOCKptr block = IrBlockAt(document, cell->blockAt + index);
+
+      if(!block || block->kind == IR_BLOCK_CODE) continue;
+      for(ui32 at = 0; at < block->spanCount; ++at) {
+         cIR_SPANptr span = IrSpanAt(document, block->spanAt + at);
+
+         if(!span || span->kind != IR_SPAN_TEXT || (span->fmt & IR_FMT_CODE)) continue;
+         found += MdEscapeCountDollars(IrText(document, span->textAt), span->textBytes);
+      }
+   }
+   return found >= 2u;
+}
+
+// Strips whatever the end of a cell has no next line for: its trailing padding, and the break element
+// that padding hid. A break with nothing after it is dropped everywhere else in this emitter, and a
+// cell is no exception -- a trailing "<br>" is a line ending in a cell that has no next line. Both are
+// stripped in a loop, because a break may be followed by padding and padding by another break.
+//
+// It takes the buffer rather than the emitter because the two table forms hold a cell in different
+// places -- the pipe form assembles one in the line buffer, the raw-HTML form writes it straight to
+// the output -- and the rule is the same for both. floorAt is where this cell's own content began, so
+// the walk can never eat the tag that opened it, and MdIsPad is the ASCII pair only, so it stops at
+// the newline a nested table closes with.
+// @return Where the content ends once the trailing padding and breaks are off it.
+static cui64 MdTrimBreakEnd(cchptr text, cui64 used, cui64 floorAt) {
+   ui64 length = 0;
+   ui64 at     = used;
+
+   while(MD_CELL_BREAK[length]) ++length;
+
+   for(;;) {
+      while(at > floorAt && MdIsPad(text[at - 1u])) --at;
+      if(at < floorAt + length) return at;
+
+      cchptr tail = text + at - length;
+      ui64   step = 0;
+
+      while(step < length && tail[step] == MD_CELL_BREAK[step]) ++step;
+      if(step < length) return at;
+      at -= length;
+   }
+}
+
+// Assembles one cell's whole content into the line buffer, its blocks joined by "<br>".
+//
+// A block that puts nothing on the page is skipped rather than joined, which is what keeps an empty
+// paragraph -- the one every w:tc carries even when the cell is blank -- from becoming a "<br>" a
+// reader sees. A cell that is a vertical merge's continuation is empty whatever it holds, because that
+// is what Word draws and what CONVERSION_REFERENCE row 19 rules.
+static cbool MdAssembleCell(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_CELLptr cell) {
+   cbool dollars = MdCellDollars(document, cell);
+   bool  started = false;
+
+   emitter->lineUsed = 0;
+   if(cell->flags & IR_CELL_VMERGED) return true;
+   for(ui32 index = 0; index < cell->blockCount; ++index) {
+      cIR_BLOCKptr block = IrBlockAt(document, cell->blockAt + index);
+
+      if(!block) continue;
+      // A nested table cannot appear here: a table holding one is written as raw HTML instead. The
+      // skip is what keeps that a fact about the emitter rather than a promise about the walk.
+      if(block->kind == IR_BLOCK_TABLE) {
+         cIR_TABLEptr nested = IrTableAt(document, block->tableAt);
+
+         if(nested && nested->blockEnd > cell->blockAt + index) index = nested->blockEnd - cell->blockAt - 1u;
+         continue;
+      }
+      if(!MdCellBlockHasContent(document, block)) continue;
+      if(started && !MdLineText(emitter, MD_CELL_BREAK)) return false;
+      if(!MdCellBlock(emitter, document, block, dollars)) return false;
+      started = true;
+   }
+   emitter->lineUsed = MdTrimBreakEnd(emitter->line, emitter->lineUsed, 0);
+   return true;
+}
+
+// Writes one cell of a pipe row: a space, the cell's content, a space and the closing bar.
+static cbool MdEmitPipeCell(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_CELLptr cell) {
+   if(!MdAppendByte(emitter, ' ')) return false;
+   if(cell) {
+      if(!MdAssembleCell(emitter, document, cell)) return false;
+      if(!MdAppend(emitter, emitter->line, emitter->lineUsed)) return false;
+      emitter->lineUsed = 0;
+   }
+   return MdAppendText(emitter, " |");
+}
+
+// Writes one row of a pipe table, padded to the table's own width.
+//
+// The cells are walked once and the padding falls out of their own columns: a cell covering two of them
+// puts its content in the first and leaves the second empty, which is row 19's policy A, and a row that
+// stops short of the grid is filled to it. Nothing is looked up per column, so a wide table costs one
+// pass over its cells rather than one scan per column.
+static cbool MdEmitPipeRow(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cIR_ROWptr row, cMD_PREFIXptrc prefix) {
+   ui32 column = 0;
+
+   if(!MdWritePrefix(emitter, prefix, false)) return false;
+   if(!MdAppendByte(emitter, '|')) return false;
+   for(ui32 index = row->firstCell; index != IR_NO_INDEX;) {
+      cIR_CELLptr cell = IrCellAt(document, index);
+
+      if(!cell) break;
+      // Defensive, and reachable by nothing this build reads: a cell's column is derived from the one
+      // before it in IrBeginCell rather than taken from the document, so a row's cells are contiguous
+      // and this loop cannot run. What would make it live is w:gridBefore, the one place OOXML lets a
+      // row start part-way across the grid -- see the note in CLAUDE.md's Known gaps. Kept because
+      // filling a gap is what that element will need, and because closing one up slides a row left.
+      while(column < cell->column && column < table->columns) {
+         if(!MdEmitPipeCell(emitter, document, nullptr)) return false;
+         ++column;
+      }
+      for(ui32 at = 0; at < cell->span && column < table->columns; ++at, ++column) {
+         if(!MdEmitPipeCell(emitter, document, (at ? nullptr : cell))) return false;
+      }
+      index = cell->nextCell;
+   }
+   while(column < table->columns) {
+      if(!MdEmitPipeCell(emitter, document, nullptr)) return false;
+      ++column;
+   }
+   return MdAppendByte(emitter, '\n');
+}
+
+// Writes the delimiter row, which is what makes the lines above and below it a table at all: GFM reads
+// a pipe table only where this row holds exactly as many cells as the header.
+static cbool MdEmitDelimiterRow(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix) {
+   if(!MdWritePrefix(emitter, prefix, false)) return false;
+   if(!MdAppendByte(emitter, '|')) return false;
+   for(ui32 column = 0; column < table->columns; ++column) {
+      cIR_ALIGN align = IrAlignOf(document, table, column);
+      cbool     left  = (align == IR_ALIGN_LEFT || align == IR_ALIGN_CENTRE);
+      cbool     right = (align == IR_ALIGN_RIGHT || align == IR_ALIGN_CENTRE);
+
+      if(!MdAppendByte(emitter, ' ')) return false;
+      if(left && !MdAppendByte(emitter, ':')) return false;
+      if(!MdAppendRun(emitter, '-', MD_DELIMITER_DASHES)) return false;
+      if(right && !MdAppendByte(emitter, ':')) return false;
+      if(!MdAppendText(emitter, " |")) return false;
+   }
+   return MdAppendByte(emitter, '\n');
+}
+
+// Emits one table as a GFM pipe table.
+static cbool MdEmitTablePipes(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix) {
+   ui32 index = table->firstRow;
+   bool first = true;
+
+   while(index != IR_NO_INDEX) {
+      cIR_ROWptr row = IrRowAt(document, index);
+
+      if(!row) break;
+      if(!MdEmitPipeRow(emitter, document, table, row, prefix)) return false;
+      // The first row is the header, always. w:trPr/w:tblHeader marks a row that repeats at a page
+      // break and a table may mark several, but GFM has exactly one header row and it is the one at
+      // the top -- so promoting a later one would reorder the document, which every pass above the
+      // walk reads in order. See CLAUDE.md's mapping row, which rules the header to be the first row.
+      if(first && !MdEmitDelimiterRow(emitter, document, table, prefix)) return false;
+      first = false;
+      index = row->nextRow;
+   }
+   return true;
+}
+
+//-- The raw-HTML table
+
+// How many rows one vertical merge covers, counted forward from the row its restart cell stands in.
+//
+// A row below extends the merge only where it continues **every** column the restart covers, which is
+// what keeps the rectangle a rowspan promises true. Counted at the restart's first column alone, a
+// restart wider than the continuation under it claimed columns nothing continued: held[] was stamped
+// across the whole span, the next ordinary cell of that row was pushed past it by the browser's own
+// grid algorithm, and the table gained a column the pipe form of the same document does not have.
+//
+// Three separate things bound the cost, and all three are needed. The scan stops at the first row that
+// does not continue the whole span, so the runs two restarts in one column cover are disjoint. The
+// inner walk stops at the first column no continuation claims, which a row's increasing columns make
+// sound, and it never looks past the restart's own end. And
+// the caller does not ask at all for a cell outside the grid, which is what caps the number of calls
+// per row at the grid's own width. Without the last two this was quadratic in the document's own cell
+// count: 64,000 restarts over 64,000 continuations is a 21 KB .docx that took sixteen seconds, and the
+// archive's caps leave room for a file that would take hours.
+static cui32 MdRowSpanOf(cIR_DOCUMENTptr document, cIR_ROWptr row, cui32 column, cui32 span) {
+   cui32 end  = column + span;
+   ui32  rows = 1u;
+   ui32  next = row->nextRow;
+
+   while(next != IR_NO_INDEX) {
+      cIR_ROWptr below = IrRowAt(document, next);
+      ui32       need  = column;
+
+      if(!below) break;
+      // Every column the restart covers has to be continued, not just the one it starts at. A row's
+      // cells carry strictly increasing columns, so this walks forward filling need and stops at the
+      // first column no continuation claims -- which also keeps it bounded: it skips at most column
+      // cells to reach the run and covers at most span more.
+      for(ui32 index = below->firstCell; index != IR_NO_INDEX && need < end;) {
+         cIR_CELLptr cell = IrCellAt(document, index);
+
+         if(!cell) break;
+         if(cell->column + cell->span <= need) {
+            index = cell->nextCell;
+            continue;
+         }
+         if(cell->column > need || !(cell->flags & IR_CELL_VMERGED)) break;
+         need  = cell->column + cell->span;
+         index = cell->nextCell;
+      }
+      if(need < end) break;
+      ++rows;
+      next = below->nextRow;
+   }
+   return rows;
+}
+
+// Writes one number as an HTML attribute value.
+static cbool MdAppendNumber(MD_EMITTERptrc emitter, cui32 value) {
+   char digits[12];
+   ui64 count = 0;
+   ui32 left  = value;
+
+   do {
+      digits[count++] = char('0' + (left % 10u));
+      left /= 10u;
+   } while(left && count < sizeof(digits));
+   while(count) {
+      if(!MdAppendByte(emitter, digits[--count])) return false;
+   }
+   return true;
+}
+
+// Writes one span in the raw-HTML fallback's own spelling. Nothing Markdown says is true inside an HTML
+// block -- it runs to the next blank line and every byte of it is passed through unparsed -- so every
+// delimiter is an element and every escape is an entity. The nesting is MdWriteSpan's, outermost first.
+static cbool MdHtmlSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, cui32 fmt) {
+   cbool bold   = (fmt & IR_FMT_BOLD) != 0;
+   cbool italic = (fmt & IR_FMT_ITALIC) != 0;
+   cbool code   = (fmt & IR_FMT_CODE) != 0;
+
+   if(!byteCount) return true;
+   if((fmt & IR_FMT_SUPER) && !MdAppendText(emitter, "<sup>")) return false;
+   if((fmt & IR_FMT_SUB) && !MdAppendText(emitter, "<sub>")) return false;
+   if((fmt & IR_FMT_STRIKE) && !MdAppendText(emitter, "<del>")) return false;
+   // Code drops bold and italic here for the reason mapping row 11 gives everywhere else, so that two
+   // runs that come out as one code span really are one.
+   if(!code && bold && !MdAppendText(emitter, "<strong>")) return false;
+   if(!code && italic && !MdAppendText(emitter, "<em>")) return false;
+   if(code && !MdAppendText(emitter, "<code>")) return false;
+   if(!MdAppendEscaped(emitter, bytes, byteCount, MD_CONTEXT_HTML_BLOCK, false)) return false;
+   if(code && !MdAppendText(emitter, "</code>")) return false;
+   if(!code && italic && !MdAppendText(emitter, "</em>")) return false;
+   if(!code && bold && !MdAppendText(emitter, "</strong>")) return false;
+   if((fmt & IR_FMT_STRIKE) && !MdAppendText(emitter, "</del>")) return false;
+   if((fmt & IR_FMT_SUB) && !MdAppendText(emitter, "</sub>")) return false;
+   if((fmt & IR_FMT_SUPER) && !MdAppendText(emitter, "</sup>")) return false;
+   return true;
+}
+
+// Writes one of M7's marker spans in the fallback's spelling: an anchor and a link are both an <a>, an
+// image an <img>, and a link's two halves are the element's own two halves.
+static cbool MdHtmlMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_SPANptr span) {
+   if(span->kind == IR_SPAN_LINK_START) {
+      if(!MdAppendText(emitter, "<a href=\"")) return false;
+      if(!MdAppendEscaped(emitter, IrDest(document, span->destAt), span->destBytes, MD_CONTEXT_HTML_BLOCK, false)) return false;
+      return MdAppendText(emitter, "\">");
+   }
+   if(span->kind == IR_SPAN_LINK_END) return MdAppendText(emitter, "</a>");
+   if(span->kind == IR_SPAN_ANCHOR) {
+      if(!MdAppendText(emitter, "<a id=\"")) return false;
+      if(!MdAppend(emitter, IrDest(document, span->destAt), span->destBytes)) return false;
+      return MdAppendText(emitter, "\"></a>");
+   }
+   if(!MdAppendText(emitter, "<img src=\"")) return false;
+   if(!MdAppendEscaped(emitter, IrDest(document, span->destAt), span->destBytes, MD_CONTEXT_HTML_BLOCK, false)) return false;
+   if(!MdAppendText(emitter, "\" alt=\"")) return false;
+   if(!MdAppendEscaped(emitter, IrText(document, span->textAt), span->textBytes, MD_CONTEXT_HTML_BLOCK, false)) return false;
+   return MdAppendText(emitter, "\">");
+}
+
+// Writes one block of a cell in the fallback's spelling. The flattening is the pipe form's -- a list
+// item keeps its marker, a code paragraph becomes a code span -- because what the fallback exists to
+// preserve is the table's *shape*, and a cell that held blocks in one form and not the other would make
+// the same document read differently for the sake of a merge somewhere else in it.
+static cbool MdHtmlBlock(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_BLOCKptr block) {
+   cbool code    = (block->kind == IR_BLOCK_CODE);
+   bool  started = false;
+   bool  pending = false; // A break seen but not yet written, in case nothing follows it
+
+   if((block->listFlags & IR_LIST_ITEM) && !(block->listFlags & IR_LIST_PLAIN)) {
+      char  marker[MD_MAX_MARKER];
+      cui64 used = MdListMarker(block, marker);
+
+      if(!MdAppendEscaped(emitter, marker, used, MD_CONTEXT_HTML_BLOCK, false)) return false;
+      started = true;
+   }
+   for(ui32 index = 0; index < block->spanCount; ++index) {
+      cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
+
+      if(!span || MdSpanIsSilent(span)) continue;
+      if(span->kind == IR_SPAN_BREAK) {
+         if(started) pending = true;
+         continue;
+      }
+      if(span->kind != IR_SPAN_TEXT) {
+         if(pending && !MdAppendText(emitter, MD_CELL_BREAK)) return false;
+         pending = false;
+         if(!MdHtmlMarker(emitter, document, span)) return false;
+         started = true;
+         continue;
+      }
+
+      cchptr bytes = IrText(document, span->textAt);
+      ui64   start = 0;
+
+      if(!started) {
+         while(start < span->textBytes && MdIsPad(bytes[start])) ++start;
+      }
+      if(start >= span->textBytes) continue;
+      if(pending && !MdAppendText(emitter, MD_CELL_BREAK)) return false;
+      pending = false;
+      if(!MdHtmlSpan(emitter, bytes + start, span->textBytes - start, (code ? span->fmt | IR_FMT_CODE : span->fmt))) return false;
+      started = true;
+   }
+   return true;
+}
+
+static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix);
+
+// Writes one cell's content between its own tags: its blocks joined by "<br>", and a nested table as a
+// <table> of its own, which is the whole reason this form exists.
+static cbool MdHtmlCell(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_CELLptr cell, cMD_PREFIXptrc prefix) {
+   bool started = false;
+
+   if(cell->flags & IR_CELL_VMERGED) return true;
+   for(ui32 index = 0; index < cell->blockCount; ++index) {
+      cIR_BLOCKptr block = IrBlockAt(document, cell->blockAt + index);
+
+      if(!block) continue;
+      if(block->kind == IR_BLOCK_TABLE) {
+         cIR_TABLEptr nested = IrTableAt(document, block->tableAt);
+
+         if(!nested) continue;
+         if(!MdEmitTableHtml(emitter, document, nested, prefix)) return false;
+         index   = (nested->blockEnd > cell->blockAt + index ? nested->blockEnd - cell->blockAt - 1u : index);
+         started = false; // A table is not a line a "<br>" continues
+         continue;
+      }
+      if(!MdCellBlockHasContent(document, block)) continue;
+      if(started && !MdAppendText(emitter, MD_CELL_BREAK)) return false;
+      if(!MdHtmlBlock(emitter, document, block)) return false;
+      started = true;
+   }
+   return true;
+}
+
+// Writes one empty cell of the raw-HTML table. It takes the whole opening tag rather than the tag
+// name, because a pad carries no attribute and a cell that does writes its own closing bracket.
+static cbool MdEmitHtmlPad(MD_EMITTERptrc emitter, cchptr open, cchptr close) { return MdAppendText(emitter, open) && MdAppendText(emitter, close); }
+
+// Emits one table as a raw <table>. Every row is one line and no line is blank, because a CommonMark
+// HTML block ends at the first blank line and whatever followed would be read as Markdown again.
+//
+// The open-merge count per column is what makes the grid exact. A cell a rowspan above already covers
+// writes nothing, and a w:vMerge continuation that *nothing* covers -- which a producer writes when an
+// intervening row spans across the column the merge was opened in -- is an ordinary empty cell rather
+// than nothing at all. Dropped, it would leave the row a column short, which is a silently narrower
+// table: the one failure CONVERSION_REFERENCE row 19 names by saying a row must never lose a column.
+static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix) {
+   ui32 held[IR_MAX_COLUMNS];
+   ui32 index  = table->firstRow;
+   bool header = true;
+
+   for(ui32 column = 0; column < IR_MAX_COLUMNS; ++column) held[column] = 0;
+   if(!MdWritePrefix(emitter, prefix, false)) return false;
+   if(!MdAppendText(emitter, "<table>\n")) return false;
+   while(index != IR_NO_INDEX) {
+      cIR_ROWptr row    = IrRowAt(document, index);
+      cchptr     open   = (header ? "<th" : "<td");
+      cchptr     bare   = (header ? "<th>" : "<td>");
+      cchptr     close  = (header ? "</th>" : "</td>");
+      ui32       column = 0;
+
+      if(!row) break;
+      if(!MdWritePrefix(emitter, prefix, false)) return false;
+      if(!MdAppendText(emitter, "<tr>")) return false;
+      for(ui32 at = row->firstCell; at != IR_NO_INDEX;) {
+         cIR_CELLptr cell = IrCellAt(document, at);
+
+         if(!cell) break;
+         if(cell->flags & IR_CELL_VMERGED) {
+            // A continuation the merge above it covers writes nothing at all; one that nothing covers
+            // is an ordinary empty cell, because dropping it leaves the row a column short.
+            for(ui32 span = 0; span < cell->span && column < IR_MAX_COLUMNS; ++span, ++column) {
+               if(!held[column] && !MdEmitHtmlPad(emitter, bare, close)) return false;
+            }
+            at = cell->nextCell;
+            continue;
+         }
+         // An ordinary cell can never land where a merge above it is still open, and the two halves of
+         // that are both here: a rowspan is exactly the run of continuation cells below it, so held
+         // expires on the row after the last of them -- and a row whose cell at that column is
+         // ordinary rather than a continuation is the row the run stopped at. So no skip is written
+         // for it, and none is needed.
+         // The loop below is the pipe form's gap loop and is dead for the same reason that one is --
+         // w:gridBefore is what would make it live. The held[] test is what it would then need.
+         while(column < cell->column && column < IR_MAX_COLUMNS) {
+            if(!held[column] && !MdEmitHtmlPad(emitter, bare, close)) return false;
+            ++column;
+         }
+
+         // A cell past the grid writes no held[] entry and decorates a column the table does not have,
+         // so its row span is never asked for: that guard is what bounds the walk below at 256 calls,
+         // and nothing caps how many cells a row may hold.
+         cbool restart = (cell->flags & IR_CELL_VRESTART) && cell->column < IR_MAX_COLUMNS;
+         cui32 rows    = (restart ? MdRowSpanOf(document, row, cell->column, cell->span) : 1u);
+
+         if(!MdAppendText(emitter, open)) return false;
+         if(cell->span > 1u) {
+            if(!MdAppendText(emitter, " colspan=\"") || !MdAppendNumber(emitter, cell->span) || !MdAppendByte(emitter, '"')) return false;
+         }
+         if(rows > 1u) {
+            if(!MdAppendText(emitter, " rowspan=\"") || !MdAppendNumber(emitter, rows) || !MdAppendByte(emitter, '"')) return false;
+         }
+         if(!MdAppendByte(emitter, '>')) return false;
+
+         cui64 contentAt = emitter->used;
+
+         if(!MdHtmlCell(emitter, document, cell, prefix)) return false;
+         emitter->used = MdTrimBreakEnd(emitter->out, emitter->used, contentAt);
+         if(!MdAppendText(emitter, close)) return false;
+         for(ui32 span = 0; span < cell->span && column < IR_MAX_COLUMNS; ++span, ++column) held[column] = rows;
+         at = cell->nextCell;
+      }
+      while(column < table->columns && column < IR_MAX_COLUMNS) {
+         if(!held[column] && !MdEmitHtmlPad(emitter, bare, close)) return false;
+         ++column;
+      }
+      // Only the grid's own columns can hold a merge, and IrEndTable has already clamped that count,
+      // so a one-column table does not pay for 256 of them on every row it has.
+      for(ui32 span = 0; span < table->columns && span < IR_MAX_COLUMNS; ++span) {
+         if(held[span]) held[span] -= 1u;
+      }
+      if(!MdAppendText(emitter, "</tr>\n")) return false;
+      header = false;
+      index  = row->nextRow;
+   }
+   if(!MdWritePrefix(emitter, prefix, false)) return false;
+   return MdAppendText(emitter, "</table>\n");
+}
+
+// Emits one table, in whichever of its two forms its own shape and --tables call for.
+static cbool MdEmitTable(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix) {
+   if(MdTableAsHtml(emitter, table)) return MdEmitTableHtml(emitter, document, table, prefix);
+   return MdEmitTablePipes(emitter, document, table, prefix);
+}
+
 //-- Separation
 
 // Writes what stands between two blocks: exactly one blank line, with one exception. Two consecutive
@@ -1280,17 +1837,19 @@ static cbool MdSeparate(MD_EMITTERptrc emitter, cIR_BLOCKptr previous, cIR_BLOCK
 
 //== Entry points
 
-void MdOpen(MD_EMITTERptrc emitter, cHARD_BREAK hardBreak) {
+void MdOpen(MD_EMITTERptrc emitter, cHARD_BREAK hardBreak, cTABLE_MODE tables) {
    mzero(emitter, sizeof(MD_EMITTER));
    emitter->hardBreak = hardBreak;
+   emitter->tables    = tables;
 }
 
 void MdClose(MD_EMITTERptrc emitter) {
    cHARD_BREAK hardBreak = emitter->hardBreak;
+   cTABLE_MODE tables    = emitter->tables;
 
    mdealloc(emitter->out);
    mdealloc(emitter->line);
-   MdOpen(emitter, hardBreak);
+   MdOpen(emitter, hardBreak, tables);
 }
 
 cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
@@ -1350,6 +1909,22 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
             wrote    = true;
          }
          index = last;
+         continue;
+      }
+      // A table is emitted whole and the loop then steps over every block it owns, because a cell's
+      // blocks sit in this same array in document order -- which is what lets every pass between the
+      // walk and here read one flat array and know nothing about tables at all.
+      if(block->kind == IR_BLOCK_TABLE) {
+         cIR_TABLEptr table = IrTableAt(document, block->tableAt);
+
+         MdPrefixClear(&prefix);
+         if(table && table->firstRow != IR_NO_INDEX) {
+            if(wrote && !MdSeparate(emitter, previous, block)) return MD_ERROR_MEMORY;
+            if(!MdEmitTable(emitter, document, table, &prefix)) return MD_ERROR_MEMORY;
+            previous = block;
+            wrote    = true;
+         }
+         index = (table && table->blockEnd > index ? table->blockEnd : index + 1u);
          continue;
       }
       if(block->kind == IR_BLOCK_CODE) {

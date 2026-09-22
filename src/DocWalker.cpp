@@ -54,7 +54,9 @@ static_assert(sizeof(WALK_RESULT_TEXT) / sizeof(WALK_RESULT_TEXT[0]) == ui64(WAL
 // w:smartTag, w:customXml, mc:AlternateContent -- appear at both levels and are handled once for both.
 enum DOC_LEVEL : si32 {
    DOC_LEVEL_BLOCK = 0, ///< Children are block items: paragraphs, tables, wrappers
-   DOC_LEVEL_RUN        ///< Children are run-level items: runs, hyperlinks, wrappers
+   DOC_LEVEL_RUN,       ///< Children are run-level items: runs, hyperlinks, wrappers
+   DOC_LEVEL_TABLE,     ///< Children are a table's rows
+   DOC_LEVEL_ROW        ///< Children are a row's cells
 };
 
 typedef const DOC_LEVEL cDOC_LEVEL;
@@ -78,6 +80,13 @@ struct DOC_NUM_REF {
 typedef DOC_NUM_REF *const DOC_NUM_REFptrc;
 
 // Everything one walk carries. One worker owns one of these on its own stack and never shares it (D6).
+//
+// The five table fields are the open table, the open row, and the tails of their two chains. They are
+// here rather than on the walk's own frames because the transparent wrappers are dispatched by one
+// function for every level, so a w:sdt or an mc:AlternateContent standing between a w:tbl and its w:tr
+// has to reach the same state a direct child would. Each is saved and restored where a table nests --
+// and the two tails are what an unwound mc:Choice restores, which is the whole of what a rewind inside
+// a table costs: see IrBeginRow's note on why this module owns the chain and Ir.cpp does not.
 struct DOC_CONTEXT {
    IR_DOCUMENTptr  document;                                       ///< Where blocks and spans are being built
    cSTYLE_MODELptr styles;                                         ///< The resolved style cache
@@ -88,6 +97,12 @@ struct DOC_CONTEXT {
    char            pending[DOC_PENDING_ANCHORS][DOC_ANCHOR_BYTES]; ///< Bookmarks awaiting the next block
    ui64            pendingLength[DOC_PENDING_ANCHORS];             ///< How long each of them is
    ui32            pendingCount;                                   ///< How many are waiting
+   si32            table;                                          ///< The table whose rows are being read, or -1
+   si32            row;                                            ///< The row whose cells are being read, or -1
+   si32            lastRow;                                        ///< The last row appended to that table, or -1
+   si32            lastCell;                                       ///< The last cell appended to that row, or -1
+   ui32            depth;                                          ///< How many tables are open around the walk
+   IR_ALIGN        justify;                                        ///< What the first aligned paragraph of the open cell said
    bool            inLink;                                         ///< Whether a hyperlink is open around the content
    bool            sawText;                                        ///< Whether the paragraph being walked produced any text
    bool            allMono;                                        ///< Whether every text-bearing run of it was monospace
@@ -98,6 +113,9 @@ typedef DOC_CONTEXT *const DOC_CONTEXTptrc;
 
 static cbool DocWalkChildren(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 paragraphStyle, cbool heading);
 static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 paragraphStyle, cbool heading);
+// A table is block content, so DocDispatchChild reaches it; it is declared beside the row and cell
+// walks it belongs with, further down, rather than being lifted above the paragraph walk it follows.
+static cbool DocWalkTable(DOC_CONTEXTptrc context);
 // A picture is run content, so DocWalkRun reaches it; it is declared beside the link and bookmark
 // helpers it belongs with, further down, rather than being lifted above the run walk it serves.
 static cbool DocWalkImage(DOC_CONTEXTptrc context);
@@ -832,6 +850,19 @@ static cbool DocReadNumbering(DOC_CONTEXTptrc context, DOC_NUM_REFptrc num) {
    }
 }
 
+// The alignment one w:jc value names, for the delimiter row of mapping row 18. Everything a GFM
+// delimiter row cannot spell -- both, distribute, a token this build has never heard of -- is no
+// alignment rather than a guess, because a delimiter row that says nothing is what a renderer defaults
+// to anyway. ST_Jc's start and end are the bidirectional spellings of left and right, and this build
+// has no bidirectional layout to reverse them against (w:bidiVisual is CONVERSION_REFERENCE 2.5's
+// "note and ignore"), so they are read as what they mean in a left-to-right table.
+static cIR_ALIGN DocAlignOf(cXML_TEXT value) {
+   if(XmlTextEqual(value, "center")) return IR_ALIGN_CENTRE;
+   if(XmlTextEqual(value, "right") || XmlTextEqual(value, "end")) return IR_ALIGN_RIGHT;
+   if(XmlTextEqual(value, "left") || XmlTextEqual(value, "start")) return IR_ALIGN_LEFT;
+   return IR_ALIGN_NONE;
+}
+
 // Reads the w:pPr the reader is on, and consumes it.
 static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style, si32ptrc outline, boolptrc rule, DOC_NUM_REFptrc num) {
    cui32 depthHere = context->reader->depth;
@@ -850,7 +881,12 @@ static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style,
          if(!DocReadNumbering(context, num)) return false;
          continue;
       }
-      if(XmlIsElement(context->reader, XML_NS_W, "pStyle")) {
+      if(XmlIsElement(context->reader, XML_NS_W, "jc")) {
+         // Mapping row 18's column alignment. The first paragraph of a cell that states one speaks for
+         // the cell, and only the header row's cells reach the delimiter row -- but every paragraph is
+         // read here, because the walk cannot know which cell it is in without asking.
+         if(context->justify == IR_ALIGN_NONE) context->justify = DocAlignOf(XmlAttribute(context->reader, XML_NS_W, "val"));
+      } else if(XmlIsElement(context->reader, XML_NS_W, "pStyle")) {
          csi32 found = DocFindStyle(context, XmlAttribute(context->reader, XML_NS_W, "val"));
 
          if(found >= 0) *style = found;
@@ -896,7 +932,7 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    si32          style     = StyleDefaultParagraph(context->styles);
    si32          outline   = -1;
    DOC_NUM_REF   num       = {-1, -1};
-   IR_MARK       mark      = {-1, 0, 0, 0};
+   IR_MARK       mark      = {-1, 0, 0, 0, 0, 0, 0, 0};
    IR_BLOCK_KIND kind      = IR_BLOCK_PARAGRAPH;
    ui8           level     = 0;
    si32          listId    = -1;
@@ -1021,6 +1057,298 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    return ok;
 }
 
+//-- Tables
+
+// Counts the w:gridCol children of the w:tblGrid the reader is on. CONVERSION_REFERENCE 2.5 makes that
+// count the authoritative column width of the table -- rows may hold fewer w:tc than it because of
+// w:gridSpan, and the emitter pads them back out to it.
+static cbool DocReadGrid(DOC_CONTEXTptrc context, ui32ptrc columns) {
+   cui32 depthHere = context->reader->depth;
+   ui32  found     = 0;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) {
+         *columns = found;
+         return true;
+      }
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      // A w:gridCol past the cap stops being counted rather than refusing the table: the grid is a
+      // width and a document that declares a million of them has said nothing a reader could use.
+      if(XmlIsElement(context->reader, XML_NS_W, "gridCol") && found < IR_MAX_COLUMNS) ++found;
+      if(!XmlSkipElement(context->reader)) return false;
+   }
+}
+
+// Reads the w:trPr the reader is on, and reports what it said about the row. w:tblHeader marks a row
+// that repeats at a page break, which is the only thing WordprocessingML has to say "this row is a
+// header"; w:del marks a row a tracked change removed, and accept-all drops it with its content
+// (correctness rule 8). A w:val of none or nil on either switches it off, the way every toggle spells
+// "not set" rather than being omitted.
+static cbool DocReadRowProperties(DOC_CONTEXTptrc context, boolptrc header, boolptrc deleted) {
+   cui32 depthHere = context->reader->depth;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+
+      cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
+      cbool     on    = !XmlTextEqual(value, "none") && !XmlTextEqual(value, "nil") && !XmlTextEqual(value, "0") && !XmlTextEqual(value, "false");
+
+      if(XmlIsElement(context->reader, XML_NS_W, "tblHeader")) *header = on;
+      else if(XmlIsElement(context->reader, XML_NS_W, "del")) *deleted = true;
+      if(!XmlSkipElement(context->reader)) return false;
+   }
+}
+
+// Reads the w:tcPr the reader is on, and reports what it said about the cell: how many grid columns it
+// covers, and whether it is the start of a vertical merge or a continuation of one. A w:vMerge with no
+// w:val, or one saying "continue", is a continuation -- which is the cell the row above is still
+// filling, and which carries an empty paragraph rather than content of its own.
+static cbool DocReadCellProperties(DOC_CONTEXTptrc context, ui32ptrc span, ui8ptrc flags) {
+   cui32 depthHere = context->reader->depth;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_W, "gridSpan")) {
+         si32 parsed = 0;
+
+         if(DocReadDecimal(context, &parsed) && parsed > 0) *span = ui32(parsed);
+      } else if(XmlIsElement(context->reader, XML_NS_W, "vMerge")) {
+         cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
+
+         *flags |= ui8(XmlTextEqual(value, "restart") ? IR_CELL_VRESTART : IR_CELL_VMERGED);
+      }
+      if(!XmlSkipElement(context->reader)) return false;
+   }
+}
+
+// Opens one cell, recording where its content will start and how much of the grid it claims. That a
+// cell merges is a fact IrEndTable derives from the cells that survive rather than one recorded here,
+// because an mc:Fallback may replace this cell and a discarded branch must declare nothing.
+static cbool DocOpenCell(DOC_CONTEXTptrc context, cui32 span, cui8 flags, si32ptrc cell, ui32ptrc blockAt) {
+   *cell = IrBeginCell(context->document, context->row, context->lastCell, span, flags);
+   if(*cell < 0) {
+      context->memory = true;
+      return false;
+   }
+   context->lastCell = *cell;
+   *blockAt          = IrBlockCount(context->document);
+   return true;
+}
+
+// Opens one row, linking it behind the row before it.
+static cbool DocOpenRow(DOC_CONTEXTptrc context, cbool header, si32ptrc row) {
+   *row = IrBeginRow(context->document, context->table, context->lastRow, header);
+   if(*row < 0) {
+      context->memory = true;
+      return false;
+   }
+   context->lastRow = *row;
+   context->row     = *row;
+   return true;
+}
+
+// Walks one w:tc into one cell, whose content is ordinary block content walked where it stands.
+//
+// A cell's alignment is the first w:jc any of its paragraphs states, and it is recorded on the cell
+// rather than spread over the table's columns here: which row a cell is in is the table's question,
+// and only the first row's cells can reach a delimiter row. The question is reopened per cell and
+// closed again on the way out, so a nested table's cells never answer it for the cell they stand in.
+static cbool DocWalkCell(DOC_CONTEXTptrc context) {
+   cui32     depthHere    = context->reader->depth;
+   cIR_ALIGN outerJustify = context->justify;
+   ui32      span         = 1u;
+   ui8       flags        = IR_CELL_NONE;
+   si32      cell         = -1;
+   ui32      blockAt      = IrBlockCount(context->document);
+   bool      settled      = false;
+   bool      ok           = true;
+
+   context->justify = IR_ALIGN_NONE;
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(!settled && XmlIsElement(context->reader, XML_NS_W, "tcPr")) {
+         if(!DocReadCellProperties(context, &span, &flags)) return false;
+         continue;
+      }
+      if(!settled) {
+         // w:tcPr is the cell's first child whenever it is present, so anything else means the
+         // properties are settled and the cell can be opened where its content starts.
+         if(!DocOpenCell(context, span, flags, &cell, &blockAt)) return false;
+         settled = true;
+      }
+      if(!DocDispatchChild(context, DOC_LEVEL_BLOCK, -1, false)) {
+         ok = false;
+         break;
+      }
+   }
+   // A w:tc of nothing but its w:tcPr, or of nothing whatever. It is still a cell and still a column
+   // the grid has to account for: the schema says a cell always holds a w:p, and a producer that leaves
+   // one out must not cost its row a column.
+   if(!settled && !DocOpenCell(context, span, flags, &cell, &blockAt)) return false;
+   IrEndCell(context->document, cell, blockAt, context->justify);
+   context->justify = outerJustify;
+   return ok;
+}
+
+// Walks one w:tr into one row.
+static cbool DocWalkRow(DOC_CONTEXTptrc context) {
+   cui32 depthHere = context->reader->depth;
+   bool  header    = false;
+   bool  deleted   = false;
+   bool  settled   = false;
+   bool  ok        = true;
+   si32  row       = -1;
+
+   context->lastCell = -1;
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(!settled && !deleted && XmlIsElement(context->reader, XML_NS_W, "trPr")) {
+         if(!DocReadRowProperties(context, &header, &deleted)) return false;
+         continue;
+      }
+      // Accept-all revisions, correctness rule 8: a row a tracked change deleted is not there, and
+      // neither is its content. It is skipped whole rather than kept empty, because an empty row is a
+      // row a reader still sees.
+      if(deleted) {
+         if(!XmlSkipElement(context->reader)) return false;
+         continue;
+      }
+      if(!settled) {
+         if(!DocOpenRow(context, header, &row)) return false;
+         settled = true;
+      }
+      if(!DocDispatchChild(context, DOC_LEVEL_ROW, -1, false)) {
+         ok = false;
+         break;
+      }
+   }
+   if(deleted) return ok;
+   // A w:tr with no w:tc at all. Word writes one while a user is building a table, and it is a row of
+   // empty cells on the page, so it is a row here too.
+   if(!settled && !DocOpenRow(context, header, &row)) return false;
+   IrEndRow(context->document, row, context->lastCell);
+   return ok;
+}
+
+// Walks one w:tbl into one table block and the rows and cells beside it.
+//
+// The table's own block is opened and closed before any row is read, because it carries no spans at all
+// -- its content is the blocks of its cells -- and because every pass above the walk reads one flat
+// array in document order, so the table has to stand where the document put it.
+static cbool DocWalkTable(DOC_CONTEXTptrc context) {
+   cui32 depthHere = context->reader->depth;
+
+   // A table nested past the cap is dropped rather than refused, which is CONVERSION_REFERENCE 5.4's
+   // treatment of everything a document overdoes. The tokenizer's own element cap would stop a runaway
+   // eventually; this is the bound that keeps this walk's *stack* off the document's content.
+   if(context->depth >= IR_MAX_TABLE_DEPTH) return XmlSkipElement(context->reader);
+
+   cIR_MARK before = IrMark(context->document);
+   cIR_MARK mark   = IrBeginBlock(context->document, IR_BLOCK_TABLE, 0);
+
+   if(mark.block < 0) {
+      context->memory = true;
+      return false;
+   }
+   // A table block never holds a span, so it is ended at once; a bookmark that stood in front of the
+   // table is deliberately not flushed into it and waits for the first paragraph of the first cell,
+   // which is the nearest place in the output a link could land on.
+   IrEndBlock(context->document, mark);
+
+   csi32 table = IrBeginTable(context->document, mark);
+
+   if(table < 0) {
+      context->memory = true;
+      return false;
+   }
+
+   // Saved and restored around the whole table, because a cell may hold another one and the two must
+   // not share a chain. The two tails are what an unwound mc:Choice puts back, which is why they live
+   // on the context rather than on this frame: the wrapper that unwinds one is shared by every level
+   // and cannot reach a caller's locals.
+   csi32     outerTable    = context->table;
+   csi32     outerRow      = context->row;
+   csi32     outerLastRow  = context->lastRow;
+   csi32     outerLastCell = context->lastCell;
+   cIR_ALIGN outerJustify  = context->justify;
+
+   context->table    = table;
+   context->row      = -1;
+   context->lastRow  = -1;
+   context->lastCell = -1;
+   context->justify  = IR_ALIGN_NONE;
+   context->depth += 1u;
+
+   ui32 columns = 0;
+   bool ok      = true;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) {
+         ok = false;
+         break;
+      }
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_W, "tblGrid")) {
+         ui32 declared = 0;
+
+         if(!DocReadGrid(context, &declared)) {
+            ok = false;
+            break;
+         }
+         if(declared > columns) columns = declared;
+         continue;
+      }
+      // w:tblPr describes borders, widths and a look this mapping has nothing to say about, and
+      // anything else is an element this build has never heard of. Both fall through to the
+      // dispatcher's skip, which also handles every transparent wrapper a w:tr may stand inside.
+      if(!DocDispatchChild(context, DOC_LEVEL_TABLE, -1, false)) {
+         ok = false;
+         break;
+      }
+   }
+   // Whether any row survived is this walk's own tail and never the table's firstRow, because a rewind
+   // inside a discarded mc:Choice truncates the row array without touching the record that names it:
+   // reading firstRow there keeps a table of no usable rows, which emits an empty <table> or nothing.
+   cbool empty = (context->lastRow < 0);
+
+   // A table that came to nothing is unwound entirely, which is what keeps an empty w:tbl -- and one
+   // whose every row a tracked change removed -- from costing a blank line and a delimiter row.
+   // Nothing is marked on the parent here: IrEndTable derives IR_TABLE_NESTED from the blocks its own
+   // cells ended up holding, so a nested table an mc:Fallback discarded leaves no trace on it. Marked
+   // from here, that parent stayed flagged after the rewind and was emitted as raw HTML it did not need.
+   if(empty) IrRewind(context->document, before);
+   else IrEndTable(context->document, table, context->lastRow, columns);
+   context->table    = outerTable;
+   context->row      = outerRow;
+   context->lastRow  = outerLastRow;
+   context->lastCell = outerLastCell;
+   context->justify  = outerJustify;
+   context->depth -= 1u;
+   return ok;
+}
+
 //-- Wrappers
 
 // Walks the w:sdt the reader is on, descending only into its w:sdtContent. The properties half is
@@ -1082,6 +1410,21 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    // all-monospace Fallback demotes the fence that survives to an inline code span.
    cbool markedText = context->sawText;
    cbool markedMono = context->allMono;
+   // The two chain tails are walker state for the same reason and are restored the same way: an
+   // mc:AlternateContent is legal around a w:tr and around a w:tc, so a discarded mc:Choice can leave
+   // a row or a cell behind that the rewind has already thrown away. Putting the tails back is the
+   // whole of what that costs -- the next append links behind the record that really precedes it, and
+   // IrEndRow and IrEndTable write the terminator from the tail rather than from what was appended
+   // last, so a row nothing points at simply is not in the chain.
+   csi32 markedRow  = context->lastRow;
+   csi32 markedCell = context->lastCell;
+   // A cell's alignment latches on the first w:jc it sees, so one inside a discarded mc:Choice settled
+   // the column and the surviving mc:Fallback's own w:jc was then ignored -- which reaches the
+   // delimiter row for a first-row cell and aligns the whole column by a branch that was thrown away.
+   // The queued bookmarks go back for the same reason, and that one has been here since M7: a
+   // w:bookmarkStart in a discarded Choice was flushed into the Fallback's first block instead.
+   cIR_ALIGN markedJustify = context->justify;
+   cui32     markedPending = context->pendingCount;
 
    for(;;) {
       cXML_TOKEN token = XmlNext(context->reader);
@@ -1092,8 +1435,12 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
       if(!tookFallback && XmlIsElement(context->reader, XML_NS_MC, "Fallback")) {
          if(tookChoice) {
             IrRewind(context->document, mark);
-            context->sawText = markedText;
-            context->allMono = markedMono;
+            context->sawText      = markedText;
+            context->allMono      = markedMono;
+            context->lastRow      = markedRow;
+            context->lastCell     = markedCell;
+            context->justify      = markedJustify;
+            context->pendingCount = markedPending;
          }
          if(!DocWalkChildren(context, level, paragraphStyle, heading)) return false;
          tookFallback = true;
@@ -1126,10 +1473,21 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    if(XmlIsElement(context->reader, XML_NS_W, "bookmarkStart")) return DocReadBookmark(context, level);
    if(XmlIsElement(context->reader, XML_NS_W, "sdt")) return DocWalkStructuredTag(context, level, paragraphStyle, heading);
    if(XmlIsElement(context->reader, XML_NS_MC, "AlternateContent")) return DocWalkAlternate(context, level, paragraphStyle, heading);
+   if(level == DOC_LEVEL_TABLE) {
+      if(XmlIsElement(context->reader, XML_NS_W, "tr")) return DocWalkRow(context);
+      // w:tblPr, w:tblPrEx and anything else a w:tbl may carry beside its rows and its grid.
+      return XmlSkipElement(context->reader);
+   }
+   if(level == DOC_LEVEL_ROW) {
+      if(XmlIsElement(context->reader, XML_NS_W, "tc")) return DocWalkCell(context);
+      // w:trPr is read by the row walk itself, before any cell opens; everything else is unknown.
+      return XmlSkipElement(context->reader);
+   }
    if(level == DOC_LEVEL_BLOCK) {
       if(XmlIsElement(context->reader, XML_NS_W, "p")) return DocWalkParagraph(context);
-      // w:tbl waits for M9, w:sectPr describes page layout the mapping ignores, and everything else is
-      // an element this build has not heard of. All three are skipped whole.
+      if(XmlIsElement(context->reader, XML_NS_W, "tbl")) return DocWalkTable(context);
+      // w:sectPr describes page layout the mapping ignores, and everything else is an element this
+      // build has not heard of. Both are skipped whole.
       return XmlSkipElement(context->reader);
    }
    if(XmlIsElement(context->reader, XML_NS_W, "r")) return DocWalkRun(context, paragraphStyle, heading);
@@ -1195,6 +1553,12 @@ cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM
    context.cachedStyle  = -1;
    context.cachedId[0]  = 0;
    context.pendingCount = 0;
+   context.table        = -1;
+   context.row          = -1;
+   context.lastRow      = -1;
+   context.lastCell     = -1;
+   context.depth        = 0;
+   context.justify      = IR_ALIGN_NONE;
    context.inLink       = false;
    context.sawText      = false;
    context.allMono      = true;

@@ -8,6 +8,72 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M9, tables.** A `w:tbl` becomes a GFM pipe table, or a raw `<table>` where a nested table or
+  `--tables=html-on-merge` asks for one. It is the first milestone since M2 that added **no module**: a
+  table is a shape over the blocks that already exist rather than a stage of its own, so `Ir` grew three
+  record arrays and a sixth block kind, `DocWalker` two dispatch levels, `MdEscape` an argument and a
+  context, `MdEmitter` the two forms, and `CliOptions` the flag.
+- A cell's blocks are **ordinary blocks in the one flat array, in document order**. That is the decision
+  everything else follows from, and what it buys is that `RunCoalesce`, `LinkResolveRefs`,
+  `LinkResolveAnchors`, `MediaPlan` and `NumAssignMarkers` are all unchanged: each reads one array in
+  reading order, and a paragraph in a cell is a paragraph. Word's run fragmentation inside a cell merges
+  by the rule that merges it outside one, a heading in a cell takes its place in the slug numbering, a
+  picture in a cell takes its place in the media numbering, and a list inside a cell continues a list
+  outside it -- which is what Word draws.
+- `IR_TABLE`, `IR_ROW` and `IR_CELL` beside the blocks, plus a fourth arena holding one `IR_ALIGN` per
+  column of the tables that have any. A table's rows are a **chain** rather than a range, which is the
+  one place the IR gives up a contiguous array: a cell's content is walked where it stands, so a table
+  inside the first cell of a row appends its own rows between that row and the next one of the outer
+  table -- and no order of appending fixes it, because a second nested table in a second cell interleaves
+  again. The chain costs one field per record and the emitter walks a table's rows once.
+- The chain **tails live on the walker**, not in `Ir`, which is what makes a rewind cost two integers. An
+  `mc:AlternateContent` may wrap a `w:tr` or a `w:tc`, so a discarded `mc:Choice` can build rows that
+  `IrRewind` throws away and the next row has to link behind the row that really precedes it;
+  `IrEndRow` and `IrEndTable` write the terminator from the caller's own tail rather than from whatever
+  was appended last, so a discarded row is simply never named.
+- `IrDropEmptyBlocks` never looks inside a table: it moves the whole of one as a unit and shifts every
+  record of it -- and of every table nested in it -- by the single delta that applies where the table
+  stands. That is exact because the only blocks it drops are outside every table, and it is what keeps a
+  cell's `blockAt` from being an index into an array that moved under it. What a cell then has to cope
+  with is a block that emits nothing, which is an empty cell.
+- Two more dispatch levels in `DocWalker`, so that every transparent wrapper is handled once for all
+  four: a `w:sdt`, a `w:customXml`, a `w:ins` and an `mc:AlternateContent` mean around a row and a cell
+  exactly what they mean around a paragraph and a run. A row a tracked change **deleted** is dropped
+  whole with its content, which is correctness rule 8 read the only way that keeps a row a reader still
+  sees out of the output.
+- Grid normalization. A table is as wide as the **wider** of what `w:tblGrid` declares and what the
+  widest row's cells reach -- the grid is authoritative (2.5) but it is not a ceiling, and clamping to it
+  is exactly the silent loss mapping row 19 forbids. Every row is then padded to that width, which is
+  not cosmetic: GFM reads a pipe table only where the delimiter row holds as many cells as the header,
+  so one short row turns the whole table into a paragraph.
+- Alignment from the first row's own `w:jc` (row 18), spread over the columns each cell covers. `start`
+  and `end` read as left and right, having no bidirectional layout here to reverse them against;
+  `both` and `distribute` are alignments GFM cannot spell and become none.
+- `w:gridSpan` and `w:vMerge` padded into the grid (row 19, policy A): the content in the first column
+  the cell covers, an empty pad in the rest, and a vertical merge's continuation empty because that is
+  what Word draws. Under `--tables=html-on-merge` the merge is kept instead, as `colspan` and `rowspan`.
+- The raw `<table>` fallback (row 20), which fires for a nested table always -- a pipe table has no way
+  to say one -- and for a merge under the flag. Everything inside it is written as **HTML** rather than
+  Markdown: `<strong>`, `<em>`, `<del>`, `<code>`, `<a href>`, `<img>`, `<br>`, and text through the new
+  `MD_CONTEXT_HTML_BLOCK`. A CommonMark HTML block runs to the next blank line and passes every byte of
+  itself through unparsed, so `**bold**` in a `<td>` would reach the reader as two asterisks and `\*` as
+  a backslash. No line of one is ever blank, for the same reason.
+- `--tables=<gfm|html-on-merge>`, which `docs/CONVERSION_REFERENCE.md` 6.3 lists and which is the only
+  new command-line surface M9 has. `USAGE_TEXT` and the Target CLI block in `CLAUDE.md` gained the same
+  line, byte for byte.
+- A `pipes` argument on `MdEscapeMeasure` and `MdEscapeWrite`, beside D12's `dollars` and for the same
+  reason. Being inside a table cell is not a *place* text is written but a fact that composes with every
+  place there is, because a cell holds code spans, link text, alt text and raw-HTML fallbacks exactly as
+  a paragraph does -- a context per combination would have been five more of them. GFM splits a row into
+  cells *before* it parses any inline content, so a literal pipe ends the cell wherever it stands,
+  including inside a code span, where `\|` is the one escape GFM honours and the whole reason a code
+  span in a cell is expressible at all.
+- Four golden fixtures -- `tables`, `tablemerges`, `tablenested` and `tablecells` -- and a
+  `check_table_option` in `tests/run_golden.py` that converts `tablemerges` a second time under
+  `--tables=html-on-merge`, because what that pins is a policy over one document rather than a second
+  document. The two trace renderers learned to spell a table, and `IR_BLOCK_KIND_COUNT`'s two
+  `static_assert`s moved from five to six so that neither could be forgotten.
+
 - **M8, lists.** The converter now numbers. `src/NumberingModel.h`/`.cpp` is the module the architecture
   list names, and it carries one thing that list does not: `NumAssignMarkers`, the pass that turns every
   list reference the walk recorded into the marker the emitter writes. That puts the numbers in
@@ -220,6 +286,14 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   nothing.
 
 ### Changed
+- `MdEscapeMeasure` and `MdEscapeWrite` take one more argument. Every existing call site passes `false`
+  and behaves exactly as it did; what the argument reaches is the runs inside a table cell, which are
+  the only ones a pipe can end.
+- `MdOpen` takes the `--tables` policy beside the `--hard-break` one, for the same reason it takes that:
+  an emitter's output depends on both, and neither is a fact about a document.
+- `IR_BLOCK` gained a `tableAt` and `IR_MARK` four more counts, so that a mark taken before a table can
+  put every one of its records back. `IrEndTable`, `IrEndRow` and `IrBeginRow`/`IrBeginCell` take the
+  caller's own chain tail, which is what makes that rewind cost two integers rather than a repair pass.
 - **A list item is not a sixth block kind.** `IR_BLOCK` gained four fields -- the `w:numId` the walk
   read, the level, the number the counter pass settled and a flag byte -- and the kinds are untouched.
   Being an item of a list is a second fact a document may state about a paragraph whose kind is already
@@ -424,6 +498,61 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- A `w:vMerge` restart **wider than the row continuing it** made the raw-HTML form render one column
+  wider than the pipe form of the same document. `MdRowSpanOf` counted the merge run at the restart's
+  first column alone while the open-merge table was stamped across the restart's whole span, so the
+  cell claimed columns nothing continued and a browser's own grid algorithm pushed the next ordinary
+  cell of that row past them. A `rowspan` can only promise a rectangle, so it is now written only where
+  every column the restart covers is continued. Raised by an adversarial review, refuted in error, then
+  confirmed by two independent reproductions; the grid oracle had missed it because its generator only
+  ever put a restart on a cell of one column, and widened it reproduces the defect in 4 of 400
+  documents. Pinned by two `TestMdEmitter` cases -- the ragged merge and its matching-span twin.
+- `MdRowSpanOf` was **quadratic in the document's own cell count**: it rescanned every row's whole cell
+  chain for every `w:vMerge` restart above it, and nothing caps how many cells a row may hold. 64,000
+  restarts over 64,000 continuations is a 21 KB `.docx` that took **15.76 seconds**, and the archive's
+  own caps leave room for a file that would take hours; one nested table is the whole entry fee, since
+  it forces the raw-HTML form unconditionally. The inner walk now stops at the first column to reach
+  the one being asked about, which a row's increasing columns make sound, and the caller does not ask
+  at all for a cell outside the grid. The same file now takes **0.12 seconds** and scales linearly.
+- `IR_TABLE_NESTED` **survived a rewind**. A nested table marked the flag on its parent as it closed,
+  and `IrRewind` restores eight counters and no flags, so a table whose only nested table an
+  `mc:Fallback` discarded kept the flag and was emitted as raw HTML it did not need. It is derived in
+  `IrEndTable` from the blocks the surviving cells hold, beside the column count and the merge flag
+  that were already derived there; `IrMarkTable` had no caller left and is removed.
+- `context->justify` was **not restored on a rewind**. A cell's alignment latches on the first `w:jc`
+  it sees, so one inside a discarded `mc:Choice` settled the column and the surviving `mc:Fallback`'s
+  own `w:jc` was ignored -- and for a first-row cell that reaches the delimiter row, aligning the whole
+  column by a branch that was thrown away. `context->pendingCount` is restored with it, which has been
+  wrong since M7: a `w:bookmarkStart` in a discarded Choice was flushed into the Fallback's first block.
+- A cell's **trailing `<br>` was trimmed in the pipe form and not in the raw-HTML one**, so a cell
+  ending in a break and padding emitted `<th>a<br>   </th>` -- a blank line inside a cell the pipe form
+  of the same document does not have. The two forms hold a cell in different buffers; one function now
+  trims whichever buffer holds it. Found by testing the two forms against each other.
+- The one table lookup in `IrDropEmptyBlocks` that did not go through `IrTableAt` now does, so the
+  index is bounds-checked like every other. Unreachable today -- a block carrying a `tableAt` is always
+  dropped together with the table it names -- but it was the single place that invariant was
+  load-bearing and unasserted, five passes after the walk that establishes it.
+- The open-merge expiry loop in the raw-HTML form ran 256 times for every row of every table, whatever
+  the table's width. It is bounded by the table's own column count, which `IrEndTable` has already
+  clamped.
+- Two comments described a gap a producer cannot write. A cell's column is derived from the one before
+  it rather than read from the document, so a row's cells are contiguous and neither table form's
+  gap-filling loop can run; `w:gridBefore` is what would make them live, and it is not read. The loops
+  are kept as the code that element will need and the comments now say so. Found by mutation testing.
+- A comment block in `MdEmitter.cpp` described `MdAssembleCell` but sat above `MdCellDollars`, and the
+  notation preambles in `TestDocWalker.cpp` and `TestRunCoalescer.cpp` sat above one renderer while
+  describing the family; the function each actually describes carried none. Raised by a GCS review.
+- A `w:vMerge` continuation whose merge nothing above it still covers -- a producer writes one when an
+  intervening row spans across the column the merge was opened in -- was **dropped** from the raw-HTML
+  form, leaving that row a column short. A silently narrower row is the one failure mapping row 19 names
+  by saying a row must never lose a column. It is an ordinary empty cell now. Found by a grid oracle
+  that checks every square of the R by C grid is claimed by exactly one cell once `colspan` and
+  `rowspan` are honoured, which is not something a hand-written fixture would have caught, and pinned
+  by a `TestMdEmitter` case.
+- `tests/fixtures/wrappers` said "A table is skipped whole until M9" inside its one table. It is not
+  skipped any more, so the sentence and the `expected.md` beside it both changed -- which is the golden
+  runner doing its job: fourteen fixtures share `minimal/expected.md`, and one sentence that stopped
+  being true failed two checks rather than none.
 - **A padded value in `numbering.xml` is read again.** `NumParseValue` capped a `w:val` at eleven
   characters -- ten digits and a sign -- which is the defect below, one layer further in. All eight of
   its callers seed their destination with -1 and ignore the result, so every discard was silent: a

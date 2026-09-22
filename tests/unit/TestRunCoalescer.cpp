@@ -3,11 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: Unit tests for adjacent-run merging, whitespace hoisting and the order of the two.
  * To Do: 1) Add the field-result barrier when M10 stops a merge crossing one; M7's link barrier is
  *           driven below, and an anchor's transparency to a merge beside it.
  *        2) Drive a document straight from IrAddSpan once a case needs a shape no body part produces.
+ *        3) Drive a merge that crosses a table cell's own edge, which no body part can produce either:
+ *           a cell's blocks are blocks, so the pass sees a boundary it can never be asked to cross.
  * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, RunCoalescer.h, StyleModel.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -111,21 +113,100 @@ static cui64 CoalesceList(cIR_BLOCKptr block, chptrc dest) {
 // A block kind neither this renderer nor its twin in the other suite spells would come out as an
 // ordinary paragraph, which is a plausible trace rather than an obviously wrong one -- exactly the
 // failure CLAUDE.md warns of in saying the two are independent copies that must both be edited.
-static_assert(ui32(IR_BLOCK_KIND_COUNT) == 5u, "TestRunCoalescer: the trace renderer must spell every block kind; add the new one here.");
+static_assert(ui32(IR_BLOCK_KIND_COUNT) == 6u, "TestRunCoalescer: the trace renderer must spell every block kind; add the new one here.");
 
-// Renders the coalesced representation into one compact trace, in the notation TestDocWalker uses and
-// two letters wider: c is a code span and the block letters are P, H<level>, Q, C and R. M7's span
+// The trace notation the three renderers below share, which is TestDocWalker's and two letters
+// wider: c is a code span and the block letters are P, H<level>, Q, C and R. M7's span
 // kinds render the same way here: L(dest) and L) for a link, I(source)[alt] for an image, N(name) for
 // a bookmark anchor. M8's list membership stands in front of the block letter in the same two forms
 // TestDocWalker spells: [<level>#<numId>] before the counter pass, [<level>=<marker>] after it.
-static void CoalesceTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
-   ui64 used = 0;
 
-   dest[0] = 0;
-   for(ui32 index = 0; index < IrBlockCount(document); ++index) {
+// Renders one range of blocks, which is the whole document at the top level and one cell's content
+// inside a table. A table's own blocks are the blocks of its cells, so the range renderer and the
+// table renderer call each other -- and the range renderer skips past a table's whole block range,
+// or every cell's content would be rendered twice: once in the table and once at the top level.
+static void CoalesceRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc dest, cui64 destBytes, ui64ptrc used);
+
+// Renders one table: T, its column count, one character per column of alignment (- l c r), then m for
+// a table holding a merge and n for one holding a nested table. Rows are separated by "/" and a row
+// that carried w:tblHeader is prefixed with "=". A cell is its blocks between parentheses, prefixed by
+// its span when it covers more than one column, by "v" when it starts a vertical merge and by "^" when
+// it continues one.
+static void CoalesceTable(cIR_DOCUMENTptr document, cIR_BLOCKptr block, chptrc dest, cui64 destBytes, ui64ptrc used) {
+   cIR_TABLEptr table = IrTableAt(document, block->tableAt);
+   char         head[IR_MAX_COLUMNS + 16u];
+   ui64         at = 0;
+
+   if(!table) {
+      CoalesceAppend(dest, destBytes, used, "T?");
+      return;
+   }
+   head[at++] = 'T';
+   at += CoalesceNumber(head + at, table->columns);
+   for(ui32 column = 0; column < table->columns; ++column) {
+      cIR_ALIGN align = IrAlignOf(document, table, column);
+
+      head[at++] = (align == IR_ALIGN_LEFT ? 'l' : (align == IR_ALIGN_CENTRE ? 'c' : (align == IR_ALIGN_RIGHT ? 'r' : '-')));
+   }
+   if(table->flags & IR_TABLE_MERGED) head[at++] = 'm';
+   if(table->flags & IR_TABLE_NESTED) head[at++] = 'n';
+   head[at++] = '{';
+   head[at]   = 0;
+   CoalesceAppend(dest, destBytes, used, head);
+
+   ui32 row   = table->firstRow;
+   bool first = true;
+
+   while(row != IR_NO_INDEX) {
+      cIR_ROWptr record = IrRowAt(document, row);
+
+      if(!record) break;
+      if(!first) CoalesceAppend(dest, destBytes, used, "/");
+      first = false;
+      if(record->flags & IR_ROW_HEADER) CoalesceAppend(dest, destBytes, used, "=");
+
+      ui32 cell = record->firstCell;
+
+      while(cell != IR_NO_INDEX) {
+         cIR_CELLptr one = IrCellAt(document, cell);
+
+         if(!one) break;
+         CoalesceAppend(dest, destBytes, used, "(");
+         if(one->span > 1u) {
+            char  width[12];
+            cui64 length = CoalesceNumber(width, one->span);
+
+            width[length]      = ':';
+            width[length + 1u] = 0;
+            CoalesceAppend(dest, destBytes, used, width);
+         }
+         if(one->flags & IR_CELL_VRESTART) CoalesceAppend(dest, destBytes, used, "v");
+         if(one->flags & IR_CELL_VMERGED) CoalesceAppend(dest, destBytes, used, "^");
+         CoalesceRange(document, one->blockAt, one->blockAt + one->blockCount, dest, destBytes, used);
+         CoalesceAppend(dest, destBytes, used, ")");
+         cell = one->nextCell;
+      }
+      row = record->nextRow;
+   }
+   CoalesceAppend(dest, destBytes, used, "}");
+}
+
+static void CoalesceRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc dest, cui64 destBytes, ui64ptrc used) {
+   for(ui32 index = from; index < to; ++index) {
       cIR_BLOCKptr block = IrBlockAt(document, index);
-      char         head[24];
-      ui64         at = CoalesceList(block, head);
+
+      if(!block) continue;
+      if(block->kind == IR_BLOCK_TABLE) {
+         CoalesceTable(document, block, dest, destBytes, used);
+
+         cIR_TABLEptr table = IrTableAt(document, block->tableAt);
+
+         if(table && table->blockEnd > index) index = table->blockEnd - 1u;
+         continue;
+      }
+
+      char head[24];
+      ui64 at = CoalesceList(block, head);
 
       if(block->kind == IR_BLOCK_HEADING) {
          head[at++] = 'H';
@@ -137,44 +218,52 @@ static void CoalesceTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes
       else head[at++] = '?';
       head[at++] = '{';
       head[at]   = 0;
-      CoalesceAppend(dest, destBytes, &used, head);
+      CoalesceAppend(dest, destBytes, used, head);
       for(ui32 span = 0; span < block->spanCount; ++span) {
          cIR_SPANptr one = IrSpanAt(document, block->spanAt + span);
 
          if(one->kind == IR_SPAN_BREAK) {
-            CoalesceAppend(dest, destBytes, &used, "|");
+            CoalesceAppend(dest, destBytes, used, "|");
             continue;
          }
          if(one->kind == IR_SPAN_LINK_END) {
-            CoalesceAppend(dest, destBytes, &used, "L)");
+            CoalesceAppend(dest, destBytes, used, "L)");
             continue;
          }
          if(one->kind == IR_SPAN_LINK_START || one->kind == IR_SPAN_IMAGE || one->kind == IR_SPAN_ANCHOR) {
-            CoalesceAppend(dest, destBytes, &used, (one->kind == IR_SPAN_IMAGE ? "I" : (one->kind == IR_SPAN_ANCHOR ? "N" : "L")));
-            if(one->flags & IR_SPAN_FLAG_MUTE) CoalesceAppend(dest, destBytes, &used, "-");
-            CoalesceAppend(dest, destBytes, &used, "(");
-            for(ui32 byte = 0; byte < one->destBytes && used + 1u < destBytes; ++byte) {
-               dest[used++] = IrDest(document, one->destAt)[byte];
+            CoalesceAppend(dest, destBytes, used, (one->kind == IR_SPAN_IMAGE ? "I" : (one->kind == IR_SPAN_ANCHOR ? "N" : "L")));
+            if(one->flags & IR_SPAN_FLAG_MUTE) CoalesceAppend(dest, destBytes, used, "-");
+            CoalesceAppend(dest, destBytes, used, "(");
+            for(ui32 byte = 0; byte < one->destBytes && *used + 1u < destBytes; ++byte) {
+               dest[(*used)++] = IrDest(document, one->destAt)[byte];
             }
-            dest[used] = 0;
-            CoalesceAppend(dest, destBytes, &used, ")");
+            dest[*used] = 0;
+            CoalesceAppend(dest, destBytes, used, ")");
             if(one->kind != IR_SPAN_IMAGE) continue;
          }
-         if(one->fmt & IR_FMT_BOLD) CoalesceAppend(dest, destBytes, &used, "b");
-         if(one->fmt & IR_FMT_ITALIC) CoalesceAppend(dest, destBytes, &used, "i");
-         if(one->fmt & IR_FMT_STRIKE) CoalesceAppend(dest, destBytes, &used, "s");
-         if(one->fmt & IR_FMT_SUPER) CoalesceAppend(dest, destBytes, &used, "^");
-         if(one->fmt & IR_FMT_SUB) CoalesceAppend(dest, destBytes, &used, "v");
-         if(one->fmt & IR_FMT_CODE) CoalesceAppend(dest, destBytes, &used, "c");
-         CoalesceAppend(dest, destBytes, &used, "[");
-         for(ui32 byte = 0; byte < one->textBytes && used + 1u < destBytes; ++byte) {
-            dest[used++] = IrText(document, one->textAt)[byte];
+         if(one->fmt & IR_FMT_BOLD) CoalesceAppend(dest, destBytes, used, "b");
+         if(one->fmt & IR_FMT_ITALIC) CoalesceAppend(dest, destBytes, used, "i");
+         if(one->fmt & IR_FMT_STRIKE) CoalesceAppend(dest, destBytes, used, "s");
+         if(one->fmt & IR_FMT_SUPER) CoalesceAppend(dest, destBytes, used, "^");
+         if(one->fmt & IR_FMT_SUB) CoalesceAppend(dest, destBytes, used, "v");
+         if(one->fmt & IR_FMT_CODE) CoalesceAppend(dest, destBytes, used, "c");
+         CoalesceAppend(dest, destBytes, used, "[");
+         for(ui32 byte = 0; byte < one->textBytes && *used + 1u < destBytes; ++byte) {
+            dest[(*used)++] = IrText(document, one->textAt)[byte];
          }
-         dest[used] = 0;
-         CoalesceAppend(dest, destBytes, &used, "]");
+         dest[*used] = 0;
+         CoalesceAppend(dest, destBytes, used, "]");
       }
-      CoalesceAppend(dest, destBytes, &used, "}");
+      CoalesceAppend(dest, destBytes, used, "}");
    }
+}
+
+// Renders a whole coalesced document, in the notation above.
+static void CoalesceTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
+   ui64 used = 0;
+
+   dest[0] = 0;
+   CoalesceRange(document, 0, IrBlockCount(document), dest, destBytes, &used);
 }
 
 // Walks one body, coalesces it, and compares the trace with a literal.
@@ -428,4 +517,24 @@ void TestRunCoalescer(void) {
    CHECK(Coalesces("<w:p><w:r><w:t xml:space=\"preserve\">x </w:t></w:r>"
                    "<w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr><w:t>a();</w:t></w:r></w:p>",
                    "P{[x ]c[a();]}"));
+
+   CheckGroup("RunCoalescer: a cell's blocks are ordinary blocks to this pass");
+   // A cell's content is walked where it stands, so its paragraphs are blocks in the same flat array
+   // and this pass never learns that a table exists. What that buys is the whole of M9's coalescing:
+   // Word fragments a run inside a cell exactly as it does outside one, and the merge is the same.
+   CHECK(Coalesces("<w:tbl><w:tr><w:tc><w:p>"
+                   "<w:r><w:rPr><w:b/></w:rPr><w:t>Hel</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>lo</w:t></w:r>"
+                   "</w:p></w:tc></w:tr></w:tbl>",
+                   "T1-{(P{b[Hello]})}"));
+   // And the hoist: a trailing space inside a bold run in a cell moves outside the delimiters, or
+   // the closing "**" could not parse where it stands.
+   CHECK(Coalesces("<w:tbl><w:tr><w:tc><w:p>"
+                   "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">bold </w:t></w:r><w:r><w:t>after</w:t></w:r>"
+                   "</w:p></w:tc></w:tr></w:tbl>",
+                   "T1-{(P{b[bold][ after]})}"));
+   // A nested table's blocks are the same again, one level further in.
+   CHECK(Coalesces("<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p>"
+                   "<w:r><w:rPr><w:i/></w:rPr><w:t>in</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>ner</w:t></w:r>"
+                   "</w:p></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>",
+                   "T1-n{(T1-{(P{i[inner]})})}"));
 }

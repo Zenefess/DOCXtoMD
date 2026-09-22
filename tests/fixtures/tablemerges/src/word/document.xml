@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Merged cells, padded into a GFM grid.</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>One</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Two</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Three</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>spans two columns</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>c2</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>spans two rows</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>b3</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>c3</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc>
+        <w:tc><w:p><w:r><w:t>b4</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>c4</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:tcPr><w:gridSpan w:val="3"/></w:tcPr><w:p><w:r><w:t>the whole width</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>a5</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>b5</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>c5</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>past the grid</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:p><w:r><w:t>After the merges.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

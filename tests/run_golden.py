@@ -218,6 +218,72 @@ def check_media_options(exe, failures):
     return checks
 
 
+# What --tables=html-on-merge must make of tests/fixtures/tablemerges, which under the default policy
+# is the pipe table its own expected.md pins. Written out here rather than as a second golden tree,
+# because what it pins is a *policy* over one document and not a second document.
+TABLE_HTML = b"""Merged cells, padded into a GFM grid.
+
+<table>
+<tr><th>One</th><th>Two</th><th>Three</th><th></th></tr>
+<tr><td colspan="2">spans two columns</td><td>c2</td><td></td></tr>
+<tr><td rowspan="2">spans two rows</td><td>b3</td><td>c3</td><td></td></tr>
+<tr><td>b4</td><td>c4</td><td></td></tr>
+<tr><td colspan="3">the whole width</td><td></td></tr>
+<tr><td>a5</td><td>b5</td><td>c5</td><td>past the grid</td></tr>
+</table>
+
+After the merges.
+"""
+
+
+def check_table_option(exe, failures):
+    """--tables: html-on-merge keeps a merge as colspan and rowspan; a table with none is unaffected."""
+    checks = 0
+    merges = os.path.join(make_fixtures.BUILD, "tablemerges.docx")
+    plain = os.path.join(make_fixtures.BUILD, "tables.docx")
+
+    code, out, err = run(exe, ["--tables=html-on-merge", "--stdout", merges])
+    checks += 1
+    if code != 0 or out != TABLE_HTML:
+        failures.append(("--tables=html-on-merge", "exit %s" % code, "merged table"))
+        print("FAIL  %-28s a merged table did not become the expected raw <table>" % "--tables")
+        show("html-on-merge", out, TABLE_HTML)
+    else:
+        print("ok    %-28s a merged table becomes a raw <table> with colspan and rowspan" % "--tables")
+
+    # A table with no merge in it is the same bytes under either policy, which is what keeps the flag
+    # about merges rather than about tables.
+    with open(os.path.join(make_fixtures.FIXTURES, "tables", "expected.md"), "rb") as handle:
+        wanted = handle.read()
+    code, out, err = run(exe, ["--tables=html-on-merge", "--stdout", plain])
+    checks += 1
+    if code != 0 or out != wanted:
+        failures.append(("--tables unmerged", "exit %s" % code, "unmerged table"))
+        print("FAIL  %-28s a table with no merge changed under html-on-merge" % "--tables unmerged")
+    else:
+        print("ok    %-28s a table with no merge is the same bytes under either policy" % "--tables unmerged")
+
+    # A nested table has no pipe form at all, so it is raw HTML under the default policy too.
+    with open(os.path.join(make_fixtures.FIXTURES, "tablenested", "expected.md"), "rb") as handle:
+        wanted = handle.read()
+    code, out, err = run(exe, ["--tables=gfm", "--stdout", os.path.join(make_fixtures.BUILD, "tablenested.docx")])
+    checks += 1
+    if code != 0 or out != wanted:
+        failures.append(("--tables=gfm nested", "exit %s" % code, "nested table"))
+        print("FAIL  %-28s a nested table did not stay raw HTML under gfm" % "--tables=gfm nested")
+    else:
+        print("ok    %-28s a nested table is raw HTML under gfm as well" % "--tables=gfm nested")
+
+    code, out, err = run(exe, ["--tables=nonsense", plain])
+    checks += 1
+    if code != 1 or "--tables takes gfm or html-on-merge" not in err:
+        failures.append(("--tables bad value", "exit %s" % code, "usage"))
+        print("FAIL  %-28s a bad --tables value is exit %s, expected 1" % ("--tables bad value", code))
+    else:
+        print("ok    %-28s a bad --tables value is a usage error that names both spellings" % "--tables bad")
+    return checks
+
+
 def check_output_option(exe, failures):
     """The -o rules of D7b: a filename for one input, a directory for several."""
     checks = 0
@@ -330,6 +396,7 @@ def main(argv):
     print("the output options")
     total += check_output_option(exe, failures)
     total += check_media_options(exe, failures)
+    total += check_table_option(exe, failures)
 
     print()
     if failures:

@@ -20,4 +20,7 @@ The fallback is what is taken.
 
 With no fallback the choice is kept.
 
+| A table is walked from M9. |
+| --- |
+
 The last paragraph.

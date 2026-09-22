@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: One document end to end: container, package, styles, walk, resolve, emit and write.
  * To Do: 1) Report the offset UtfValidate found, which the package records and nothing prints yet.
  *        2) Write through a temporary file and rename over the target, once a partial write costs more.
@@ -451,7 +451,7 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
    char        mediaPrefix[CONVERT_MAX_PATH];
    EXIT_CODE   verdict = EXIT_ALL_CONVERTED;
 
-   MdOpen(&emitter, options->hardBreak);
+   MdOpen(&emitter, options->hardBreak, options->tables);
    MediaOpen(&media);
    // Both are read below whatever the short circuit on the next line does, so neither may be left
    // indeterminate: --no-images skips the derivation, and MediaPlan still measures the prefix it was

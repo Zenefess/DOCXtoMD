@@ -3,13 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: The Markdown emitter: one growable UTF-8 buffer, line assembly and the delimiter rules.
- * To Do: 1) Emit the table-cell context at M9, which is the one escaping context with no caller left.
- *        2) Carry the prefix stack into a table cell at M9, where a cell's own blocks nest inside a
- *           row's and the prefix a list item already writes has to survive being nested again.
- *        3) Size the buffer from the part's byte count rather than growing from a fixed first block.
- *        4) Emit an image's wp:extent size as an HTML img element where a document depends on it (row 23).
+ * To Do: 1) Size the buffer from the part's byte count rather than growing from a fixed first block.
+ *        2) Emit an image's wp:extent size as an HTML img element where a document depends on it (row 23).
+ *        3) Show a cell's nested list structure under the pipe form, which today keeps every marker and
+ *           flattens every level, because indentation inside a cell has no spelling GFM reads.
+ *        4) Render a cell's w:shd and w:tcBorders in the raw-HTML fallback, which could carry them.
  * Dependencies: CliOptions.h, Ir.h, MdEscape.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -47,6 +47,7 @@ struct al32 MD_EMITTER {
    ui64       used;         ///< Bytes written to out
    ui64       lineUsed;     ///< Bytes of line in use
    HARD_BREAK hardBreak;    ///< How a w:br of type textWrapping is spelled
+   TABLE_MODE tables;       ///< What a table carrying a merge is written as
    bool       failed;       ///< Whether a growth failed; sticky once set
 };
 
@@ -66,7 +67,8 @@ typedef MD_EMITTER *const MD_EMITTERptrc;
 /// @param emitter    Receives the emitter. Every field is written, so it need not be initialised, and
 ///                   MdClose is safe to call afterwards whatever happens next.
 /// @param hardBreak  How a hard line break inside a paragraph is spelled.
-void MdOpen(MD_EMITTERptrc emitter, cHARD_BREAK hardBreak);
+/// @param tables     What a table carrying a merge is written as.
+void MdOpen(MD_EMITTERptrc emitter, cHARD_BREAK hardBreak, cTABLE_MODE tables);
 
 /// Releases the output buffer, and leaves the emitter safe to close again.
 /// @param emitter  An emitter previously passed to MdOpen.
@@ -138,6 +140,23 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       gone. That is CONVERSION_REFERENCE 4.2's pitfall 7, and MdEscape leaves the mark alone on
 ///       purpose -- it is only dangerous next to a bracket this module itself writes, which is knowledge
 ///       a run does not have.
+/// @note What M9's table emits, and the two forms it comes in. A table whose shape a GFM pipe table can
+///       carry is one: a leading "|", one padded cell per grid column, a delimiter row under the first
+///       row carrying whatever alignment its own cells stated, and a row per row after it. What a pipe
+///       table cannot carry is block content, so a cell is flattened to one line -- its paragraphs
+///       joined by "<br>", a hard break inside one the same, a list item keeping its marker as literal
+///       text, and a code paragraph becoming a code span. A merge is padded: the cell's content lands
+///       in the first column it covers and the rest are empty, which is CONVERSION_REFERENCE row 19's
+///       policy A, and a vertical merge's continuation cells are empty because that is what Word draws.
+/// @note The other form is a raw <table>, and it fires for a table holding another table always -- a
+///       pipe table has no way to say one -- and for a table holding a merge when --tables is
+///       html-on-merge. Everything inside it is written as HTML rather than as Markdown, because a
+///       CommonMark HTML block runs to the next blank line and passes every byte of itself through
+///       unparsed: emphasis becomes <strong> and <em>, a code span <code>, a link an <a href> and a
+///       break a <br>, and text takes MD_CONTEXT_HTML_BLOCK, where the only escapes are entities.
+/// @note The delimiter row is what makes a pipe table a table at all: GFM reads one only where the
+///       delimiter row has exactly as many cells as the header, so the width every row is padded to is
+///       the wider of what w:tblGrid declares and what the widest row's cells actually reach.
 cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document);
 
 /// The emitted bytes.

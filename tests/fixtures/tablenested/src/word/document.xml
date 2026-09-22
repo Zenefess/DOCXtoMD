@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>A nested table forces the whole outer table into raw HTML.</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Outer head</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Second head</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc>
+          <w:tbl>
+            <w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+            <w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+            <w:tr>
+              <w:tc><w:p><w:r><w:t>inner a</w:t></w:r></w:p></w:tc>
+              <w:tc><w:p><w:r><w:t>inner b</w:t></w:r></w:p></w:tc>
+            </w:tr>
+            <w:tr>
+              <w:tc><w:p><w:r><w:t>inner c</w:t></w:r></w:p></w:tc>
+              <w:tc><w:p><w:r><w:t>inner d</w:t></w:r></w:p></w:tc>
+            </w:tr>
+          </w:tbl>
+          <w:p/>
+        </w:tc>
+        <w:tc>
+          <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r><w:r><w:t xml:space="preserve"> then </w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>italic</w:t></w:r></w:p>
+          <w:p><w:r><w:rPr><w:strike/></w:rPr><w:t>struck</w:t></w:r><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:r><w:rPr><w:rStyle w:val="CodeChar"/></w:rPr><w:t>code | here</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>a &amp; b, and 3 &lt; 4</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>line one</w:t></w:r><w:r><w:br/></w:r><w:r><w:t>line two</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:p><w:r><w:t>After the nested table.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>
