@@ -2888,8 +2888,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   AddressSanitizer and UndefinedBehaviorSanitizer with no diagnostic, and not on Windows; reverting the
   fix fails exactly the two new container checks. The marker stays `[done]` on M5's precedent: a
   verification record is of what was run, and a later bug fix does not un-verify a milestone. The changed
-  `StyleModel` and `NumberingModel` have not been through `/W3` or run on Windows, and the next Windows
-  run closes that.
+  `StyleModel` and `NumberingModel` have been through `/W3` and run on Windows.
   - **The three tallies are the shim's, exactly.** 157, 118 and 1518, the same three numbers in the
     same order a Linux session measured before any of this reached a Windows machine, and the fixture
     count with them. That is the **eighth** milestone running where the shim predicted the real MSVC
