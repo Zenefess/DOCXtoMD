@@ -1434,12 +1434,13 @@ forbidden; before D6 it was.
   declines to clamp on purpose, so that two cells of one row can never claim the same column -- so a
   row may hold an unbounded number of `IR_CELL`s and a table an unbounded number of `IR_ROW`s. Seven
   input bytes retain a 24-byte record, and at the archive's own per-entry ceiling that is a file-to-peak
-  memory ratio in the thousands. It is not the only seven-byte element that does: an interior
-  `<w:br/>` keeps a 24-byte `IR_SPAN`, and `RunCoalesce` then reserves three span slots for every span,
-  so a break costs more than a cell once the coalescer has run. It is bounded by the ZIP caps rather
-  than unbounded, and those caps were sized before M9 existed. **M11 owns it**, with the two 4,096
-  numbering caps and the 256-column one: the fix is the ceiling the columns already have, and capping
-  cells per row at `IR_MAX_COLUMNS` would be the natural shape of it.
+  memory ratio in the thousands. It is bounded by the ZIP caps rather than unbounded, and those caps
+  were sized before M9 existed. **M11 owns it**, with the two 4,096 numbering caps and the 256-column
+  one: the fix is the ceiling the columns already have, and capping cells per row at `IR_MAX_COLUMNS`
+  would be the natural shape of it. `<w:tc/>` is not the only seven-byte element that retains a record:
+  an interior `<w:br/>` keeps a 24-byte `IR_SPAN`, and `RunCoalesce` then reserves three span slots for
+  every span, so a break costs more than a cell once the coalescer has run -- and a cap on cells per row
+  would not touch it.
 - **The raw-HTML fallback renders no cell decoration, and that is a limit rather than an oversight.**
   A `w:tcPr` may carry `w:tcBorders`, `w:shd` and `w:vAlign`, and the `<table>` form could carry all
   three where the pipe form can carry none. M9 reads none of them: the fallback exists to keep a merge

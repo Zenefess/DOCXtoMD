@@ -293,7 +293,8 @@ def build_all(verbose=True, writing=True):
         blocks = 1 + 2 * max([p.count(b"\x00\x00\xff\xff") for p in payloads] or [0])
         report.append((name, len(entries), types, blocks))
 
-    # -- sound containers. Each exits 0: the container is verified and the document converted.
+    # -- sound containers. Each exits 0, the container verified and the document converted, except
+    # no-document.docx: its archive is sound but lacks the main part the package names, so it exits 3.
 
     stored = [make_entry(name, raw, method="store") for name, raw in parts]
     note("minimal-stored.docx", stored)

@@ -514,7 +514,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   `w:vMerge` restart, and said a cell's alignment is the first `w:jc` any of its paragraphs states when a
   `both`, a `distribute` or an unknown value leaves it open. `MdEmitter.cpp` said every raw-HTML row is
   one line, which a row holding a nested table is not. `tests/make_fixtures.py` said every sound
-  container exits 5, directly above a table expecting 0. Comments only -- no executable line changed.
+  container exits 5, directly above a table in which every row expects 0 but `no-document.docx`'s, which
+  expects 3. Comments only -- no executable line changed.
 - A `w:vMerge` restart **wider than the row continuing it** made the raw-HTML form render one column
   wider than the pipe form of the same document. `MdRowSpanOf` counted the merge run at the restart's
   first column alone while the open-merge table was stamped across the restart's whole span, so the
