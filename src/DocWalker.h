@@ -81,10 +81,10 @@ typedef const WALK_STATUS cWALK_STATUS;
 /// @note What this build does not walk, and skips whole rather than descending into: the comment
 ///       references and ranges, w:sym and m:oMath. Comments are dropped by policy (mapping row 30);
 ///       m:oMath and w:sym have no milestone yet and are two of the places text is lost rather than merely
-///       unformatted -- both are DocWalker.cpp's To Do item 3. A text box and a text-bearing
-///       mc:AlternateContent inside a run are two more, which the picture scan drops: this file's To Do 1
-///       and DocWalker.cpp's To Do 4. An element this build has never heard of is skipped the same way,
-///       which is the OOXML compatibility model.
+///       unformatted -- both are DocWalker.cpp's To Do item 3. An element this build has never heard of
+///       is skipped the same way, which is the OOXML compatibility model. A text box and a text-bearing
+///       mc:AlternateContent inside a run lose their text too, though neither is skipped: the picture scan
+///       reads each for a picture and drops the rest -- this file's To Do 1 and DocWalker.cpp's To Do 4.
 /// @note What M10 adds. Fields run through a begin/separate/end state machine with a stack, which lives
 ///       on the walk rather than on a paragraph because a field's result may span several (correctness
 ///       rule 7): everything between begin and separate is instruction and never content; a HYPERLINK's

@@ -517,7 +517,7 @@ void TestMdEmitter(void) {
    // The nesting is fixed outermost first: the HTML wrapper, then the strike, then the emphasis.
    CHECK(Converts("<w:p><w:r><w:rPr><w:b/><w:i/><w:strike/></w:rPr><w:t>a</w:t></w:r></w:p>", "<del>***a***</del>\n"));
    CHECK(Converts("<w:p><w:r><w:rPr><w:b/><w:strike/>" SUPER "</w:rPr><w:t>a</w:t></w:r></w:p>", "<sup><del>**a**</del></sup>\n"));
-   // Underline, highlight and colour have no Markdown equivalent and are dropped (rows 8 and 9).
+   // Underline and highlight have no Markdown equivalent and are dropped (rows 8 and 9).
    CHECK(Converts("<w:p><w:r><w:rPr><w:u w:val=\"single\"/><w:highlight w:val=\"yellow\"/></w:rPr><w:t>a</w:t></w:r></w:p>", "a\n"));
    // Inside a raw-HTML wrapper the text still needs its two entities, which no other context adds.
    CHECK(Converts("<w:p><w:r><w:rPr>" SUB "</w:rPr><w:t>a &amp; &lt;b&gt;</w:t></w:r></w:p>", "<sub>a &amp; &lt;b></sub>\n"));

@@ -366,9 +366,10 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   nothing.
 
 ### Changed
-- The sentences reporting a part's bytes now **name the part**, because a walk reads more than one:
-  `DocWalkResultText` appends `, in <part>` to an XML failure and to the new notes-root one. A malformed
-  body now reads `... ends in the middle of an element, in word/document.xml`.
+- The walk's sentence for a part that is not well-formed XML now **names the part**, because a walk
+  reads more than one, and so does its new sentence for a notes part whose root is not the story its
+  relationship names: `DocWalkResultText` appends `, in <part>` to both. A malformed body now reads
+  `... ends in the middle of an element, in word/document.xml`.
 - `LinkResolveRefs` resolves block by block; its `partIndex` is now the main part's, whose relationships
   the body's blocks resolve against, and a note's blocks resolve against the part their `IR_NOTE` names.
 - `IrHasContent` counts a note reference nothing has muted as content, so a paragraph holding only a
@@ -464,8 +465,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - `ConvertPackage` resolves the numbering part through the main part's relationships, exactly as it
   resolves the styles part, and loads it between the styles and the walk. The pipeline is now walk,
   coalesce, resolve references, resolve anchors, coalesce again, plan the media, **assign the markers**,
-  drop the emptied blocks, emit -- the numbers last of the four passes, because `MediaPlan` can still
-  turn a picture back into alt text and an item's content is not settled until it has.
+  drop the emptied blocks, emit -- the markers before the drop, which spares every block the counter pass
+  leaves a list reference on.
 - The two independent trace renderers in `TestDocWalker` and `TestRunCoalescer` gained the same notation
   rather than two: `[level#numId]` before a block letter is the reference the walk read, and
   `[level=marker]` is what the counter pass settled, with `!` for the first item of a list. They are
@@ -616,25 +617,32 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   `tests/make_fixtures.py` said a notes part is read only when the body references one of its notes, when
   an endnotes part is read for a footnote's reference too, and `Convert.cpp` required the four related
   parts to be looked up before any further relationships are loaded, which a part index does not need.
-  `DocWalker.h` said a begin with no end leaves the rest of its story unread, which is true only of a
-  begin that neither separates nor ends; gave hiding a run as what keeps field instructions out of the
-  output, when an instruction is read before a run's hiddenness is asked; called `w:sym` and `m:oMath`
-  the two places text is lost, beside a text box and a text-bearing `mc:AlternateContent` in a run that
-  its own To Do list names; and named only `DocWalk` as the status `DocWalkResultText` takes.
-  `DocWalker.cpp`'s Description left out the notes walk and the fields, and its comment called a note
-  cited from its own story the one note not read, when a footnote cited only from an endnote is not read
-  either -- which `LinkResolver.h`'s To Do now names beside it. `Ir.h` called the emitter the only reader
-  that groups a note's blocks, when `LinkResolveNotes` groups them too; an anchor's muting the only way a
-  block can be emptied after it was ended, and M7's two passes the only ones that break the emitter's
-  invariant, when a muted note reference does both; the mute flag an anchor's alone; and `IrMark` the only
-  source of the mark `IrRewind` takes, when the paragraph walk rewinds to `IrBeginBlock`'s. `MdEmitter.cpp`
-  left the muted note reference out of what a silent span can be. `TestDocWalker.cpp` and
-  `TestRunCoalescer.cpp` had their range renderer's comment separated from it by the note writer M10
-  inserted, and neither notation comment named the note letters; `TestRunCoalescer.cpp` also called its
-  notation two letters wider than `TestDocWalker`'s, which it is not. `TestMdEmitter.cpp` said its helper
-  runs every pass `Convert.cpp` runs, which leaves out `MediaPlan`; described `Noted`'s styles part as the
-  list and code cases' own; and had `ConvertsTo`'s comment above `ConvertsWith`. Comments only -- no
-  executable line changed.
+  `DocWalker.h` said a begin with no end leaves the rest of its story unread, which is true only of a begin
+  that neither separates nor ends; gave hiding a run as what keeps field instructions out of the output,
+  when an instruction is read before a run's hiddenness is asked; called `w:sym` and `m:oMath` the two
+  places text is lost, when a text box and a text-bearing `mc:AlternateContent` in a run lose theirs too,
+  which its own To Do 1 and `DocWalker.cpp`'s To Do 4 name; and named only `DocWalk` as the status
+  `DocWalkResultText` takes. `DocWalker.cpp`'s Description left out the notes walk and the fields, and its
+  comment called a note cited from its own story the one note not read, when a footnote cited only from an
+  endnote is not read either -- which `LinkResolver.h`'s To Do now names beside it. It also called the
+  deleted paragraph mark the one revision that is not a wrapper, when a deleted row and a deleted cell are
+  two more, and said twice that a field still open at the end of a story has read its result, which one
+  that never separated has not: the rest of its story was read as instruction. `Ir.h` called the emitter
+  the only reader that groups a note's blocks, when `LinkResolveNotes` groups them too; an anchor's muting
+  the only way a block can be emptied after it was ended, and M7's two passes the only ones that break the
+  emitter's invariant, when a muted note reference does both; the mute flag an anchor's alone; and `IrMark`
+  the only source of the mark `IrRewind` takes, when the paragraph walk rewinds to `IrBeginBlock`'s.
+  `MdEmitter.cpp` left the muted note reference out of what a silent span can be, and called an empty text
+  span a run that carried properties and no text, when `RunCoalesce` drops every such run and the one that
+  reaches the emitter is a picture `MediaPlan` turned into an empty alt text; `MdEmitter.h` gave the output
+  buffer as the only thing whose failure is `MD_ERROR_MEMORY`, when the line buffer and the note-order
+  table fail the same way. `TestDocWalker.cpp` and `TestRunCoalescer.cpp` had their range renderer's
+  comment separated from it by the note writer M10 inserted, and neither notation comment named the note
+  letters; `TestRunCoalescer.cpp` also called its notation two letters wider than `TestDocWalker`'s, which
+  it is not. `TestMdEmitter.cpp` said its helper runs every pass `Convert.cpp` runs between the walk and
+  the emitter, when it leaves out `MediaPlan`; described `Noted`'s styles part as the list and code cases'
+  own; had `ConvertsTo`'s comment above `ConvertsWith`; and gave colour to rows 8 and 9, which are
+  underline and highlight. Comments only -- no executable line changed.
 
 - Comments and file prologs that the M9 tree contradicted. `DocWalker.h` still listed walking `w:tbl` and
   saving the paragraph classification around a cell as To Do items -- the first is M9's own work and the

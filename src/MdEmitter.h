@@ -28,7 +28,7 @@
 /// Why emission stopped.
 enum MD_RESULT : si32 {
    MD_OK = 0,       ///< The document was emitted
-   MD_ERROR_MEMORY, ///< The output buffer could not grow
+   MD_ERROR_MEMORY, ///< A buffer or the note-order table could not be allocated
    MD_RESULT_COUNT  ///< Number of values above; not a result
 };
 
@@ -93,7 +93,7 @@ void MdClose(MD_EMITTERptrc emitter);
 /// Emits one document's blocks, appending to whatever the emitter already holds.
 /// @param emitter   A prepared emitter.
 /// @param document  The intermediate representation to emit.
-/// @return MD_OK, or MD_ERROR_MEMORY when the buffer could not grow.
+/// @return MD_OK, or MD_ERROR_MEMORY when a buffer could not grow or the note-order table could not be allocated.
 /// @note The output contract is UTF-8, no byte-order mark, LF line endings -- tc2's CRLF governs this
 ///       project's source files and not the documents it writes. A caller must open its output file in
 ///       binary mode, or the C runtime will turn every LF into a CRLF on Windows.

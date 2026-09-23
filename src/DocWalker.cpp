@@ -645,8 +645,9 @@ static cbool DocFieldReopen(DOC_CONTEXTptrc context) {
 static cbool DocFieldSuspend(DOC_CONTEXTptrc context) { return (context->fields.link < 0 ? true : DocAddLinkEnd(context)); }
 
 // Forgets every open field, at the end of a part or of a note. A field is a story's own and never runs on
-// into the next one, so one still open here is malformed; its result has been read as it came, and all
-// that is left is to stop treating what follows as part of it.
+// into the next one, so one still open here is malformed: one that separated has had its result read as it
+// came, one that never separated has had the rest of its story read as instruction, and all that is left
+// is to stop treating what follows as part of it.
 static void DocFieldReset(DOC_CONTEXTptrc context) {
    if(context->fields.link >= 0) context->inLink = false;
    context->fields.depth    = 0;
@@ -1547,7 +1548,7 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    para.allMono     = context->allMono;
    context->sawText = outerText;
    context->allMono = outerMono;
-   // Accept-all revisions, correctness rule 8, for the one revision that is not a wrapper: a tracked
+   // Accept-all revisions, correctness rule 8, for a revision that is not a wrapper: a tracked
    // change deleted this paragraph's mark, so its text runs on into the next paragraph and the two are one
    // (CONVERSION_REFERENCE 5.11). The block stays open for the next w:p to adopt. A paragraph that opened
    // none has nothing to lend, and one already carrying an adopted block passes that block on.
@@ -2215,7 +2216,8 @@ cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM
          sawBody = true;
          if(!DocWalkChildren(&context, DOC_LEVEL_BLOCK, -1, false)) break;
          // The body's last mark cannot be deleted, so a paragraph still waiting here is a producer's
-         // malformation, and it ends as it was written. A field still open has read its result already.
+         // malformation, and it ends as it was written. A field still open is forgotten: one that separated has
+         // read its result already, and one that never separated has read the rest of the body as instruction.
          if(!DocFlushJoin(&context)) break;
          DocFieldReset(&context);
          continue;

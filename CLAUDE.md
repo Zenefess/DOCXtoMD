@@ -1181,9 +1181,9 @@ below.
   then its notes parts, optionally labelling them, which is how a case shows the walk and the numbering
   side by side.
   `TestMdEmitter`'s helper runs every pass `Convert.cpp` runs between the walk and the emitter but
-  `MediaPlan`, in the same order, so what it measures is the shape the program really produces for a
-  document that draws no picture, which no emitter case does; with no package a relationship resolves
-  to nothing, so a `w:anchor` link is the half of M7 the emitter suite can reach and the rest is the
+  `MediaPlan`, in the same order, and no emitter case draws a picture, so what it measures is the shape
+  the program really produces for the documents it is given; with no package a relationship resolves to
+  nothing, so a `w:anchor` link is the half of M7 the emitter suite can reach and the rest is the
   goldens' to prove.
   Since M9 it also drives `--tables`, beside the `--hard-break` policy it already took; those two are
   the policies an emitter case can choose.
@@ -1972,9 +1972,11 @@ still accept only one input; what it must not do is assume there will only ever 
 - A golden fixture is a part tree under `tests/fixtures/<case>/src/` **plus** an `expected.md` beside it,
   and which built `.docx` compares against which case is declared in `make_fixtures.py`'s `GOLDENS`
   table, next to the exit-code table, so a fixture and what it must produce are named in one place. The
-  mapping is many-to-one on purpose: fifteen container fixtures compare against `minimal/expected.md`,
-  which is how a byte comparison came to assert what M4 asserted with a message substring. That is also
-  why one change to the emitter shows up once for each of them in a golden run, as M6's `**bold**` did.
+  mapping is many-to-one on purpose: fifteen fixtures compare against `minimal/expected.md` — the
+  fourteen container fixtures, through which a byte comparison came to assert what M4 asserted with a
+  message substring, and `unreferenced-bad-notes.docx`, whose unread notes part must cost the document
+  nothing. That is also why one change to the emitter shows up in every one of them in a golden run, as
+  M6's `**bold**` did.
 - **Write an `expected.md` by hand, from the specification, before running the converter at it.** A
   golden generated from the implementation asserts only that the implementation is deterministic. All
   seven of M5's were derived by hand and all seven matched on the first run; when one does not, decide
