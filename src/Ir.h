@@ -277,8 +277,8 @@ struct al32 IR_DOCUMENT {
    IR_BLOCKptr blocks;        ///< Every block, in document order
    IR_SPANptr  spans;         ///< Every span, grouped by block
    IR_TABLEptr tables;        ///< Every table, in the order the walk reached them
-   IR_ROWptr   rows;          ///< Every row, grouped by table
-   IR_CELLptr  cells;         ///< Every cell, grouped by row
+   IR_ROWptr   rows;          ///< Every row of every table; a table's own rows are chained by nextRow
+   IR_CELLptr  cells;         ///< Every cell of every row; a row's own cells are chained by nextCell
    chptr       heap;          ///< Every byte of paragraph text, addressed by offset
    chptr       dest;          ///< Every byte of every destination and anchor name, addressed by offset
    ui8ptr      align;         ///< Every column alignment, grouped by table and addressed by offset

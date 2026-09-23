@@ -1161,10 +1161,11 @@ static cbool DocOpenRow(DOC_CONTEXTptrc context, cbool header, si32ptrc row) {
 
 // Walks one w:tc into one cell, whose content is ordinary block content walked where it stands.
 //
-// A cell's alignment is the first w:jc any of its paragraphs states, and it is recorded on the cell
-// rather than spread over the table's columns here: which row a cell is in is the table's question,
-// and only the first row's cells can reach a delimiter row. The question is reopened per cell and
-// closed again on the way out, so a nested table's cells never answer it for the cell they stand in.
+// A cell's alignment is the first alignment a w:jc among its paragraphs names -- a both, a distribute
+// or an unknown value leaves it open -- and it is recorded on the cell rather than spread over the
+// table's columns here: which row a cell is in is the table's question, and only the first row's cells
+// can reach a delimiter row. The question is reopened per cell and closed again on the way out, so a
+// nested table's cells never answer it for the cell they stand in.
 static cbool DocWalkCell(DOC_CONTEXTptrc context) {
    cui32     depthHere    = context->reader->depth;
    cIR_ALIGN outerJustify = context->justify;
@@ -1419,9 +1420,10 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    // last, so a row nothing points at simply is not in the chain.
    csi32 markedRow  = context->lastRow;
    csi32 markedCell = context->lastCell;
-   // A cell's alignment latches on the first w:jc it sees, so one inside a discarded mc:Choice settled
-   // the column and the surviving mc:Fallback's own w:jc was then ignored -- which reaches the
-   // delimiter row for a first-row cell and aligns the whole column by a branch that was thrown away.
+   // A cell's alignment latches on the first w:jc that names an alignment, so one inside a discarded
+   // mc:Choice settled the column and the surviving mc:Fallback's own w:jc was then ignored -- which
+   // reaches the delimiter row for a first-row cell and aligns the whole column by a branch that was
+   // thrown away.
    // The queued bookmarks go back for the same reason, and that one has been here since M7: a
    // w:bookmarkStart in a discarded Choice was flushed into the Fallback's first block instead.
    cIR_ALIGN markedJustify = context->justify;
@@ -1469,8 +1471,8 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
 
    if(deleted) return XmlSkipElement(context->reader);
    if(inserted || tagged) return DocWalkChildren(context, level, paragraphStyle, heading);
-   // A bookmark is a range marker rather than content, and it appears at both levels for the same
-   // reason every wrapper does: a bookmark may wrap whole paragraphs or part of one.
+   // A bookmark is a range marker rather than content, and it appears at every level for the same
+   // reason every wrapper does: a bookmark may wrap whole rows, whole paragraphs or part of one.
    if(XmlIsElement(context->reader, XML_NS_W, "bookmarkStart")) return DocReadBookmark(context, level);
    if(XmlIsElement(context->reader, XML_NS_W, "sdt")) return DocWalkStructuredTag(context, level, paragraphStyle, heading);
    if(XmlIsElement(context->reader, XML_NS_MC, "AlternateContent")) return DocWalkAlternate(context, level, paragraphStyle, heading);

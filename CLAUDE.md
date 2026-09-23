@@ -2555,9 +2555,9 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     flat array, in document order. That is what leaves `RunCoalesce`, `LinkResolveRefs`,
     `LinkResolveAnchors`, `MediaPlan` and `NumAssignMarkers` **unchanged** — each reads one array in
     reading order, and a paragraph in a cell is a paragraph. The cost is two rules the header of `Ir.h`
-    states and this file repeats: a table's rows are a chain rather than a range, because a nested table
-    interleaves them; and `IrDropEmptyBlocks` never looks inside a table, moving one whole and shifting
-    its records by a single delta.
+    states and this file repeats: a table's rows and a row's cells are chains rather than ranges, because
+    a nested table interleaves them; and `IrDropEmptyBlocks` never looks inside a table, moving one whole
+    and shifting its records by a single delta.
   - **What the roadmap asked for and what came of it.** `MD_CONTEXT_TABLE_CELL` got its caller and
     re-cutting it against real tables changed **nothing in it** — the same result M7 had with link text
     and alt text. What re-cutting *did* find is that being in a cell is not a context at all but a fact
@@ -2622,25 +2622,26 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     restarts over 64,000 continuations is a **21 KB `.docx` that took 15.76 seconds**, and the
     archive's caps leave room for a file that would take hours. One nested table is the whole entry
     fee, since it forces the raw-HTML form unconditionally. Two bounds fix it — the inner walk stops at
-    the first column to reach the one being asked about, and the caller does not ask at all for a cell
-    outside the grid — and the same file now takes **0.12 seconds**, scaling linearly.
+    the first column no continuation claims and never looks past the restart's own end, and the caller
+    does not ask at all for a cell outside the grid — and the same file now takes **0.12 seconds**,
+    scaling linearly.
   - **Three more defects came out of that review, each reproduced before it was fixed.**
     `IR_TABLE_NESTED` **survived a rewind**: a nested table marked its parent as it closed, and
     `IrRewind` restores counters but not flags, so a table whose only nested table an `mc:Fallback`
     discarded was emitted as raw HTML it did not need. It is derived in `IrEndTable` from the blocks
     the surviving cells hold, which is what the header always said the design intended — and
     `IrMarkTable` had no caller left, so it is gone. `context->justify` was **not restored on a
-    rewind** either: a cell's alignment latches on the first `w:jc` it sees, so one inside a discarded
-    `mc:Choice` settled the column and the surviving branch's own `w:jc` was ignored, which reaches the
-    delimiter row and aligns the whole column by a branch that was thrown away. `context->pendingCount`
-    goes back with it, and that one has been wrong since M7: a `w:bookmarkStart` in a discarded Choice
-    was flushed into the Fallback's first block.
+    rewind** either: a cell's alignment latches on the first `w:jc` that names an alignment, so one
+    inside a discarded `mc:Choice` settled the column and the surviving branch's own `w:jc` was ignored,
+    which reaches the delimiter row and aligns the whole column by a branch that was thrown away.
+    `context->pendingCount` goes back with it, and that one has been wrong since M7: a
+    `w:bookmarkStart` in a discarded Choice was flushed into the Fallback's first block.
   - **A trailing `<br>` in a cell was trimmed in one table form and not the other**, found by testing
-    the two against each other rather than by reading. A cell is one line by construction, so a break
-    with nothing after it is dropped — but the pipe form assembles a cell in the line buffer and the
-    raw-HTML form writes it straight to the output, and only the first trimmed. `<th>a<br>   </th>` is
-    a blank line inside a cell the pipe form of the same document does not have. One function now does
-    it for both, over whichever buffer holds the cell.
+    the two against each other rather than by reading. A break at the end of a cell has no next line to
+    start, so one with nothing after it is dropped — but the pipe form assembles a cell in the line
+    buffer and the raw-HTML form writes it straight to the output, and only the first trimmed.
+    `<th>a<br>   </th>` is a blank line inside a cell the pipe form of the same document does not have.
+    One function now does it for both, over whichever buffer holds the cell.
   - **96 hostile table documents** — nesting past the cap and far past the tokenizer's, `w:gridSpan` at
     and past the edges of both `si32` and `ui32`, a `w:tblGrid` of 200,000 columns, 20,000 cells in one
     row, orphaned and runaway `w:vMerge`, empty tables, rows and cells, tables inside discarded

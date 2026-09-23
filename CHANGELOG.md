@@ -506,13 +506,15 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   second has existed since M6 -- named `w:tbl` among what the walk skips whole, and left out of its
   Dependencies the `NumberingModel.h` it has included since M8. `RunCoalescer.h` waited for M9 to give a
   block children, which M9 deliberately did not do, and `CliOptions.h` waited to consume `--media-dir`
-  and `--no-images`, which `ConvertFile` has read since M7. `DocWalker.cpp` counted two dispatch levels
-  where there are four, and justified saving the paragraph classification by a table standing inside a
-  paragraph, which never happens. `Ir.h` described `IR_ROW_HEADER` as the first row when it records a
-  `w:tblHeader` the emitter never reads, called a table's rows the one chain when a row's cells are
-  chained too, said the emitter walks a table's rows once when the raw-HTML form walks on from each
-  `w:vMerge` restart, and said a cell's alignment is the first `w:jc` any of its paragraphs states when a
-  `both`, a `distribute` or an unknown value leaves it open. `MdEmitter.cpp` said every raw-HTML row is
+  and `--no-images`, which `ConvertFile` has read since M7. `DocWalker.cpp` counted two levels where
+  there are four, for the dispatcher and for a bookmark alike; justified saving the paragraph
+  classification by a table standing inside a paragraph, which never happens; and said twice that a
+  cell's alignment is the first `w:jc` it meets, when a `both`, a `distribute` or an unknown value
+  leaves it open. `Ir.h` described `IR_ROW_HEADER` as the first row when it records a `w:tblHeader` the
+  emitter never reads, called a table's rows the one chain when a row's cells are chained too, said the
+  rows and cells are grouped by table and by row when a nested table interleaves both, said the emitter
+  walks a table's rows once when the raw-HTML form walks on from each `w:vMerge` restart, and made the
+  same `w:jc` claim as `DocWalker.cpp`. `MdEmitter.cpp` said every raw-HTML row is
   one line, which a row holding a nested table is not. `tests/make_fixtures.py` said every sound
   container exits 5, directly above a table in which every row expects 0 but `no-document.docx`'s, which
   expects 3. Comments only -- no executable line changed.
@@ -529,19 +531,21 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   chain for every `w:vMerge` restart above it, and nothing caps how many cells a row may hold. 64,000
   restarts over 64,000 continuations is a 21 KB `.docx` that took **15.76 seconds**, and the archive's
   own caps leave room for a file that would take hours; one nested table is the whole entry fee, since
-  it forces the raw-HTML form unconditionally. The inner walk now stops at the first column to reach
-  the one being asked about, which a row's increasing columns make sound, and the caller does not ask
-  at all for a cell outside the grid. The same file now takes **0.12 seconds** and scales linearly.
+  it forces the raw-HTML form unconditionally. The inner walk now stops at the first column no
+  continuation claims, which a row's increasing columns make sound, and never looks past the restart's
+  own end; the caller does not ask at all for a cell outside the grid. The same file now takes
+  **0.12 seconds** and scales linearly.
 - `IR_TABLE_NESTED` **survived a rewind**. A nested table marked the flag on its parent as it closed,
   and `IrRewind` restores eight counters and no flags, so a table whose only nested table an
   `mc:Fallback` discarded kept the flag and was emitted as raw HTML it did not need. It is derived in
   `IrEndTable` from the blocks the surviving cells hold, beside the column count and the merge flag
   that were already derived there; `IrMarkTable` had no caller left and is removed.
 - `context->justify` was **not restored on a rewind**. A cell's alignment latches on the first `w:jc`
-  it sees, so one inside a discarded `mc:Choice` settled the column and the surviving `mc:Fallback`'s
-  own `w:jc` was ignored -- and for a first-row cell that reaches the delimiter row, aligning the whole
-  column by a branch that was thrown away. `context->pendingCount` is restored with it, which has been
-  wrong since M7: a `w:bookmarkStart` in a discarded Choice was flushed into the Fallback's first block.
+  that names an alignment, so one inside a discarded `mc:Choice` settled the column and the surviving
+  `mc:Fallback`'s own `w:jc` was ignored -- and for a first-row cell that reaches the delimiter row,
+  aligning the whole column by a branch that was thrown away. `context->pendingCount` is restored with
+  it, which has been wrong since M7: a `w:bookmarkStart` in a discarded Choice was flushed into the
+  Fallback's first block.
 - A cell's **trailing `<br>` was trimmed in the pipe form and not in the raw-HTML one**, so a cell
   ending in a break and padding emitted `<th>a<br>   </th>` -- a blank line inside a cell the pipe form
   of the same document does not have. The two forms hold a cell in different buffers; one function now
