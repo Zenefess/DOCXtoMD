@@ -3,11 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-09-23
  * Description: Parsed command line, the hard-break policy, and the usage and version writers.
- * To Do: 1) Consume the options the converter does not read yet: --media-dir and --no-images.
- *        2) Hand the input list and --threads count to Batch when M13 adds the bounded worker pool (D7a).
- *        3) Add the remaining policy switches CONVERSION_REFERENCE.md 6.3 lists, once their stages exist.
+ * To Do: 1) Hand the input list and --threads count to Batch when M13 adds the bounded worker pool (D7a).
+ *        2) Add the remaining policy switches CONVERSION_REFERENCE.md 6.3 lists, once their stages exist.
  * Dependencies: Diag.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -34,6 +33,17 @@ enum HARD_BREAK : ui8 {
 /// Constant form of HARD_BREAK, spelled per GCS r2: the qualifier lives in the typedef.
 typedef const HARD_BREAK cHARD_BREAK;
 
+/// How a table that GFM's pipe form cannot express is written, chosen by --tables.
+/// @note Only a table carrying a *merge* is affected. A table holding another table has no pipe form at
+///       all and takes the raw-HTML one under either value, because the alternative is losing it.
+enum TABLE_MODE : ui8 {
+   TABLE_MODE_GFM = 0,      ///< A pipe table always, padding a merge into empty cells; the default
+   TABLE_MODE_HTML_ON_MERGE ///< A raw <table> for any table holding a gridSpan or a vMerge
+};
+
+/// Constant form of TABLE_MODE, spelled per GCS r2: the qualifier lives in the typedef.
+typedef const TABLE_MODE cTABLE_MODE;
+
 //== Parsed command line
 
 /// One parsed command line. Filled by CliParse, read-only afterwards.
@@ -48,6 +58,7 @@ struct CLI_OPTIONS {
    ui32       inputCount;  ///< Number of entries in inputs
    ui32       threadCount; ///< -j/--threads; defaults to the system virtual core count (D7a)
    HARD_BREAK hardBreak;   ///< --hard-break
+   TABLE_MODE tables;      ///< --tables
    bool       emitImages;  ///< Cleared by --no-images, which keeps alt text only
    bool       quiet;       ///< -q/--quiet: errors only
    bool       toStdout;    ///< --stdout; legal only with exactly one input (D7d)

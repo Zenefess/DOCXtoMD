@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p><w:r><w:t>Block content inside a cell, which a pipe table cannot carry.</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>What it holds</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>How it comes out</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>a bullet list</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>first item</w:t></w:r></w:p>
+          <w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>nested item</w:t></w:r></w:p>
+          <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>third item</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>a heading and a quotation</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>A heading in a cell</w:t></w:r></w:p>
+          <w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>and a quotation under it</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>two lines of code</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>first(line);</w:t></w:r></w:p>
+          <w:p><w:pPr><w:pStyle w:val="SourceCode"/></w:pPr><w:r><w:t>second(line);</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>a rule and a bookmark</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>
+          <w:p><w:bookmarkStart w:id="1" w:name="in_a_cell"/><w:r><w:t>after the rule</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>a hyperlink</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:hyperlink r:id="rId3"><w:r><w:t>a link in a cell</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:hyperlink w:anchor="in_a_cell"><w:r><w:t>one to the bookmark</w:t></w:r></w:hyperlink></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>an ordered list continuing outside</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>
+          <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>two</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>three, which continues the count from inside the cell</w:t></w:r></w:p>
+    <w:p><w:r><w:t>The last paragraph.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

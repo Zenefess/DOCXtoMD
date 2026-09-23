@@ -3,9 +3,9 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-22
  * Description: The context-aware Markdown escaping writer: one rule set per place text can be emitted.
- * To Do: 1) Escape a leading pipe once tables give a line one, which is M9's business.
+ * To Do: 1) Read a cell's own w:shd and w:tcBorders into the HTML fallback, which could render them.
  *        2) Widen D12's dollar scope from the line to the block if a fixture ever shows GitHub's inline
  *           math pairing across a hard break, which this build assumes it does not.
  *        3) Percent-encode a destination's own '%' if a producer is ever found writing an unencoded one,
@@ -38,6 +38,7 @@ enum MD_CONTEXT : si32 {
    MD_CONTEXT_CODE_SPAN,  ///< Inside a code span, where nothing at all is escaped
    MD_CONTEXT_CODE_BLOCK, ///< Inside a fenced block, where nothing at all is escaped
    MD_CONTEXT_HTML,       ///< Inside a raw-HTML fallback: the inline rules, plus & and < as entities
+   MD_CONTEXT_HTML_BLOCK, ///< Inside a raw-HTML *block*, where no Markdown is parsed and only entities
    MD_CONTEXT_COUNT       ///< Number of values above; not a context
 };
 
@@ -59,8 +60,9 @@ cui64 MdEscapeCountDollars(cchptr text, cui64 byteCount);
 /// @param byteCount  How many there are.
 /// @param context    Where they are going.
 /// @param dollars    Whether the line this run belongs to holds two or more dollar signs (D12).
+/// @param pipes      Whether the run stands inside a GFM pipe-table cell, where a pipe ends the cell.
 /// @return How many bytes the escaped form occupies.
-cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars);
+cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars, cbool pipes);
 
 /// Writes the escaped form of a run of text.
 /// @param dest       Receives the escaped bytes, unterminated.
@@ -69,6 +71,7 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool d
 /// @param byteCount  How many there are.
 /// @param context    Where they are going.
 /// @param dollars    Whether the line this run belongs to holds two or more dollar signs (D12).
+/// @param pipes      Whether the run stands inside a GFM pipe-table cell, where a pipe ends the cell.
 /// @return How many bytes were written.
 /// @note The escape set is CONVERSION_REFERENCE 4.1 and 4.2. In the inline family, the backslash,
 ///       asterisk, underscore, backtick, both brackets and the tilde are escaped unconditionally, per
@@ -81,6 +84,27 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool d
 /// @note Nothing whatever is escaped in the two code contexts. A backtick inside a code span cannot be
 ///       escaped at all, so a collision is handled by lengthening the delimiter, which is the emitter's
 ///       job and not this module's.
+/// @note The pipe is an argument rather than a context, and that is what M9 found by re-cutting
+///       MD_CONTEXT_TABLE_CELL against real tables. Being in a cell is not a *place* text can be
+///       written -- it composes with every place there is, because a cell holds code spans, link text,
+///       alt text and raw-HTML fallbacks exactly as a paragraph does -- so a context per combination
+///       would be five more of them. It is the same shape as D12's dollars: a fact about where the run
+///       stands that the run cannot answer for itself. MD_CONTEXT_TABLE_CELL survives with its own
+///       unconditional rule so that a caller writing a cell's ordinary text is safe without the
+///       argument as well as with it; every other context in a cell needs the argument.
+/// @note What the argument has to reach, and why each. GFM splits a row into cells *before* it parses
+///       any inline content, so a literal pipe ends the cell wherever it stands -- including inside a
+///       code span, where nothing else may be escaped at all and where "\|" is the one escape GFM
+///       honours; that one exception is the whole reason a code span in a cell is expressible. A link
+///       *destination* needs nothing, because MD_CONTEXT_LINK_DEST percent-encodes the pipe already,
+///       and neither does a raw-HTML *block*, whose rows this build writes one to a line.
+/// @note MD_CONTEXT_HTML_BLOCK is the one context where no Markdown is escaped at all and every escape
+///       is an entity. It is for the inside of a raw-HTML *block* -- M9's <table> fallback -- and it is
+///       not MD_CONTEXT_HTML with more entities: a CommonMark HTML block runs to the next blank line
+///       and everything in it is passed through verbatim, so a backslash there is a literal backslash
+///       a reader sees rather than an escape. The quotation mark is escaped with the other three so
+///       that one rule serves an element's text and its attributes alike, which is worth a few &quot;
+///       in prose against a rule that could be applied in the wrong one of the two places.
 /// @note MD_CONTEXT_HTML is the inline set *plus* two entities, not instead of it. GitHub-Flavored
 ///       Markdown passes a raw tag through unparsed but still parses the text between the tags as
 ///       ordinary inline content, so "<sup>*n*</sup>" italicises the n. The ampersand and the
@@ -116,9 +140,11 @@ cui64 MdEscapeMeasure(cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool d
 ///       unescaped, and the inline set escapes both brackets unconditionally already. The destination
 ///       rule stood too, with one thing worth recording rather than discovering: a byte above ASCII is
 ///       left as it stands, because CommonMark takes a raw UTF-8 destination and every renderer encodes
-///       it itself, so encoding it here would only make the source unreadable. MD_CONTEXT_TABLE_CELL is
-///       the one still waiting, and M9 is expected to re-cut it the same way.
-cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars);
+///       it itself, so encoding it here would only make the source unreadable. MD_CONTEXT_TABLE_CELL
+///       was the one still waiting; M9 re-cut it the same way and changed nothing in it either, and
+///       what M9 found instead was the two places a pipe reaches the output through a *different*
+///       context -- see the table note above.
+cui64 MdEscapeWrite(chptrc dest, cui64 destBytes, cchptr text, cui64 byteCount, cMD_CONTEXT context, cbool dollars, cbool pipes);
 
 /// Reports where a finished line needs one backslash to stop it starting a block it should not.
 /// @param line         The line's bytes, already escaped for MD_CONTEXT_INLINE and already trimmed.

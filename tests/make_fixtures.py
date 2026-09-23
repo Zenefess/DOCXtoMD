@@ -293,7 +293,8 @@ def build_all(verbose=True, writing=True):
         blocks = 1 + 2 * max([p.count(b"\x00\x00\xff\xff") for p in payloads] or [0])
         report.append((name, len(entries), types, blocks))
 
-    # -- sound containers. Each exits 5: the container is verified, but no build before M5 converts.
+    # -- sound containers. Each exits 0, the container verified and the document converted, except
+    # no-document.docx: its archive is sound but lacks the main part the package names, so it exits 3.
 
     stored = [make_entry(name, raw, method="store") for name, raw in parts]
     note("minimal-stored.docx", stored)
@@ -705,7 +706,8 @@ def build_all(verbose=True, writing=True):
     for case in ["headings", "toggles", "textflow", "nostyles", "wrappers", "dollars",
                  "fragments", "hoisting", "inline", "code", "quotes", "rules", "monodefault",
                  "monostyle", "links", "images", "anchors",
-                 "lists", "listcounters", "listbroken", "liststyles"]:
+                 "lists", "listcounters", "listbroken", "liststyles",
+                 "tables", "tablemerges", "tablenested", "tablecells"]:
         tree = read_part_tree(case)
         write(case + ".docx", build_zip([make_entry(name, raw) for name, raw in tree]))
         expect(case + ".docx", 0, ["wrote", case + ".md"], "the %s golden fixture" % case)

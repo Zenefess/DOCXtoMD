@@ -3,16 +3,17 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-23
  * Description: The intermediate representation: blocks, spans and the arena the walker builds them in.
- * To Do: 1) Add the table block kind at M9 and the note-reference span kind at M10. M8 deliberately
- *           added neither for a list: an item's *kind* is what its content is -- a paragraph, a
- *           quotation, a line of code -- and its list membership is a separate question, so it is
- *           carried in fields beside the kind rather than by a sixth value of it.
- *        2) Give a block a child-block list once a table cell has to hold one at M9.
- *        3) Record the source paragraph index on a block, so a diagnostic can point at the original.
- *        4) Record the part a reference span came from, once M10 walks a second part whose relationship
+ * To Do: 1) Add the note-reference span kind at M10. M8 deliberately added no block kind for a list:
+ *           an item's *kind* is what its content is -- a paragraph, a quotation, a line of code -- and
+ *           its list membership is a separate question, so it is carried in fields beside the kind
+ *           rather than by a value of it.
+ *        2) Record the source paragraph index on a block, so a diagnostic can point at the original.
+ *        3) Record the part a reference span came from, once M10 walks a second part whose relationship
  *           ids are scoped separately from the body's.
+ *        4) Carry a cell's own w:tcBorders and w:shd, which the HTML fallback could render and the
+ *           pipe form could not.
  * Dependencies: typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -51,6 +52,7 @@ enum IR_BLOCK_KIND : ui8 {
    IR_BLOCK_QUOTE,         ///< A blockquote paragraph; every emitted line takes the "> " prefix
    IR_BLOCK_CODE,          ///< One line of a fenced code block; consecutive ones share a fence
    IR_BLOCK_RULE,          ///< A horizontal rule, which carries no spans at all
+   IR_BLOCK_TABLE,         ///< A table; it carries no spans, and its rows and cells name the blocks
    IR_BLOCK_KIND_COUNT     ///< Number of values above; not a kind
 };
 
@@ -100,6 +102,108 @@ constexpr cui8 IR_LIST_ORDERED = 0x02u; ///< Its marker is a computed number rat
 constexpr cui8 IR_LIST_PLAIN   = 0x04u; ///< It carries no marker at all: w:numFmt none, mapping row 16
 constexpr cui8 IR_LIST_FIRST   = 0x08u; ///< It opens a list the item before it was not part of
 
+//== Tables
+
+/// What one table's shape obliges of the emitter. Both bits are facts the walk reads and neither is a
+/// policy: which of them turns into raw HTML is the emitter's question, and it depends on --tables.
+constexpr cui8 IR_TABLE_NONE   = 0x00u;
+constexpr cui8 IR_TABLE_MERGED = 0x01u; ///< Some cell spans columns or rows, which GFM cannot say
+constexpr cui8 IR_TABLE_NESTED = 0x02u; ///< Some cell holds a table, which GFM cannot say at all
+
+/// What one row is. IR_ROW_HEADER records a w:tblHeader; the emitter's header is the first row regardless.
+constexpr cui8 IR_ROW_NONE   = 0x00u;
+constexpr cui8 IR_ROW_HEADER = 0x01u; ///< The row carried w:tblHeader, which the emitter does not read
+
+/// What one cell is beyond its content.
+constexpr cui8 IR_CELL_NONE     = 0x00u;
+constexpr cui8 IR_CELL_VRESTART = 0x01u; ///< w:vMerge="restart": the cell a vertical merge begins at
+constexpr cui8 IR_CELL_VMERGED  = 0x02u; ///< w:vMerge with no value: a continuation of the cell above
+
+/// How a column's content is aligned, read from the first row's own w:jc (mapping row 18).
+enum IR_ALIGN : ui8 {
+   IR_ALIGN_NONE = 0, ///< The document said nothing, so the delimiter row says nothing either
+   IR_ALIGN_LEFT,     ///< ":---"
+   IR_ALIGN_CENTRE,   ///< ":---:"
+   IR_ALIGN_RIGHT,    ///< "---:"
+   IR_ALIGN_COUNT     ///< Number of values above; not an alignment
+};
+
+/// Constant form of IR_ALIGN, spelled per GCS r2.
+typedef const IR_ALIGN cIR_ALIGN;
+
+/// The most columns one table may have. A GFM row is one line, so a table this wide is already past
+/// anything a reader could follow; the cap is here so that a part cannot size an allocation by declaring
+/// w:gridCol a million times.
+constexpr cui32 IR_MAX_COLUMNS = 256u;
+
+/// How deep tables may nest before one is dropped. Word's own editor stops well short of this, and the
+/// tokenizer's own 256-element nesting cap would stop a runaway anyway -- this is the bound that keeps
+/// the walker's *stack* off the document's content, which that cap does not.
+constexpr cui32 IR_MAX_TABLE_DEPTH = 12u;
+
+/// What a table's alignAt holds when no column of it is aligned, which is the ordinary case: an offset
+/// into the arena cannot be a sentinel by being 0, because 0 is where the first table's alignments land.
+constexpr cui32 IR_ALIGN_ABSENT = 0xFFFFFFFFu;
+
+/// The end of a row or cell chain, and what a table with no rows holds.
+constexpr cui32 IR_NO_INDEX = 0xFFFFFFFFu;
+
+/// One table. blockAt..blockEnd is every block the table owns -- its own block first, then every block
+/// of every cell of every row, in document order, nested tables included.
+/// @note The block range is what lets the emitter skip the whole table in its top loop, and what lets
+///       IrDropEmptyBlocks move a table without looking inside one. Nothing inside a table is ever
+///       dropped, so every record of one table moves by the same delta.
+/// @note A table's rows and a row's cells are **chains** and not ranges, which are the two places this
+///       module gives up a contiguous array, and a nested table is why. A cell's content is walked where
+///       it stands, so a table inside the first cell of a row appends its own rows and cells to the same
+///       arrays before the outer row's next cell and the outer table's next row -- no order of appending
+///       makes both contiguous, because a second nested table in a second cell interleaves again.
+///       Chaining costs one field and makes the question disappear; every walk of a chain goes forward.
+/// @note The column alignments live in an arena of their own rather than in an array here, for the
+///       reason every other arena in this module exists: a fixed array of IR_MAX_COLUMNS would make a
+///       record of a one-column table 256 bytes wide, and a part is free to declare a great many
+///       one-column tables inside the container's own byte cap.
+struct IR_TABLE {
+   ui32 firstRow; ///< The table's first row, or IR_NO_INDEX when it has none
+   ui32 blockAt;  ///< Index of the table's own IR_BLOCK_TABLE block
+   ui32 blockEnd; ///< One past the last block the table owns
+   ui32 columns;  ///< The grid width every emitted row is padded to
+   ui32 alignAt;  ///< Align-arena offset of this table's columns entries, or IR_ALIGN_ABSENT
+   ui8  flags;    ///< The IR_TABLE bits in force
+};
+
+/// One row of one table, and a link to the next row of the same table.
+struct IR_ROW {
+   ui32 firstCell; ///< The row's first cell, or IR_NO_INDEX when it has none
+   ui32 nextRow;   ///< The next row of the same table, or IR_NO_INDEX
+   ui8  flags;     ///< The IR_ROW bits in force
+};
+
+/// One cell of one row, and a link to the next cell of the same row. Its blocks are a contiguous range
+/// in the document's own block array, because a cell's content is walked where it stands and every pass
+/// above the walk reads blocks in that order.
+/// @note column and span are what a merge costs. A cell starting at column 3 with a span of 2 covers
+///       columns 3 and 4, and the emitter writes its content in the first and an empty pad in the rest,
+///       which is CONVERSION_REFERENCE row 19's policy A.
+struct IR_CELL {
+   ui32 blockAt;    ///< Index of the cell's first block; the block count with a count of 0 when empty
+   ui32 blockCount; ///< How many blocks it has
+   ui32 column;     ///< The grid column its content starts at
+   ui32 span;       ///< How many grid columns it covers, which is w:gridSpan and at least 1
+   ui32 nextCell;   ///< The next cell of the same row, or IR_NO_INDEX
+   ui8  flags;      ///< The IR_CELL bits in force
+   ui8  align;      ///< The first alignment a w:jc of its paragraphs named, as an IR_ALIGN
+};
+
+/// Constant and pointer forms of the table records, spelled per GCS r2/t2.
+typedef IR_TABLE       *IR_TABLEptr;
+typedef const IR_TABLE *cIR_TABLEptr;
+typedef IR_TABLE *const IR_TABLEptrc;
+typedef IR_ROW         *IR_ROWptr;
+typedef const IR_ROW   *cIR_ROWptr;
+typedef IR_CELL        *IR_CELLptr;
+typedef const IR_CELL  *cIR_CELLptr;
+
 /// One block. Its spans are a contiguous range, because a block is built to completion before the next
 /// one starts and nothing ever inserts into the middle of one.
 /// @note The four list fields are written in two stages, exactly as a link's destination is. The walk
@@ -111,6 +215,7 @@ struct IR_BLOCK {
    ui32          spanCount;    ///< How many spans it has
    si32          listNumId;    ///< The w:numId the walk read, or -1 when the paragraph is not an item
    ui32          listNumber;   ///< What an ordered item's marker counts; 0 for every other block
+   si32          tableAt;      ///< Which table an IR_BLOCK_TABLE block is, or -1 for every other block
    IR_BLOCK_KIND kind;         ///< What the block is
    ui8           headingLevel; ///< 1 to 6 for a heading, 0 otherwise
    ui8           listLevel;    ///< The w:ilvl an item was written at, 0 to 8; 0 for every other block
@@ -146,11 +251,19 @@ typedef IR_SPAN        *IR_SPANptr;
 typedef const IR_SPAN  *cIR_SPANptr;
 
 /// Where one block started, so that ending it can trim it or throw it away again.
+/// @note The three table counts are here for IrRewind alone. An mc:AlternateContent may wrap a w:tbl at
+///       block level, so the first mc:Choice can build a whole table that an mc:Fallback then discards;
+///       a rewind that unwound only blocks and spans would leave the row and cell records of a table
+///       nothing points at, and the next table would inherit them.
 struct IR_MARK {
-   si32 block;  ///< The block's index, or -1 when it could not be started
-   ui32 spanAt; ///< The span count when it started
-   ui64 heapAt; ///< The text arena's used size when it started
-   ui64 destAt; ///< The destination arena's used size when it started
+   si32 block;   ///< The block's index, or -1 when it could not be started
+   ui32 spanAt;  ///< The span count when it started
+   ui32 tableAt; ///< The table count when it started
+   ui32 rowAt;   ///< The row count when it started
+   ui32 cellAt;  ///< The cell count when it started
+   ui64 heapAt;  ///< The text arena's used size when it started
+   ui64 destAt;  ///< The destination arena's used size when it started
+   ui64 alignAt; ///< The align arena's used size when it started
 };
 
 /// Constant form of IR_MARK, spelled per GCS r2.
@@ -163,16 +276,28 @@ typedef const IR_MARK cIR_MARK;
 struct al32 IR_DOCUMENT {
    IR_BLOCKptr blocks;        ///< Every block, in document order
    IR_SPANptr  spans;         ///< Every span, grouped by block
+   IR_TABLEptr tables;        ///< Every table, in the order the walk reached them
+   IR_ROWptr   rows;          ///< Every row of every table; a table's own rows are chained by nextRow
+   IR_CELLptr  cells;         ///< Every cell of every row; a row's own cells are chained by nextCell
    chptr       heap;          ///< Every byte of paragraph text, addressed by offset
    chptr       dest;          ///< Every byte of every destination and anchor name, addressed by offset
+   ui8ptr      align;         ///< Every column alignment, grouped by table and addressed by offset
    ui64        blockCapacity; ///< Records allocated at blocks
    ui64        spanCapacity;  ///< Records allocated at spans
+   ui64        tableCapacity; ///< Records allocated at tables
+   ui64        rowCapacity;   ///< Records allocated at rows
+   ui64        cellCapacity;  ///< Records allocated at cells
    ui64        heapCapacity;  ///< Bytes allocated at heap
    ui64        heapUsed;      ///< Bytes of heap in use
    ui64        destCapacity;  ///< Bytes allocated at dest
    ui64        destUsed;      ///< Bytes of dest in use
+   ui64        alignCapacity; ///< Bytes allocated at align
+   ui64        alignUsed;     ///< Bytes of align in use
    ui32        blockCount;    ///< Blocks in blocks
    ui32        spanCount;     ///< Spans in spans
+   ui32        tableCount;    ///< Tables in tables
+   ui32        rowCount;      ///< Rows in rows
+   ui32        cellCount;     ///< Cells in cells
    bool        failed;        ///< Whether any append ran out of memory; sticky once set
 };
 
@@ -212,6 +337,9 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
 /// @note A paragraph whose text is empty or nothing but ASCII whitespace is dropped whole, which is what
 ///       gives CONVERSION_REFERENCE row 40's "runs of N empty paragraphs collapse" for free: blocks are
 ///       separated by exactly one blank line, so a block that never existed leaves no gap.
+/// @note A table block is exempt too, and for a reason of its own: it carries no spans at all, because
+///       its content is the blocks of its cells rather than spans of its own. A table that turned out
+///       to have no rows is unwound by the walker instead, which is where that is known.
 /// @note Two kinds and one flag are exempt from the emptiness test. IR_BLOCK_RULE is an empty paragraph
 ///       by construction -- CONVERSION_REFERENCE row 25 makes it a lone w:pBdr bottom on a paragraph
 ///       with nothing in it -- so the test would throw away every one; its spans are dropped instead,
@@ -232,6 +360,105 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
 ///       anchor is judged again by IrDropEmptyBlocks once LinkResolve has muted the ones nothing points
 ///       at, which is the only way a block can be emptied after it was ended.
 cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark);
+
+/// Starts a table on the block a mark named, which must have been begun as IR_BLOCK_TABLE.
+/// @param document  A prepared document.
+/// @param mark      What IrBeginBlock returned; a mark whose block is -1 yields -1.
+/// @return Which table it is, or -1 when the document could not grow.
+/// @note A table is its own block so that every pass above the walk keeps reading one flat array in
+///       document order -- which is what NumAssignMarkers, LinkResolve and MediaPlan all rely on -- and
+///       so that the emitter's top loop meets it where the document put it. What the block carries is
+///       the index; the shape is in the table, the row and the cell records beside it.
+csi32 IrBeginTable(IR_DOCUMENTptrc document, cIR_MARK mark);
+
+/// Closes the table the walk has finished, recording every block it turned out to own.
+/// @param document  A prepared document.
+/// @param table     What IrBeginTable returned; a negative index does nothing.
+/// @param lastRow   The table's last row, as IrBeginRow returned it, or -1 when it has none. The row
+///                  chain is terminated there, which is what makes a rewound row disappear.
+/// @param grid      How many w:gridCol the table declared, which is a floor and not a ceiling.
+/// @note Called after the last cell, because blockEnd is only known then -- a cell's content is walked
+///       where it stands, so a table owns every block between its own and whatever follows it.
+/// @note Everything a table says about its own shape is **derived here**, by chasing the chains this
+///       call has just terminated: how many columns it has, whether any cell merges, and what the
+///       first row said about each column's alignment. None of it is accumulated as the walk goes, and
+///       that is a correctness rule rather than tidiness -- an mc:AlternateContent may wrap a w:tr or
+///       a w:tc, so a row or a cell that was rewound would otherwise leave behind a column the table
+///       does not have, an alignment no surviving cell asked for, or a merge that was discarded with
+///       the branch that declared it. IR_TABLE_NESTED is derived here too, by looking for a table
+///       among the blocks each cell ended up holding rather than having each nested table mark its
+///       parent as it closed -- which left the flag set on a parent whose only nested table a
+///       mc:Fallback had since discarded, and emitted it as raw HTML it did not need.
+/// @note The grid is authoritative for a table's width (CONVERSION_REFERENCE 2.5) but it is not a
+///       ceiling: a row whose cells reach past it has columns the grid did not declare, and clamping
+///       to the grid is the silent loss mapping row 19 forbids. The table is as wide as the wider.
+void IrEndTable(IR_DOCUMENTptrc document, csi32 table, csi32 lastRow, cui32 grid);
+
+/// Starts a row of one table, linking it behind the row before it.
+/// @param document  A prepared document.
+/// @param table     Which table, as IrBeginTable returned it.
+/// @param after     The row this one follows, or -1 when it is the table's first.
+/// @param header    Whether the row carried w:trPr/w:tblHeader.
+/// @return Which row it is, or -1 when the document could not grow.
+/// @note The caller holds the chain's tail rather than this module, and that is what makes a rewind
+///       cost nothing: an mc:AlternateContent may wrap a w:tr, and the walker that unwinds a discarded
+///       mc:Choice restores its own tail, so the next row links behind the row that really precedes it
+///       and IrEndTable writes the terminator. Nothing here has to find a chain's severed end.
+csi32 IrBeginRow(IR_DOCUMENTptrc document, csi32 table, csi32 after, cbool header);
+
+/// Closes a row, terminating its cell chain.
+/// @param document  A prepared document.
+/// @param row       Which row, as IrBeginRow returned it; a negative index does nothing.
+/// @param lastCell  The row's last cell, or -1 when it has none.
+void IrEndRow(IR_DOCUMENTptrc document, csi32 row, csi32 lastCell);
+
+/// Starts a cell of one row, linking it behind the cell before it.
+/// @param document  A prepared document.
+/// @param row       Which row, as IrBeginRow returned it.
+/// @param after     The cell this one follows, or -1 when it is the row's first.
+/// @param span      The w:gridSpan, clamped to at least 1.
+/// @param flags     The IR_CELL bits the cell's w:tcPr named.
+/// @return Which cell it is, or -1 when the document could not grow.
+/// @note The cell's column is where the cell before it ended, because w:gridSpan says how many columns
+///       a cell covers and nothing says which -- so a row is read left to right and a cell begins where
+///       its predecessor stopped. A row whose cells reach past the grid still reports each one's start.
+csi32 IrBeginCell(IR_DOCUMENTptrc document, csi32 row, csi32 after, cui32 span, cui8 flags);
+
+/// Closes a cell, recording the blocks its content turned out to be.
+/// @param document  A prepared document.
+/// @param cell      Which cell, as IrBeginCell returned it; a negative index does nothing.
+/// @param blockAt   The block count before the cell's content was walked.
+/// @param align     The first alignment a w:jc of its paragraphs named. It is stored on the cell
+///                  rather than spread over the table's columns here, because which row this cell is
+///                  in is the caller's question and only the first row's cells reach a delimiter row.
+void IrEndCell(IR_DOCUMENTptrc document, csi32 cell, cui32 blockAt, cIR_ALIGN align);
+
+/// One table by index.
+/// @return The table, or null for an index outside the document.
+cIR_TABLEptr IrTableAt(cIR_DOCUMENTptr document, csi32 index);
+
+/// One row by index.
+/// @return The row, or null for an index outside the document, IR_NO_INDEX included -- which is what
+///         ends a walk of a table's row chain.
+cIR_ROWptr IrRowAt(cIR_DOCUMENTptr document, cui32 index);
+
+/// One cell by index.
+/// @return The cell, or null for an index outside the document, IR_NO_INDEX included -- which is what
+///         ends a walk of a row's cell chain.
+cIR_CELLptr IrCellAt(cIR_DOCUMENTptr document, cui32 index);
+
+/// What one table's column was aligned to.
+/// @param document  A prepared document.
+/// @param table     The table the column belongs to.
+/// @param column    Which column.
+/// @return The alignment, or IR_ALIGN_NONE for a column the table does not have, and for every column
+///         of a table whose alignments could not be stored.
+/// @note Only the first row's cells ever settle one, because a GFM delimiter row is the only place an
+///       alignment can be written and it stands under the header. A cell spanning several columns
+///       aligns all of them, which is the only reading available when one cell speaks for two.
+/// @note IrEndTable fills the arena by chasing the first row it has just terminated, so a cell an
+///       mc:Fallback replaced never speaks for a column the document does not have.
+cIR_ALIGN IrAlignOf(cIR_DOCUMENTptr document, cIR_TABLEptr table, cui32 column);
 
 /// Records the list reference a paragraph's w:numPr carried, on the block being built.
 /// @param document  A prepared document.
@@ -382,6 +609,12 @@ IR_SPANptr IrSpanMutable(IR_DOCUMENTptrc document, cui32 index);
 ///       empty paragraph while an empty *item* keeps its marker.
 /// @note Blocks keep their order and their spans; only the records move down over the dropped ones. The
 ///       arena is not compacted, for the same reason IrSetDest does not compact it.
+/// @note Nothing inside a table is ever dropped, and that is what makes the table records survive the
+///       compaction. A cell's blocks are named by index, so a dropped one would have to be found again
+///       in every record that could reach past it; instead the whole of a table moves as a unit and
+///       every record of it is shifted by the one delta that applies where the table stands. What a
+///       cell then has to cope with is a block that emits nothing, which is an empty cell -- a shape
+///       a table has anyway, and which the emitter already has to write.
 void IrDropEmptyBlocks(IR_DOCUMENTptrc document);
 
 /// The bytes one text-arena offset names.

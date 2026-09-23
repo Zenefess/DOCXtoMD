@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: Command-line parser and validator, plus the usage and version text.
  * To Do: 1) Accept the policy switches CONVERSION_REFERENCE.md 6.3 lists as their conversion stages land.
  *        2) Add the duplicate-output pre-flight check that stops two workers targeting one .md file (M13).
@@ -33,6 +33,7 @@ constexpr cchptr USAGE_TEXT = "Usage: DOCXtoMD [options] <input.docx> [input2.do
                               "  -j, --threads <n>      worker threads (default: system virtual core count)\n"
                               "  --media-dir <dir>      image dir (default <stem>_media\\)   --no-images   alt text only\n"
                               "  --hard-break=<backslash|spaces>  (default backslash)      -q, --quiet   errors only\n"
+                              "  --tables=<gfm|html-on-merge>     (default gfm)\n"
                               "  --stdout               markdown to stdout - single input only\n"
                               "  --version              print version, exit 0              -h, --help    usage, exit 0\n";
 
@@ -121,6 +122,7 @@ cEXIT_CODE CliParse(csi32 argc, cwchptrcptr argv, CLI_OPTIONSptrc options) {
    options->inputCount  = 0;
    options->threadCount = DefaultThreadCount();
    options->hardBreak   = HARD_BREAK_BACKSLASH;
+   options->tables      = TABLE_MODE_GFM;
    options->emitImages  = true;
    options->quiet       = false;
    options->toStdout    = false;
@@ -196,6 +198,17 @@ cEXIT_CODE CliParse(csi32 argc, cwchptrcptr argv, CLI_OPTIONSptrc options) {
             return CliParseFailed(options);
          }
          options->threadCount = count;
+         continue;
+      }
+      if(ArgMatchValue(arg, L"--tables", &value)) {
+         if(!TakeValue(argc, argv, &i, value, arg, &value)) return CliParseFailed(options);
+
+         if(StringEqual(value, L"gfm")) options->tables = TABLE_MODE_GFM;
+         else if(StringEqual(value, L"html-on-merge")) options->tables = TABLE_MODE_HTML_ON_MERGE;
+         else {
+            DiagErrorText("--tables takes gfm or html-on-merge, not", value);
+            return CliParseFailed(options);
+         }
          continue;
       }
       if(ArgMatchValue(arg, L"--hard-break", &value)) {

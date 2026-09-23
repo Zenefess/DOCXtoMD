@@ -5,9 +5,8 @@
  * Created: 2026-08-25
  * Last Modified: 2026-09-22
  * Description: Unit tests for the body walk: wrappers, run content, and the formatting bits on a span.
- * To Do: 1) Add table cases as M9 gives the walker something to build from one; M7's hyperlinks,
- *           pictures and bookmarks and M8's numbering are driven below.
- *        2) Drive the field state machine's traces once M10 replaces today's skip-it-whole handling.
+ * To Do: 1) Drive the field state machine's traces once M10 replaces today's skip-it-whole handling.
+ *        2) Drive a table whose cells hold pictures and links, which needs a package to resolve them.
  * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, StyleModel.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -64,6 +63,23 @@ static constexpr cchptr WALK_TAIL = "</w:body></w:document>";
 // not cancel the horizontal rule of row 25 or the monospace detection of row 12, both of which a real
 // list item does cancel. numId 4 and numId 9 resolve; every other identifier is dangling.
 #define WALK_NUM(id) "<w:num w:numId=\"" id "\"><w:abstractNumId w:val=\"0\"/></w:num>"
+
+// The pieces M9's table cases are built from. A cell holding one word is what nearly every one
+// of them holds, so naming it leaves each case showing only the property it is about.
+#define WALK_PARA_A       "<w:p><w:r><w:t>a</w:t></w:r></w:p>"
+#define WALK_CELL_A       "<w:tc>" WALK_PARA_A "</w:tc>"
+#define WALK_ROW_A        "<w:tr>" WALK_CELL_A "</w:tr>"
+#define WALK_JC(v)        "<w:tc><w:p><w:pPr><w:jc w:val=\"" v "\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p></w:tc>"
+#define WALK_ROW(t)       "<w:tr><w:tc><w:p><w:r><w:t>" t "</w:t></w:r></w:p></w:tc></w:tr>"
+#define WALK_ROW_IN       WALK_ROW("in")
+#define WALK_ROW_CHOICE   WALK_ROW("choice")
+#define WALK_ROW_FALLBACK WALK_ROW("fallback")
+#define WALK_SPAN_2       "<w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>"
+#define WALK_GRID_1       "<w:tblGrid><w:gridCol/></w:tblGrid>"
+#define WALK_GRID_2       "<w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>"
+#define WALK_CELL_F1      "<w:tc><w:p><w:r><w:t>F1</w:t></w:r></w:p></w:tc>"
+#define WALK_CELL_F2      "<w:tc><w:p><w:r><w:t>F2</w:t></w:r></w:p></w:tc>"
+#define WALK_ROW_FF       "<w:tr>" WALK_CELL_F1 WALK_CELL_F2 "</w:tr>"
 
 static constexpr cchptr WALK_NUMS = "<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
                                     "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\">"
@@ -128,10 +144,10 @@ static cui64 WalkList(cIR_BLOCKptr block, chptrc dest) {
 // A block kind neither this renderer nor its twin in the other suite spells would come out as an
 // ordinary paragraph, which is a plausible trace rather than an obviously wrong one -- exactly the
 // failure CLAUDE.md warns of in saying the two are independent copies that must both be edited.
-static_assert(ui32(IR_BLOCK_KIND_COUNT) == 5u, "TestDocWalker: the trace renderer must spell every block kind; add the new one here.");
+static_assert(ui32(IR_BLOCK_KIND_COUNT) == 6u, "TestDocWalker: the trace renderer must spell every block kind; add the new one here.");
 
-// Renders the whole intermediate representation into one compact trace, so a case is one string
-// comparison rather than ten assertions. A heading is H<level>{...} and a paragraph is P{...}; inside
+// The trace notation the three renderers below share, so a case is one string comparison rather than
+// ten assertions. A heading is H<level>{...} and a paragraph is P{...}; inside
 // a block, [text] is a text span, | is a hard break, and the letters before a bracket are its
 // formatting: b bold, i italic, s strike, ^ superscript, v subscript and c code. The other block
 // letters are Q for a blockquote, C for a line of a fenced block and R for a horizontal rule.
@@ -139,13 +155,92 @@ static_assert(ui32(IR_BLOCK_KIND_COUNT) == 5u, "TestDocWalker: the trace rendere
 // image, and N(name) for a bookmark anchor; a muted anchor -- one nothing links to -- is N-(name).
 // M8's list membership stands in front of the block letter: [<level>#<numId>] is the reference the
 // walk read, and [<level>=<marker>] is what NumAssignMarkers made of it.
-static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
-   ui64 used = 0;
 
-   dest[0] = 0;
-   for(ui32 index = 0; index < IrBlockCount(document); ++index) {
+// Renders one range of blocks, which is the whole document at the top level and one cell's content
+// inside a table. A table's own blocks are the blocks of its cells, so the range renderer and the
+// table renderer call each other -- and the range renderer skips past a table's whole block range,
+// or every cell's content would be rendered twice: once in the table and once at the top level.
+static void WalkRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc dest, cui64 destBytes, ui64ptrc used);
+
+// Renders one table: T, its column count, one character per column of alignment (- l c r), then m for
+// a table holding a merge and n for one holding a nested table. Rows are separated by "/" and a row
+// that carried w:tblHeader is prefixed with "=". A cell is its blocks between parentheses, prefixed by
+// its span when it covers more than one column, by "v" when it starts a vertical merge and by "^" when
+// it continues one.
+static void WalkTable(cIR_DOCUMENTptr document, cIR_BLOCKptr block, chptrc dest, cui64 destBytes, ui64ptrc used) {
+   cIR_TABLEptr table = IrTableAt(document, block->tableAt);
+   char         head[IR_MAX_COLUMNS + 16u];
+   ui64         at = 0;
+
+   if(!table) {
+      WalkAppend(dest, destBytes, used, "T?");
+      return;
+   }
+   head[at++] = 'T';
+   at += WalkNumber(head + at, table->columns);
+   for(ui32 column = 0; column < table->columns; ++column) {
+      cIR_ALIGN align = IrAlignOf(document, table, column);
+
+      head[at++] = (align == IR_ALIGN_LEFT ? 'l' : (align == IR_ALIGN_CENTRE ? 'c' : (align == IR_ALIGN_RIGHT ? 'r' : '-')));
+   }
+   if(table->flags & IR_TABLE_MERGED) head[at++] = 'm';
+   if(table->flags & IR_TABLE_NESTED) head[at++] = 'n';
+   head[at++] = '{';
+   head[at]   = 0;
+   WalkAppend(dest, destBytes, used, head);
+
+   ui32 row   = table->firstRow;
+   bool first = true;
+
+   while(row != IR_NO_INDEX) {
+      cIR_ROWptr record = IrRowAt(document, row);
+
+      if(!record) break;
+      if(!first) WalkAppend(dest, destBytes, used, "/");
+      first = false;
+      if(record->flags & IR_ROW_HEADER) WalkAppend(dest, destBytes, used, "=");
+
+      ui32 cell = record->firstCell;
+
+      while(cell != IR_NO_INDEX) {
+         cIR_CELLptr one = IrCellAt(document, cell);
+
+         if(!one) break;
+         WalkAppend(dest, destBytes, used, "(");
+         if(one->span > 1u) {
+            char  width[12];
+            cui64 length = WalkNumber(width, one->span);
+
+            width[length]      = ':';
+            width[length + 1u] = 0;
+            WalkAppend(dest, destBytes, used, width);
+         }
+         if(one->flags & IR_CELL_VRESTART) WalkAppend(dest, destBytes, used, "v");
+         if(one->flags & IR_CELL_VMERGED) WalkAppend(dest, destBytes, used, "^");
+         WalkRange(document, one->blockAt, one->blockAt + one->blockCount, dest, destBytes, used);
+         WalkAppend(dest, destBytes, used, ")");
+         cell = one->nextCell;
+      }
+      row = record->nextRow;
+   }
+   WalkAppend(dest, destBytes, used, "}");
+}
+
+static void WalkRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc dest, cui64 destBytes, ui64ptrc used) {
+   for(ui32 index = from; index < to; ++index) {
       cIR_BLOCKptr block = IrBlockAt(document, index);
-      char         head[24];
+
+      if(!block) continue;
+      if(block->kind == IR_BLOCK_TABLE) {
+         WalkTable(document, block, dest, destBytes, used);
+
+         cIR_TABLEptr table = IrTableAt(document, block->tableAt);
+
+         if(table && table->blockEnd > index) index = table->blockEnd - 1u;
+         continue;
+      }
+
+      char head[24];
 
       ui64 at = WalkList(block, head);
 
@@ -159,44 +254,52 @@ static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
       else head[at++] = '?';
       head[at++] = '{';
       head[at]   = 0;
-      WalkAppend(dest, destBytes, &used, head);
+      WalkAppend(dest, destBytes, used, head);
       for(ui32 at = 0; at < block->spanCount; ++at) {
          cIR_SPANptr span = IrSpanAt(document, block->spanAt + at);
 
          if(span->kind == IR_SPAN_BREAK) {
-            WalkAppend(dest, destBytes, &used, "|");
+            WalkAppend(dest, destBytes, used, "|");
             continue;
          }
          if(span->kind == IR_SPAN_LINK_END) {
-            WalkAppend(dest, destBytes, &used, "L)");
+            WalkAppend(dest, destBytes, used, "L)");
             continue;
          }
          if(span->kind == IR_SPAN_LINK_START || span->kind == IR_SPAN_IMAGE || span->kind == IR_SPAN_ANCHOR) {
-            WalkAppend(dest, destBytes, &used, (span->kind == IR_SPAN_IMAGE ? "I" : (span->kind == IR_SPAN_ANCHOR ? "N" : "L")));
-            if(span->flags & IR_SPAN_FLAG_MUTE) WalkAppend(dest, destBytes, &used, "-");
-            WalkAppend(dest, destBytes, &used, "(");
-            for(ui32 byte = 0; byte < span->destBytes && used + 1u < destBytes; ++byte) {
-               dest[used++] = IrDest(document, span->destAt)[byte];
+            WalkAppend(dest, destBytes, used, (span->kind == IR_SPAN_IMAGE ? "I" : (span->kind == IR_SPAN_ANCHOR ? "N" : "L")));
+            if(span->flags & IR_SPAN_FLAG_MUTE) WalkAppend(dest, destBytes, used, "-");
+            WalkAppend(dest, destBytes, used, "(");
+            for(ui32 byte = 0; byte < span->destBytes && *used + 1u < destBytes; ++byte) {
+               dest[(*used)++] = IrDest(document, span->destAt)[byte];
             }
-            dest[used] = 0;
-            WalkAppend(dest, destBytes, &used, ")");
+            dest[*used] = 0;
+            WalkAppend(dest, destBytes, used, ")");
             if(span->kind != IR_SPAN_IMAGE) continue;
          }
-         if(span->fmt & IR_FMT_BOLD) WalkAppend(dest, destBytes, &used, "b");
-         if(span->fmt & IR_FMT_ITALIC) WalkAppend(dest, destBytes, &used, "i");
-         if(span->fmt & IR_FMT_STRIKE) WalkAppend(dest, destBytes, &used, "s");
-         if(span->fmt & IR_FMT_SUPER) WalkAppend(dest, destBytes, &used, "^");
-         if(span->fmt & IR_FMT_SUB) WalkAppend(dest, destBytes, &used, "v");
-         if(span->fmt & IR_FMT_CODE) WalkAppend(dest, destBytes, &used, "c");
-         WalkAppend(dest, destBytes, &used, "[");
-         for(ui32 byte = 0; byte < span->textBytes && used + 1u < destBytes; ++byte) {
-            dest[used++] = IrText(document, span->textAt)[byte];
+         if(span->fmt & IR_FMT_BOLD) WalkAppend(dest, destBytes, used, "b");
+         if(span->fmt & IR_FMT_ITALIC) WalkAppend(dest, destBytes, used, "i");
+         if(span->fmt & IR_FMT_STRIKE) WalkAppend(dest, destBytes, used, "s");
+         if(span->fmt & IR_FMT_SUPER) WalkAppend(dest, destBytes, used, "^");
+         if(span->fmt & IR_FMT_SUB) WalkAppend(dest, destBytes, used, "v");
+         if(span->fmt & IR_FMT_CODE) WalkAppend(dest, destBytes, used, "c");
+         WalkAppend(dest, destBytes, used, "[");
+         for(ui32 byte = 0; byte < span->textBytes && *used + 1u < destBytes; ++byte) {
+            dest[(*used)++] = IrText(document, span->textAt)[byte];
          }
-         dest[used] = 0;
-         WalkAppend(dest, destBytes, &used, "]");
+         dest[*used] = 0;
+         WalkAppend(dest, destBytes, used, "]");
       }
-      WalkAppend(dest, destBytes, &used, "}");
+      WalkAppend(dest, destBytes, used, "}");
    }
+}
+
+// Renders a whole document, in the notation above.
+static void WalkTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes) {
+   ui64 used = 0;
+
+   dest[0] = 0;
+   WalkRange(document, 0, IrBlockCount(document), dest, destBytes, &used);
 }
 
 // Walks one body, with an optional styles part in front of it, and compares the trace with a literal.
@@ -505,18 +608,172 @@ void TestDocWalker(void) {
                   "<w:rubyBase><w:r><w:t>base</w:t></w:r></w:rubyBase></w:ruby></w:p>",
                   "P{[base]}"));
 
+   // M9's tables, in the notation the header of this file describes: T, the column count, one
+   // character of alignment per column, then m for a merge and n for a nested table; rows separated
+   // by "/", a w:tblHeader row prefixed by "=", and a cell its blocks between parentheses.
+   CheckGroup("DocWalker: tables");
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>", "T1-{(P{[x]})}"));
+   // A skip does not eat the siblings that follow it, which a table has to satisfy like every other
+   // element the walk consumes whole.
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>in a cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+                  "<w:p><w:r><w:t>after</w:t></w:r></w:p>",
+                  "T1-{(P{[in a cell]})}P{[after]}"));
+
+   CheckGroup("DocWalker: a table's shape");
+   // The grid is the column count the emitter pads to; a row holding fewer cells is not padded here,
+   // because padding is what the emitter does and the walk records what the document said.
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/></w:tblGrid>"
+                  "<w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc>"
+                  "<w:tc><w:p><w:r><w:t>c</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "T3---{(P{[a]})(P{[b]})(P{[c]})}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/></w:tblGrid>"
+                  "<w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "T3---{(P{[a]})(P{[b]})}"));
+   // A row reaching past the grid widens the table rather than losing its cell, which is row 19's
+   // "never silently drop columns" read the only way a pipe table can honour it.
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tblGrid><w:gridCol/></w:tblGrid>"
+                  "<w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "T2--{(P{[a]})(P{[b]})}"));
+   // A merge is recorded as a fact and never as a verdict: whether it becomes raw HTML is --tables.
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr><w:tc>" WALK_SPAN_2 WALK_PARA_A "</w:tc></w:tr></w:tbl>", "T2--m{(2:P{[a]})}"));
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr>"
+                  "<w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>",
+                  "T1-m{(vP{[a]})/(^)}"));
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr><w:trPr><w:tblHeader/></w:trPr>" WALK_CELL_A "</w:tr></w:tbl>", "T1-{=(P{[a]})}"));
+   // A cell with no w:p, and a row with no w:tc. The schema forbids both; each is still a column and a
+   // row a reader sees, so neither costs the table its shape.
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr><w:tc/></w:tr></w:tbl>", "T1-{()}"));
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr/></w:tbl>", "T1-{}"));
+   // A table with no rows at all is unwound whole, so it costs no block and no blank line.
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tblGrid><w:gridCol/></w:tblGrid></w:tbl>", ""));
+   CHECK(TracedAs(nullptr,
+                  "<w:p><w:r><w:t>before</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol/></w:tblGrid></w:tbl>"
+                  "<w:p><w:r><w:t>after</w:t></w:r></w:p>",
+                  "P{[before]}P{[after]}"));
+
+   CheckGroup("DocWalker: a table's alignment");
+   // Only the first row's cells can reach a delimiter row, so only the first row's w:jc is kept.
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tr><w:tc><w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr>"
+                  "<w:tr><w:tc><w:p><w:pPr><w:jc w:val=\"right\"/></w:pPr><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "T1c{(P{[a]})/(P{[b]})}"));
+   // start and end are the bidirectional spellings of left and right, which this build has no
+   // bidirectional layout to reverse; both and distribute are alignments GFM cannot spell at all.
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr>" WALK_JC("start") "</w:tr></w:tbl>", "T1l{(P{[a]})}"));
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr>" WALK_JC("end") "</w:tr></w:tbl>", "T1r{(P{[a]})}"));
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr>" WALK_JC("both") "</w:tr></w:tbl>", "T1-{(P{[a]})}"));
+   // A cell spanning two columns aligns both, which is the only reading when one cell speaks for two.
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid><w:tr>"
+                  "<w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr><w:p><w:pPr><w:jc w:val=\"right\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p></w:tc>"
+                  "</w:tr></w:tbl>",
+                  "T2rrm{(2:P{[a]})}"));
+
+   CheckGroup("DocWalker: a table's wrappers and revisions");
+   CHECK(TracedAs(nullptr, "<w:tbl><w:sdt><w:sdtContent>" WALK_ROW_A "</w:sdtContent></w:sdt></w:tbl>", "T1-{(P{[a]})}"));
+   CHECK(TracedAs(nullptr, "<w:tbl><w:ins>" WALK_ROW_A "</w:ins></w:tbl>", "T1-{(P{[a]})}"));
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr><w:customXml>" WALK_CELL_A "</w:customXml></w:tr></w:tbl>", "T1-{(P{[a]})}"));
+   // Accept-all revisions, correctness rule 8: a row a tracked change deleted is not there at all.
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tr><w:trPr><w:del/></w:trPr><w:tc><w:p><w:r><w:t>gone</w:t></w:r></w:p></w:tc></w:tr>"
+                  "<w:tr><w:tc><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "T1-{(P{[kept]})}"));
+
+   CheckGroup("DocWalker: a table nests, and a rewind heals its chain");
+   CHECK(TracedAs(nullptr, "<w:tbl><w:tr><w:tc><w:tbl>" WALK_ROW_IN "</w:tbl><w:p/></w:tc></w:tr></w:tbl>", "T1-n{(T1-{(P{[in]})})}"));
+   // An mc:AlternateContent may wrap a whole table, and the discarded mc:Choice's rows and cells go
+   // with its blocks -- or the next table would inherit records nothing points at.
+   CHECK(TracedAs(nullptr,
+                  "<mc:AlternateContent><mc:Choice Requires=\"x\"><w:tbl>" WALK_ROW_CHOICE "</w:tbl></mc:Choice>"
+                  "<mc:Fallback><w:tbl>" WALK_ROW_FALLBACK "</w:tbl></mc:Fallback></mc:AlternateContent>",
+                  "T1-{(P{[fallback]})}"));
+   // And it may wrap a w:tr inside one, which is the case the chain tails on the walk context exist
+   // for: the row after the discarded one has to link behind the row that really precedes it.
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>first</w:t></w:r></w:p></w:tc></w:tr>"
+                  "<mc:AlternateContent><mc:Choice Requires=\"x\"><w:tr><w:tc><w:p><w:r><w:t>choice</w:t></w:r></w:p></w:tc></w:tr></mc:Choice>"
+                  "<mc:Fallback><w:tr><w:tc><w:p><w:r><w:t>fallback</w:t></w:r></w:p></w:tc></w:tr></mc:Fallback></mc:AlternateContent>"
+                  "<w:tr><w:tc><w:p><w:r><w:t>last</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "T1-{(P{[first]})/(P{[fallback]})/(P{[last]})}"));
+   // The same inside one row, for its cells.
+   CHECK(TracedAs(nullptr,
+                  "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>first</w:t></w:r></w:p></w:tc>"
+                  "<mc:AlternateContent><mc:Choice Requires=\"x\"><w:tc><w:p><w:r><w:t>choice</w:t></w:r></w:p></w:tc></mc:Choice>"
+                  "<mc:Fallback><w:tc><w:p><w:r><w:t>fallback</w:t></w:r></w:p></w:tc></mc:Fallback></mc:AlternateContent>"
+                  "<w:tc><w:p><w:r><w:t>last</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                  "T3---{(P{[first]})(P{[fallback]})(P{[last]})}"));
+
+   CheckGroup("DocWalker: a table says nothing a discarded branch declared");
+   // Everything a table says about its own shape is derived from the records that survived, so a cell
+   // an mc:Fallback replaced leaves behind no column, no alignment and no merge. Accumulated during
+   // the walk instead, the three-cell Choice below widened this table to three columns and aligned its
+   // first one right, and the gridSpan in the second put it into raw HTML --tables never asked for.
+   {
+      cchptr widened = "<w:tbl>" WALK_GRID_2 "<mc:AlternateContent>"
+                       "<mc:Choice Requires=\"zz\"><w:tr>" WALK_JC("right") WALK_CELL_A WALK_CELL_A "</w:tr></mc:Choice><mc:Fallback>" WALK_ROW_FF
+                                                                                                    "</mc:Fallback></mc:AlternateContent></w:tbl>";
+      cchptr merged = "<w:tbl>" WALK_GRID_2 "<w:tr><mc:AlternateContent>"
+                      "<mc:Choice Requires=\"zz\"><w:tc>" WALK_SPAN_2 WALK_PARA_A "</w:tc></mc:Choice>"
+                      "<mc:Fallback>" WALK_CELL_F1 "</mc:Fallback></mc:AlternateContent>" WALK_CELL_F2 "</w:tr></w:tbl>";
+
+      CHECK(TracedAs(nullptr, widened, "T2--{(P{[F1]})(P{[F2]})}"));
+      CHECK(TracedAs(nullptr, merged, "T2--{(P{[F1]})(P{[F2]})}"));
+   }
+   // A nested table that came to nothing must not force its parent into raw HTML it does not need, so
+   // the parent is marked only once the nested one knows it survived.
+   {
+      cchptr hollow = "<w:tbl>" WALK_GRID_1 "<w:tr><w:tc>" WALK_PARA_A "<w:tbl>" WALK_GRID_1 "</w:tbl><w:p/></w:tc></w:tr></w:tbl>";
+      cchptr dead   = "<w:tbl>" WALK_GRID_1 "<w:tr><w:trPr><w:del/></w:trPr>" WALK_CELL_A "</w:tr></w:tbl>";
+      cchptr gone   = "<w:tbl>" WALK_GRID_1 "<w:tr><w:tc>";
+
+      CHECK(TracedAs(nullptr, hollow, "T1-{(P{[a]})}"));
+      char joined[512];
+      ui64 used = 0;
+
+      joined[0] = 0;
+      WalkAppend(joined, sizeof(joined), &used, gone);
+      WalkAppend(joined, sizeof(joined), &used, dead);
+      WalkAppend(joined, sizeof(joined), &used, WALK_PARA_A "</w:tc></w:tr></w:tbl>");
+      CHECK(TracedAs(nullptr, joined, "T1-{(P{[a]})}"));
+   }
+
+   CheckGroup("DocWalker: a table nested past the cap is dropped");
+   {
+      char deep[4096];
+      ui64 used = 0;
+
+      deep[0] = 0;
+      for(ui32 level = 0; level < IR_MAX_TABLE_DEPTH + 1u; ++level) WalkAppend(deep, sizeof(deep), &used, "<w:tbl><w:tr><w:tc>");
+      WalkAppend(deep, sizeof(deep), &used, "<w:p><w:r><w:t>deep</w:t></w:r></w:p>");
+      for(ui32 level = 0; level < IR_MAX_TABLE_DEPTH + 1u; ++level) WalkAppend(deep, sizeof(deep), &used, "</w:tc></w:tr></w:tbl>");
+
+      char wanted[4096];
+      ui64 at = 0;
+
+      wanted[0] = 0;
+      // Every table but the last opens; the one past the cap is skipped whole, so the cell it would
+      // have stood in comes to nothing and the text inside it goes with it.
+      for(ui32 level = 0; level < IR_MAX_TABLE_DEPTH; ++level) {
+         cbool outer = (level + 1u < IR_MAX_TABLE_DEPTH);
+
+         WalkAppend(wanted, sizeof(wanted), &at, (outer ? "T1-n{(" : "T1-{("));
+      }
+      for(ui32 level = 0; level < IR_MAX_TABLE_DEPTH; ++level) WalkAppend(wanted, sizeof(wanted), &at, ")}");
+      CHECK(TracedAs(nullptr, deep, wanted));
+   }
+
    CheckGroup("DocWalker: what is skipped whole");
-   CHECK(TracedAs(nullptr, "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>", ""));
    CHECK(TracedAs(nullptr, "<w:p><w:r><w:drawing><w:t>x</w:t></w:drawing></w:r></w:p>", ""));
    CHECK(TracedAs(nullptr, "<w:p><w:r><w:sym w:font=\"Symbol\" w:char=\"F0B7\"/></w:r></w:p>", ""));
    CHECK(TracedAs(nullptr, "<w:sectPr><w:pgSz w:w=\"1\"/></w:sectPr>", ""));
    CHECK(TracedAs(nullptr, "<w:unheardOf><w:p><w:r><w:t>x</w:t></w:r></w:p></w:unheardOf>", ""));
 
    CheckGroup("DocWalker: a skip does not eat the siblings that follow it");
-   CHECK(TracedAs(nullptr,
-                  "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>in a cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
-                  "<w:p><w:r><w:t>after</w:t></w:r></w:p>",
-                  "P{[after]}"));
    CHECK(TracedAs(nullptr,
                   "<w:unheardOf><w:p><w:r><w:t>inside</w:t></w:r></w:p></w:unheardOf>"
                   "<w:p><w:r><w:t>after</w:t></w:r></w:p>",

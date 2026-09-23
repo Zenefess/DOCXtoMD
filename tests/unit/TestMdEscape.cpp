@@ -3,11 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-22
  * Description: Unit tests for the context-aware escaping writer and the line-start and heading passes.
- * To Do: 1) Add the table-cell pipe cases against a real table once M9 emits one.
- *        2) Check the link-destination rule against the targets real producers write, once M11's
+ * To Do: 1) Check the link-destination rule against the targets real producers write, once M11's
  *           producer-variance corpus makes a real one available to check against.
+ *        2) Check the raw-HTML block rules against what GitHub really renders, which needs a
+ *           round-trip harness this suite deliberately does not have.
  * Dependencies: BuildGuards.h, Check.h, MdEscape.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -25,21 +26,27 @@
 // Escapes a NUL-terminated literal and compares the result with another. Measuring and writing are both
 // exercised, and the two are checked against each other: a disagreement between them would let the
 // emitter reserve one length and write a different one.
-static cbool EscapedAs(cchptr text, cMD_CONTEXT context, cbool dollars, cchptr wanted) {
+static cbool EscapedIn(cchptr text, cMD_CONTEXT context, cbool dollars, cbool pipes, cchptr wanted) {
    char produced[512];
    ui64 length = 0;
    ui64 index  = 0;
 
    while(text[length]) ++length;
 
-   cui64 measured = MdEscapeMeasure(text, length, context, dollars);
-   cui64 written  = MdEscapeWrite(produced, sizeof(produced) - 1u, text, length, context, dollars);
+   cui64 measured = MdEscapeMeasure(text, length, context, dollars, pipes);
+   cui64 written  = MdEscapeWrite(produced, sizeof(produced) - 1u, text, length, context, dollars, pipes);
 
    produced[written] = 0;
    if(measured != written) return false;
    while(produced[index] && produced[index] == wanted[index]) ++index;
    return produced[index] == wanted[index];
 }
+
+// Escapes a run standing outside any table, which is every case but the ones that say otherwise.
+static cbool EscapedAs(cchptr text, cMD_CONTEXT context, cbool dollars, cchptr wanted) { return EscapedIn(text, context, dollars, false, wanted); }
+
+// The same for a run standing inside a table cell, where the pipe is escaped in every context (M9).
+static cbool EscapedInCell(cchptr text, cMD_CONTEXT context, cchptr wanted) { return EscapedIn(text, context, false, true, wanted); }
 
 // The same for a line the caller counted fewer than two dollar signs on, which is every case but the
 // ones that say otherwise: since M6 the verdict belongs to the caller, not to the run.
@@ -170,8 +177,8 @@ void TestMdEscape(void) {
 
       for(ui64 index = 0; index < count; ++index) many[index] = '$';
 
-      cui64 measured = MdEscapeMeasure(many, count, MD_CONTEXT_INLINE, true);
-      cui64 written  = MdEscapeWrite(wide, sizeof(wide), many, count, MD_CONTEXT_INLINE, true);
+      cui64 measured = MdEscapeMeasure(many, count, MD_CONTEXT_INLINE, true, false);
+      cui64 written  = MdEscapeWrite(wide, sizeof(wide), many, count, MD_CONTEXT_INLINE, true, false);
       bool  paired   = true;
 
       for(ui64 index = 0; index < count; ++index) {
@@ -192,6 +199,36 @@ void TestMdEscape(void) {
    // A raw-HTML fallback still has its inner text parsed as inline content, so the inline set applies
    // there too; what changes is that the two bytes that could open markup become entities unguessed.
    CHECK(EscapedIs("a<b>&c", MD_CONTEXT_HTML, "a&lt;b>&amp;c"));
+
+   CheckGroup("MdEscape: a run standing inside a table cell");
+   // Being in a cell composes with every context rather than replacing one, which is why M9 made it an
+   // argument: a cell holds code spans, link text, alt text and raw-HTML fallbacks just as a paragraph
+   // does, and the pipe ends the cell in every one of them.
+   CHECK(EscapedInCell("a|b", MD_CONTEXT_TABLE_CELL, "a\\|b"));
+   CHECK(EscapedInCell("a|b", MD_CONTEXT_INLINE, "a\\|b"));
+   CHECK(EscapedInCell("a|b", MD_CONTEXT_LINK_TEXT, "a\\|b"));
+   CHECK(EscapedInCell("a|b", MD_CONTEXT_ALT_TEXT, "a\\|b"));
+   CHECK(EscapedInCell("a|b", MD_CONTEXT_HTML, "a\\|b"));
+   // GFM splits a row into cells before it parses any inline content, so a pipe ends the cell even
+   // inside a code span -- where "\|" is the one escape GFM honours and nothing else may be escaped.
+   CHECK(EscapedInCell("a*b`c\\d|e", MD_CONTEXT_CODE_SPAN, "a*b`c\\d\\|e"));
+   CHECK(EscapedInCell("a|b", MD_CONTEXT_CODE_BLOCK, "a\\|b"));
+   // A destination percent-encodes the pipe already, so the argument changes nothing there.
+   CHECK(EscapedInCell("a|b", MD_CONTEXT_LINK_DEST, "a%7Cb"));
+   CHECK(EscapedIs("a|b", MD_CONTEXT_LINK_DEST, "a%7Cb"));
+   // And outside a cell nothing but MD_CONTEXT_TABLE_CELL escapes one, which is what keeps the
+   // argument from reaching a document that has no table in it.
+   CHECK(EscapedIs("a|b", MD_CONTEXT_INLINE, "a|b"));
+   CHECK(EscapedIs("a|b", MD_CONTEXT_CODE_SPAN, "a|b"));
+
+   CheckGroup("MdEscape: inside a raw-HTML block, where no Markdown is parsed");
+   // A CommonMark HTML block runs to the next blank line and every byte of it is passed through, so a
+   // backslash there is a backslash a reader sees: the only escapes are entities.
+   CHECK(EscapedIs("a*b_c`d[e]~f\\g", MD_CONTEXT_HTML_BLOCK, "a*b_c`d[e]~f\\g"));
+   CHECK(EscapedIs("a&b<c>d\"e", MD_CONTEXT_HTML_BLOCK, "a&amp;b&lt;c&gt;d&quot;e"));
+   // The dollar and the pipe are inert there too: no inline parser ever sees them.
+   CHECK(EscapedAs("$5 and $6", MD_CONTEXT_HTML_BLOCK, true, "$5 and $6"));
+   CHECK(EscapedInCell("a|b", MD_CONTEXT_HTML_BLOCK, "a|b"));
    CHECK(EscapedIs("plain", MD_CONTEXT_HTML, "plain"));
    CHECK(EscapedIs("*n*", MD_CONTEXT_HTML, "\\*n\\*"));
    CHECK(EscapedIs("5 < 6", MD_CONTEXT_HTML, "5 &lt; 6"));

@@ -3,15 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-23
  * Description: The document walk: WordprocessingML body content into the intermediate representation.
- * To Do: 1) Walk w:tbl into table blocks at M9.
- *        2) Run the field state machine over w:fldChar and w:instrText at M10, which today are skipped.
- *        3) Save and restore the paragraph classification around a nested paragraph when M9 walks a cell.
- *        4) Honour a deleted paragraph mark by joining the paragraph with the next one (M10).
- *        5) Extract a text box's w:txbxContent in place (row 38), which today is inside a picture
+ * To Do: 1) Run the field state machine over w:fldChar and w:instrText at M10, which today are skipped.
+ *        2) Honour a deleted paragraph mark by joining the paragraph with the next one (M10).
+ *        3) Extract a text box's w:txbxContent in place (row 38), which today is inside a picture
  *           container and so is scanned for a blip and otherwise dropped.
- * Dependencies: Ir.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h
+ * Dependencies: Ir.h, NumberingModel.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -74,7 +72,7 @@ typedef const WALK_STATUS cWALK_STATUS;
 ///       because a paragraph may legitimately be an item of a list *and* be one of those. Row 12's
 ///       monospace guess does not apply to a paragraph that carries one, and neither does row 25's
 ///       horizontal rule: a paragraph wearing a list marker did not come to nothing.
-/// @note What M7 does not walk yet, and skips whole rather than descending into: w:tbl, the field
+/// @note What this build does not walk yet, and skips whole rather than descending into: the field
 ///       elements, the note and comment references, w:sym and m:oMath. Each arrives with the milestone
 ///       that can emit it, except m:oMath and w:sym, which have none yet and are the two places text is
 ///       lost rather than merely unformatted -- both are DocWalker.cpp's To Do item 3. An element this
