@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: Line assembly, inline delimiters, the blank-line discipline and every block kind's shape.
  * To Do: 1) Emit a fenced block inside a *quote*, which no block kind can express today: a paragraph
  *           is a quotation or a fence and never both, so only a list item reaches a prefixed fence.
@@ -1719,8 +1719,10 @@ static cbool MdHtmlCell(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_CE
 // name, because a pad carries no attribute and a cell that does writes its own closing bracket.
 static cbool MdEmitHtmlPad(MD_EMITTERptrc emitter, cchptr open, cchptr close) { return MdAppendText(emitter, open) && MdAppendText(emitter, close); }
 
-// Emits one table as a raw <table>. Every row is one line and no line is blank, because a CommonMark
-// HTML block ends at the first blank line and whatever followed would be read as Markdown again.
+// Emits one table as a raw <table>. No line is blank, because a CommonMark HTML block ends at the first
+// blank line and whatever followed would be read as Markdown again. Every row is one line except where
+// a cell holds a nested table, which opens on that cell's line and puts each of its own rows, and its
+// </table>, on a line of its own.
 //
 // The open-merge count per column is what makes the grid exact. A cell a rowspan above already covers
 // writes nothing, and a w:vMerge continuation that *nothing* covers -- which a producer writes when an

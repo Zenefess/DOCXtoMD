@@ -3,11 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: Parsed command line, the hard-break policy, and the usage and version writers.
- * To Do: 1) Consume the options the converter does not read yet: --media-dir and --no-images.
- *        2) Hand the input list and --threads count to Batch when M13 adds the bounded worker pool (D7a).
- *        3) Add the remaining policy switches CONVERSION_REFERENCE.md 6.3 lists, once their stages exist.
+ * To Do: 1) Hand the input list and --threads count to Batch when M13 adds the bounded worker pool (D7a).
+ *        2) Add the remaining policy switches CONVERSION_REFERENCE.md 6.3 lists, once their stages exist.
  * Dependencies: Diag.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant

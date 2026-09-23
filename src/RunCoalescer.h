@@ -3,11 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-09-09
+ * Last Modified: 2026-09-23
  * Description: The coalescing pass: adjacent runs merged on equal formatting, whitespace hoisted out.
  * To Do: 1) Stop merging across a field-result boundary when M10 introduces one.
- *        2) Coalesce a table cell's own blocks once M9 gives a block children.
- *        3) Benchmark an AVX2 scan for the first and last non-space byte of a span before adopting one.
+ *        2) Benchmark an AVX2 scan for the first and last non-space byte of a span before adopting one.
  * Dependencies: Ir.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant

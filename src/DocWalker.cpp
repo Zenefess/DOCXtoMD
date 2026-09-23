@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: The body walk: wrappers, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
@@ -51,7 +51,7 @@ static_assert(sizeof(WALK_RESULT_TEXT) / sizeof(WALK_RESULT_TEXT[0]) == ui64(WAL
 //-- Walk state
 
 // Where in the document's shape a child list is being read. The transparent wrappers -- w:ins, w:sdt,
-// w:smartTag, w:customXml, mc:AlternateContent -- appear at both levels and are handled once for both.
+// w:smartTag, w:customXml, mc:AlternateContent -- appear at every level and are handled once for all four.
 enum DOC_LEVEL : si32 {
    DOC_LEVEL_BLOCK = 0, ///< Children are block items: paragraphs, tables, wrappers
    DOC_LEVEL_RUN,       ///< Children are run-level items: runs, hyperlinks, wrappers
@@ -943,8 +943,9 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    bool          begun     = false;
    bool          head      = false;
    bool          ok        = true;
-   // Saved and restored rather than merely cleared: a paragraph nests inside a table cell from M9, and a
-   // cell's paragraph must not settle the classification of the one the table stands in.
+   // Saved and restored rather than merely cleared, so that a paragraph walked while another is open
+   // cannot settle the outer one's classification. Nothing this build reads nests one -- a w:tbl is a
+   // sibling of a paragraph and never a child of one -- so the case it guards is still hypothetical.
    cbool outerText = context->sawText;
    cbool outerMono = context->allMono;
 
@@ -1457,8 +1458,8 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
 
 //-- The walk
 
-// Handles the one start element the reader is on, at one of the two levels, consuming it whole. Every
-// transparent wrapper appears at both levels and is handled here once for both, which is why the two
+// Handles the one start element the reader is on, at one of the four levels, consuming it whole. Every
+// transparent wrapper appears at every level and is handled here once for all four, which is why the
 // levels are one function: w:ins around a paragraph and w:ins around a run mean exactly the same thing.
 static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 paragraphStyle, cbool heading) {
    // Accept-all revisions, correctness rule 8: an insertion is not there, and a deletion is gone.

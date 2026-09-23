@@ -293,7 +293,7 @@ def build_all(verbose=True, writing=True):
         blocks = 1 + 2 * max([p.count(b"\x00\x00\xff\xff") for p in payloads] or [0])
         report.append((name, len(entries), types, blocks))
 
-    # -- sound containers. Each exits 5: the container is verified, but no build before M5 converts.
+    # -- sound containers. Each exits 0: the container is verified and the document converted.
 
     stored = [make_entry(name, raw, method="store") for name, raw in parts]
     note("minimal-stored.docx", stored)

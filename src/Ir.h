@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: The intermediate representation: blocks, spans and the arena the walker builds them in.
  * To Do: 1) Add the note-reference span kind at M10. M8 deliberately added no block kind for a list:
  *           an item's *kind* is what its content is -- a paragraph, a quotation, a line of code -- and
@@ -110,9 +110,9 @@ constexpr cui8 IR_TABLE_NONE   = 0x00u;
 constexpr cui8 IR_TABLE_MERGED = 0x01u; ///< Some cell spans columns or rows, which GFM cannot say
 constexpr cui8 IR_TABLE_NESTED = 0x02u; ///< Some cell holds a table, which GFM cannot say at all
 
-/// What one row is. A header row is the first row and only the first row -- see IR_ROW_HEADER.
+/// What one row is. IR_ROW_HEADER records a w:tblHeader; the emitter's header is the first row regardless.
 constexpr cui8 IR_ROW_NONE   = 0x00u;
-constexpr cui8 IR_ROW_HEADER = 0x01u; ///< The row a GFM delimiter row stands under
+constexpr cui8 IR_ROW_HEADER = 0x01u; ///< The row carried w:tblHeader, which the emitter does not read
 
 /// What one cell is beyond its content.
 constexpr cui8 IR_CELL_NONE     = 0x00u;
@@ -153,12 +153,12 @@ constexpr cui32 IR_NO_INDEX = 0xFFFFFFFFu;
 /// @note The block range is what lets the emitter skip the whole table in its top loop, and what lets
 ///       IrDropEmptyBlocks move a table without looking inside one. Nothing inside a table is ever
 ///       dropped, so every record of one table moves by the same delta.
-/// @note A table's rows are a **chain** and not a range, which is the one place this module gives up a
-///       contiguous array, and a nested table is why. A cell's content is walked where it stands, so a
-///       table inside the first cell of a row appends its own rows to the same array between that row
-///       and the next one of the outer table -- no order of appending makes both contiguous, because a
-///       second nested table in a second cell interleaves again. Chaining costs one field and makes
-///       the question disappear; the emitter walks a table's rows once, so nothing chases twice.
+/// @note A table's rows and a row's cells are **chains** and not ranges, which are the two places this
+///       module gives up a contiguous array, and a nested table is why. A cell's content is walked where
+///       it stands, so a table inside the first cell of a row appends its own rows and cells to the same
+///       arrays before the outer row's next cell and the outer table's next row -- no order of appending
+///       makes both contiguous, because a second nested table in a second cell interleaves again.
+///       Chaining costs one field and makes the question disappear; every walk of a chain goes forward.
 /// @note The column alignments live in an arena of their own rather than in an array here, for the
 ///       reason every other arena in this module exists: a fixed array of IR_MAX_COLUMNS would make a
 ///       record of a one-column table 256 bytes wide, and a part is free to declare a great many
@@ -192,7 +192,7 @@ struct IR_CELL {
    ui32 span;       ///< How many grid columns it covers, which is w:gridSpan and at least 1
    ui32 nextCell;   ///< The next cell of the same row, or IR_NO_INDEX
    ui8  flags;      ///< The IR_CELL bits in force
-   ui8  align;      ///< What the first w:jc any of its paragraphs stated said, as an IR_ALIGN
+   ui8  align;      ///< The first alignment a w:jc of its paragraphs named, as an IR_ALIGN
 };
 
 /// Constant and pointer forms of the table records, spelled per GCS r2/t2.
@@ -428,7 +428,7 @@ csi32 IrBeginCell(IR_DOCUMENTptrc document, csi32 row, csi32 after, cui32 span, 
 /// @param document  A prepared document.
 /// @param cell      Which cell, as IrBeginCell returned it; a negative index does nothing.
 /// @param blockAt   The block count before the cell's content was walked.
-/// @param align     What the first w:jc any of its paragraphs stated said. It is stored on the cell
+/// @param align     The first alignment a w:jc of its paragraphs named. It is stored on the cell
 ///                  rather than spread over the table's columns here, because which row this cell is
 ///                  in is the caller's question and only the first row's cells reach a delimiter row.
 void IrEndCell(IR_DOCUMENTptrc document, csi32 cell, cui32 blockAt, cIR_ALIGN align);

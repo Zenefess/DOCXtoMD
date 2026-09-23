@@ -20,12 +20,14 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   by the rule that merges it outside one, a heading in a cell takes its place in the slug numbering, a
   picture in a cell takes its place in the media numbering, and a list inside a cell continues a list
   outside it -- which is what Word draws.
-- `IR_TABLE`, `IR_ROW` and `IR_CELL` beside the blocks, plus a fourth arena holding one `IR_ALIGN` per
-  column of the tables that have any. A table's rows are a **chain** rather than a range, which is the
-  one place the IR gives up a contiguous array: a cell's content is walked where it stands, so a table
-  inside the first cell of a row appends its own rows between that row and the next one of the outer
-  table -- and no order of appending fixes it, because a second nested table in a second cell interleaves
-  again. The chain costs one field per record and the emitter walks a table's rows once.
+- `IR_TABLE`, `IR_ROW` and `IR_CELL` beside the blocks, plus a third byte arena holding one `IR_ALIGN`
+  per column of the tables that have any. A table's rows and a row's cells are **chains** rather than
+  ranges, which are the two places the IR gives up a contiguous array: a cell's content is walked where it
+  stands, so a table inside the first cell of a row appends its own rows and cells before the outer row's
+  next cell and the outer table's next row are appended -- and no order of appending fixes it, because a
+  second nested table in a second cell interleaves again. A chain costs one field per record, and every
+  walk of one goes forward: the pipe form walks a table's rows once, and the raw-HTML form also walks
+  forward from a `w:vMerge` restart through the rows below it.
 - The chain **tails live on the walker**, not in `Ir`, which is what makes a rewind cost two integers. An
   `mc:AlternateContent` may wrap a `w:tr` or a `w:tc`, so a discarded `mc:Choice` can build rows that
   `IrRewind` throws away and the next row has to link behind the row that really precedes it;
@@ -43,9 +45,10 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   sees out of the output.
 - Grid normalization. A table is as wide as the **wider** of what `w:tblGrid` declares and what the
   widest row's cells reach -- the grid is authoritative (2.5) but it is not a ceiling, and clamping to it
-  is exactly the silent loss mapping row 19 forbids. Every row is then padded to that width, which is
-  not cosmetic: GFM reads a pipe table only where the delimiter row holds as many cells as the header,
-  so one short row turns the whole table into a paragraph.
+  is exactly the silent loss mapping row 19 forbids. Every row is then padded to that width, which for
+  the header row is not cosmetic: GFM reads a pipe table only where the delimiter row holds as many cells
+  as the header, so a short header row turns the whole table into a paragraph. A renderer pads a short
+  body row itself, so padding those is this build's choice rather than GFM's requirement.
 - Alignment from the first row's own `w:jc` (row 18), spread over the columns each cell covers. `start`
   and `end` read as left and right, having no bidirectional layout here to reverse them against;
   `both` and `distribute` are alignments GFM cannot spell and become none.
@@ -498,6 +501,20 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- Comments and file prologs that the M9 tree contradicted. `DocWalker.h` still listed walking `w:tbl` and
+  saving the paragraph classification around a cell as To Do items -- the first is M9's own work and the
+  second has existed since M6 -- named `w:tbl` among what the walk skips whole, and left out of its
+  Dependencies the `NumberingModel.h` it has included since M8. `RunCoalescer.h` waited for M9 to give a
+  block children, which M9 deliberately did not do, and `CliOptions.h` waited to consume `--media-dir`
+  and `--no-images`, which `ConvertFile` has read since M7. `DocWalker.cpp` counted two dispatch levels
+  where there are four, and justified saving the paragraph classification by a table standing inside a
+  paragraph, which never happens. `Ir.h` described `IR_ROW_HEADER` as the first row when it records a
+  `w:tblHeader` the emitter never reads, called a table's rows the one chain when a row's cells are
+  chained too, said the emitter walks a table's rows once when the raw-HTML form walks on from each
+  `w:vMerge` restart, and said a cell's alignment is the first `w:jc` any of its paragraphs states when a
+  `both`, a `distribute` or an unknown value leaves it open. `MdEmitter.cpp` said every raw-HTML row is
+  one line, which a row holding a nested table is not. `tests/make_fixtures.py` said every sound
+  container exits 5, directly above a table expecting 0. Comments only -- no executable line changed.
 - A `w:vMerge` restart **wider than the row continuing it** made the raw-HTML form render one column
   wider than the pipe form of the same document. `MdRowSpanOf` counted the merge run at the restart's
   first column alone while the open-merge table was stamped across the restart's whole span, so the
@@ -551,8 +568,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   by a `TestMdEmitter` case.
 - `tests/fixtures/wrappers` said "A table is skipped whole until M9" inside its one table. It is not
   skipped any more, so the sentence and the `expected.md` beside it both changed -- which is the golden
-  runner doing its job: fourteen fixtures share `minimal/expected.md`, and one sentence that stopped
-  being true failed two checks rather than none.
+  runner doing its job: the fixture compares against its own `expected.md`, so one sentence that stopped
+  being true failed that fixture's two checks, the written file and `--stdout`, rather than none.
 - **A padded value in `numbering.xml` is read again.** `NumParseValue` capped a `w:val` at eleven
   characters -- ten digits and a sign -- which is the defect below, one layer further in. All eight of
   its callers seed their destination with -1 and ignore the result, so every discard was silent: a

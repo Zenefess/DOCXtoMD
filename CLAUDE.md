@@ -289,27 +289,34 @@ below.
     reading an ordered marker: a tenth digit is not a list at all, so a hostile `w:start` costs a wrong
     number rather than a lost list.
   - `Ir.h`/`Ir.cpp` — the intermediate representation the walker builds, RunCoalescer rewrites and the
-    emitter reads: blocks and spans as arrays of POD records over two growable byte arenas -- one for
-    span text and, since M7, a second for destinations and anchor names -- each addressed by offset so a
-    growth invalidates nothing. The split is load-bearing rather than tidy: every text span of a block
-    lies end to end in the text arena, which is the invariant `RunCoalescer` merges on, and a destination
-    written between two runs would put a gap in the middle of it. Five block kinds since M6 — paragraph, heading, quote, code
+    emitter reads: blocks and spans as arrays of POD records over growable byte arenas -- one for span
+    text, since M7 a second for destinations and anchor names, and since M9 a third for column
+    alignments -- each addressed by offset so a growth invalidates nothing. The split between the first
+    two is load-bearing rather than tidy: every text span of a block lies end to end in the text arena,
+    which is the invariant `RunCoalescer` merges on, and a destination written between two runs would
+    put a gap in the middle of it. Five block kinds since M6 — paragraph, heading, quote, code
     and rule — and **M8 added no sixth**: a block carries the `numId` the walk read, its level, the
     number the counter pass settled and a flag byte instead, because being an item of a list is a second
-    fact a document may state about a paragraph whose kind is already something else.
+    fact a document may state about a paragraph whose kind is already something else. That is not a
+    hypothetical — `tests/fixtures/liststyles` carries a blockquote that is an item and an inline-code
+    paragraph that is an item, and a sixth kind would have had to choose between the two facts.
     **M9 added the sixth**, `IR_BLOCK_TABLE`, and it is a kind rather than a flag for the opposite
     reason: a table is not a second fact about a paragraph, it is not a paragraph at all. It carries no
     spans -- its content is the blocks of its cells -- and beside it sit three record arrays, `IR_TABLE`,
-    `IR_ROW` and `IR_CELL`, plus a fourth arena holding one `IR_ALIGN` per column of the tables that have
-    any. **A cell's blocks are ordinary blocks in the one flat array, in document order**, which is what
-    leaves `RunCoalesce`, `LinkResolveRefs`, `LinkResolveAnchors`, `MediaPlan` and `NumAssignMarkers`
-    untouched: each reads one array in the order the document is read, and a paragraph in a cell is a
-    paragraph. A list inside a cell therefore continues a list outside it, which is what Word draws.
-    A table's rows are a **chain** and not a range, and that is the one place this module gives up a
-    contiguous array. A cell's content is walked where it stands, so a table inside the first cell of a
-    row appends its own rows between that row and the next one of the outer table -- and no order of
-    appending fixes it, because a second nested table in a second cell interleaves again. The chain costs
-    one field per record and the emitter walks a table's rows once, so nothing chases twice.
+    `IR_ROW` and `IR_CELL`, plus the third byte arena, which holds one `IR_ALIGN` per column of the tables
+    that have any. **A cell's blocks are ordinary blocks in the one flat array, in document order**,
+    which is what leaves `RunCoalesce`, `LinkResolveRefs`, `LinkResolveAnchors`, `MediaPlan` and
+    `NumAssignMarkers` untouched: each reads one array in the order the document is read, and a
+    paragraph in a cell is a paragraph. A list inside a cell therefore continues a list outside it,
+    which is what Word draws.
+    A table's rows and a row's cells are **chains** and not ranges, and those are the two places this
+    module gives up a contiguous array. A cell's content is walked where it stands, so a table inside the
+    first cell of a row appends its own rows and cells before the outer row's next cell and the outer
+    table's next row are appended -- and no order of appending fixes it, because a second nested table in
+    a second cell interleaves again. A chain costs one field per record, and every walk of one goes
+    forward: the pipe form walks a table's rows once, and the raw-HTML form also walks forward from a
+    `w:vMerge` restart through the rows below it, which is `MdRowSpanOf` and is bounded as the
+    `MdEmitter` bullet says.
     The tails of those chains live on the **walker** and not here, which is what makes a rewind cost two
     integers: an `mc:AlternateContent` may wrap a `w:tr` or a `w:tc`, so a discarded `mc:Choice` can build
     rows that `IrRewind` then throws away, and the next row has to link behind the row that really
@@ -326,23 +333,23 @@ below.
     every record of it -- and of every table nested inside it -- by the single delta that applies where
     the table stands, which is exact because the only blocks that go are outside every table. What a cell
     then has to cope with is a block that emits nothing, which is an empty cell: a shape a table has
-    anyway and one the emitter already writes. That is not a
-    hypothetical — `tests/fixtures/liststyles` carries a blockquote that is an item and an inline-code
-    paragraph that is an item, and a sixth kind would have had to choose between the two facts. Three
-    kinds of block are exempt from the emptiness test: a rule is an empty paragraph by
-    construction, an empty code paragraph is a blank line inside a fence, and an **empty list item** is a
-    marker on a line of its own — Word writes them, the counter has already counted one, and unwinding
-    the block would leave a hole in the numbers. `IrHasContent` is the public twin of the test
+    anyway and one the emitter already writes. Four kinds of block are exempt from the emptiness test: a
+    rule is an empty paragraph by construction, a table has no spans of its own because its content is
+    the blocks of its cells, an empty code paragraph is a blank line inside a fence, and an **empty list
+    item** is a marker on a line of its own — Word writes them, the counter has already counted one, and
+    unwinding the block would leave a hole in the numbers. `IrHasContent` is the public twin of the test
     `IrEndBlock` applies to itself, because the emitter asks the same question when it trims a list's two
     edges, and `IrSetListRef` is what the walker records a reference through. `IrEndBlock` trims a
     block's leading and trailing break spans — except inside a fence, where a break *is* a newline and
     no marker is written for it, so the reason to trim one never arises and trimming loses a line — and
     then unwinds the whole block — records, spans and arena — when nothing but ASCII whitespace is left,
     which is
-    what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` have two callers, both in
+    what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` have three callers, all in
     `DocWalker`: `mc:AlternateContent`, where the first `mc:Choice` is walked speculatively and rewound
-    if an `mc:Fallback` turns out to follow it, and -- since M7 -- the picture walk, which opens an image
-    span before it knows whether the container holds a reference and rewinds it when none turns up. A non-breaking space counts as content, per mapping row 35.
+    if an `mc:Fallback` turns out to follow it; since M7, the picture walk, which opens an image span
+    before it knows whether the container holds a reference and rewinds it when none turns up; and since
+    M9, the table walk, which opens a table's block before its first row and rewinds the whole table when
+    no row survives. A non-breaking space counts as content, per mapping row 35.
   - `DocWalker.h`/`DocWalker.cpp` — the body walk, one dispatcher for both block and run level because
     every transparent wrapper appears at both and means the same thing at each. Accept-all revisions
     (correctness rule 8): `w:ins` and `w:moveTo` are transparent, `w:del` and `w:moveFrom` are dropped
@@ -413,12 +420,13 @@ below.
     `w:ins` and an `mc:AlternateContent` all mean at those levels exactly what they mean at the others.
     A row a tracked change **deleted** is dropped whole with its content, which is correctness rule 8
     read the only way that keeps a row a reader still sees out of the output. Alignment is the first
-    `w:jc` any paragraph of a cell states, kept for the first row only, because a GFM delimiter row is
-    the only place an alignment can be written and it stands under the header. A table nested past
-    `IR_MAX_TABLE_DEPTH` is skipped whole, which is the bound that keeps this walk's *stack* off the
-    document's content -- the tokenizer's own element cap would stop a runaway eventually, but only
-    after a great many frames. A table that turns out to have no rows is unwound entirely, so an empty
-    `w:tbl` costs no block and no blank line.
+    `w:jc` among a cell's paragraphs that names left, centre or right -- a `both`, a `distribute` or an
+    unknown value does not settle it, so a later paragraph still can -- kept for the first row only,
+    because a GFM delimiter row is the only place an alignment can be written and it stands under the
+    header. A table nested past `IR_MAX_TABLE_DEPTH` is skipped whole, which is the bound that keeps
+    this walk's *stack* off the document's content -- the tokenizer's own element cap would stop a
+    runaway eventually, but only after a great many frames. A table that turns out to have no rows is
+    unwound entirely, so an empty `w:tbl` costs no block and no blank line.
     What is skipped whole and why:
     `w:instrText` and `w:fldChar` (M10's field state machine),
     `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
@@ -591,21 +599,24 @@ below.
     written as HTML rather than as Markdown -- `<strong>`, `<em>`, `<del>`, `<code>`, `<a href>`,
     `<img>`, `<br>`, and text through `MD_CONTEXT_HTML_BLOCK` -- because a CommonMark HTML block passes
     every byte of itself through unparsed, so a `**` there would reach the reader as two asterisks.
-    Every row is one line and no line is blank, or the block would end and the rest would be read as
-    Markdown again. An open-merge count per column is what makes the grid exact: a cell a rowspan
-    already covers writes nothing, and a `w:vMerge` continuation that *nothing* covers -- which a
-    producer writes when an intervening row spans across the column the merge was opened in -- is an
-    ordinary empty cell rather than nothing at all, because dropping it leaves the row a column short.
+    No line is blank, or the block would end and the rest would be read as Markdown again; every row is
+    one line except where a cell holds a nested table, which opens on that cell's line and puts each of
+    its own rows, and its `</table>`, on a line of its own. An open-merge count per column is what makes
+    the grid exact: a cell a rowspan already covers writes nothing, and a `w:vMerge` continuation that
+    *nothing* covers -- which a producer writes when an intervening row spans across the column the merge
+    was opened in -- is an ordinary empty cell rather than nothing at all, because dropping it leaves the
+    row a column short.
     A `rowspan` is written only where **every** column the restart covers is continued below it, since
     that is the whole of what a rectangle can promise: a restart wider than its continuation claimed
     columns nothing continued, and a browser then pushed the next cell of that row past them, so the
-    raw-HTML form rendered a column wider than the pipe form of the same document. `MdRowSpanOf` also
-    stops at the first column to reach the one it is asked about and is never asked at all for a cell
-    outside the grid, which is what keeps it linear: without both, 64,000 merges in a 21 KB `.docx`
-    took sixteen seconds. A cell's trailing padding and the `<br>` it hid are trimmed in **both**
-    forms by one function over whichever buffer holds the cell -- the line buffer for a pipe row, the
-    output itself for raw HTML -- because a cell is one line and a break with nothing after it is
-    dropped everywhere else in this emitter. A content-free item is a marker
+    raw-HTML form rendered a column wider than the pipe form of the same document. `MdRowSpanOf`'s inner
+    walk also stops at the first column no continuation claims and never looks past the restart's own
+    end, and the function is never asked at all for a cell outside the grid, which is what keeps it
+    linear: without both, 64,000 merges in a 21 KB `.docx` took sixteen seconds. A cell's trailing
+    padding and the `<br>` it hid are trimmed in **both** forms by one function over whichever buffer
+    holds the cell -- the line buffer for a pipe row, the output itself for raw HTML -- because a break
+    at the end of a cell has no next line to start, and a break with nothing after it is dropped
+    everywhere else in this emitter. A content-free item is a marker
     on a line of its own in the middle of a list and
     nothing at all at either **end** of one, so a list's two edges are trimmed: an empty last item is
     the paragraph a user leaves behind on pressing Enter to get out of a list, and an empty first one is
@@ -1013,7 +1024,8 @@ below.
   `TestMdEmitter`'s helper runs every pass `Convert.cpp` runs, in the same order, so what it measures is
   the shape the program really produces; with no package a relationship resolves to nothing, so a
   `w:anchor` link is the half of M7 the emitter suite can reach and the rest is the goldens' to prove.
-  Since M9 it also drives `--tables`, which is the one policy an emitter case can choose.
+  Since M9 it also drives `--tables`, beside the `--hard-break` policy it already took; those two are
+  the policies an emitter case can choose.
   Since M8 it runs `NumAssignMarkers` in that order too, over a numbering part the case supplies as a
   literal, which is what lets the emitter's list rules — the content-column indent, the `<!-- -->`, the
   three blank-line shapes and the setext hazard — be driven without a package.
@@ -1052,11 +1064,11 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
 At M9 they return **141**, **106** and **1419** checks, over the **75** fixtures `make_fixtures.py`
-builds, and all three have been run on the shim only -- the last Windows run was M8's, on 2026-09-22,
-which returned 133, 94 and 1334 over 71 fixtures. The three check counts are the interesting ones: they
-are what the shim measures on Linux, and at every milestone since M3 they have been exactly what the
-real MSVC binary then returned. The fixture count is not evidence of that -- `make_fixtures.py` is the
-same Python on both platforms -- and is recorded only so a run that builds a different number is noticed.
+builds. All four were confirmed on Windows on 2026-09-23. The three check counts are the interesting
+ones: they are what the shim measures on Linux, and at every milestone since M3 they have been exactly
+what the real MSVC binary then returned. The fixture count is not evidence of that -- `make_fixtures.py`
+is the same Python on both platforms -- and is recorded only so a run that builds a different number is
+noticed.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -1392,16 +1404,18 @@ forbidden; before D6 it was.
   pinned against its enum row like every other, so the refusal path is wired even where the threshold is
   not driven. Generated fixtures would settle all three and are the obvious thing for **M11** to add,
   where hostile input is the milestone rather than a footnote.
-- **Three M9 limits are declared and reachable by no test, and one M6 promise is still not exercised.**
+- **One M9 limit is declared and reachable by no test, and one M6 promise is still not exercised.**
   `IR_MAX_COLUMNS` clamps a table at 256 columns and `IR_MAX_TABLE_DEPTH` drops a table nested past
-  twelve; the depth cap **is** driven by a unit case, and the column cap is not -- a literal declaring
-  257 `w:gridCol` is the same kind of unreadable fixture M8's 4,096 caps were, and the same M11 will
-  settle. What a cell past the cap loses is a column, which is the one place this build stops honouring
-  "never drop a column" and says so in `IrBeginCell`'s own comment. And `DocWalker`'s save and restore
-  of the paragraph classification, which M6 wrote and M9's roadmap entry expected to exercise, is
-  **still exercised by nothing**: a `w:tbl` is a sibling of a paragraph and never a child of one, so a
-  cell's paragraphs are walked with no outer paragraph open. The save is right and the case it guards
-  is hypothetical; M10's footnote bodies are the next candidate to make it real.
+  twelve; the depth cap **is** driven by a unit case, and the column cap is not. Unlike M8's 4,096 caps
+  it is not expensive to reach -- 257 `w:gridCol` is about 3 KB of literal, and a single
+  `<w:gridSpan w:val="257"/>` reaches the same clamp -- so what is missing is only the case, and M11
+  will settle it with the others. What a cell past the cap loses is a column, which is the one place
+  this build stops honouring "never drop a column" and says so in `IrBeginCell`'s own comment. And
+  `DocWalker`'s save and restore of the paragraph classification, which M6 wrote and M9's roadmap entry
+  expected to exercise, is **still exercised by nothing**: a `w:tbl` is a sibling of a paragraph and
+  never a child of one, so a cell's paragraphs are walked with no outer paragraph open. The save is
+  right and the case it guards is hypothetical; M10's footnote bodies are the next candidate to make it
+  real.
 - **`w:gridBefore` and `w:gridAfter` are not read, and two loops are dead because of it.** A row may
   declare that it starts part-way across the grid, which is what Word writes for an indented row or one
   whose leading cells were deleted; M9 reads neither element, so such a row's cells slide left into the
@@ -1415,20 +1429,23 @@ forbidden; before D6 it was.
   writes a gap by omitting a cell, which is not something WordprocessingML can express. Both comments
   now say what is true, and the loops are kept as the code `w:gridBefore` will need rather than deleted
   as dead.
-- **Nothing caps how many rows or cells a table may hold, and `<w:tc/>` is this build's largest IR
-  amplifier.** `IR_MAX_COLUMNS` caps the *emitted grid*, not the *stored records* -- `IrBeginCell`
+- **Nothing caps how many rows or cells a table may hold, and `<w:tc/>` is one of this build's largest
+  IR amplifiers.** `IR_MAX_COLUMNS` caps the *emitted grid*, not the *stored records* -- `IrBeginCell`
   declines to clamp on purpose, so that two cells of one row can never claim the same column -- so a
   row may hold an unbounded number of `IR_CELL`s and a table an unbounded number of `IR_ROW`s. Seven
   input bytes retain a 24-byte record, and at the archive's own per-entry ceiling that is a file-to-peak
-  memory ratio in the thousands. It is bounded by the ZIP caps rather than unbounded, and those caps
-  were sized before M9 existed. **M11 owns it**, with the two 4,096 numbering caps and the 256-column
-  one: the fix is the ceiling the columns already have, and capping cells per row at `IR_MAX_COLUMNS`
-  would be the natural shape of it.
+  memory ratio in the thousands. It is not the only seven-byte element that does: an interior
+  `<w:br/>` keeps a 24-byte `IR_SPAN`, and `RunCoalesce` then reserves three span slots for every span,
+  so a break costs more than a cell once the coalescer has run. It is bounded by the ZIP caps rather
+  than unbounded, and those caps were sized before M9 existed. **M11 owns it**, with the two 4,096
+  numbering caps and the 256-column one: the fix is the ceiling the columns already have, and capping
+  cells per row at `IR_MAX_COLUMNS` would be the natural shape of it.
 - **The raw-HTML fallback renders no cell decoration, and that is a limit rather than an oversight.**
   A `w:tcPr` may carry `w:tcBorders`, `w:shd` and `w:vAlign`, and the `<table>` form could carry all
   three where the pipe form can carry none. M9 reads none of them: the fallback exists to keep a merge
   and a nested table expressible, and adding style to it would make the two forms differ in more than
-  structure. Both module headers carry it as a `To Do`.
+  structure. Three module headers -- `Ir.h`, `MdEmitter.h` and `MdEscape.h` -- carry it as a `To Do`,
+  naming `w:shd` and `w:tcBorders`.
 - **`w:lvlRestart` with a value is pinned at the unit level only.** `0` (never restart) and an absent one
   (restart under any shallower level) are both driven by `tests/fixtures/listcounters`; `N` is driven by
   `TestNumberingModel` alone, because a fixture for it would exercise nothing the counters fixture does
@@ -1517,9 +1534,9 @@ implementation session must respect:
 | An ordered marker past nine digits | Capped there, and the counter saturates at the same value. CommonMark stops reading an ordered marker at nine digits, so a tenth makes the paragraph stop being a list at all: a hostile `w:start` costs a wrong number rather than a lost list |
 | Two adjacent lists that must not merge | `<!-- -->` at the level's own indentation, with no blank line either side (row 17) — but **only between two ordered lists**. What a merge costs is the second list's start number, which two bullet lists do not have, so a comment between those would be markup written for no one; a pair whose marker kinds differ separates itself. Session-derived at M8 |
 | A marker-less continuation paragraph, a nested list starting at a number other than 1, and a nested list whose first item is empty | Each takes a blank line in front of it, because each is a block that cannot interrupt a paragraph. The last matters most and fails silently: a lone `-` under a line of text is a **setext underline**, so the line above becomes a heading rather than merely losing its structure |
-| Tables | GFM pipe tables; header = first row (or `tblHeader`); cell breaks → `<br>`; merged → padded GFM cells (gridSpan: content in first cell + empty pads; vMerge continue: empty cell; HTML `<table>` under `--tables=html-on-merge`); nested → HTML `<table>` fallback |
+| Tables | GFM pipe tables; header = first row (a later `tblHeader` row is not promoted — see the next row); cell breaks → `<br>`; merged → padded GFM cells (gridSpan: content in first cell + empty pads; vMerge continue: empty cell; HTML `<table>` under `--tables=html-on-merge`); nested → HTML `<table>` fallback |
 | The header row, where several rows carry `w:tblHeader` or none does | **The first row, always.** GFM has exactly one header row and it is the one at the top, so a later `w:tblHeader` cannot be promoted without reordering the document — and the block array's order is what `LinkResolver`'s heading slugs and `MediaExtractor`'s picture numbering are both counted in. 2.5 offers an all-empty header row as a policy where the first row is clearly data; it is declined, because it costs a row of the reader's screen to say something no producer's markup actually asked for. Session-derived at M9 |
-| How wide a pipe table is | The **wider** of what `w:tblGrid` declares and what the widest row's cells actually reach. The grid is authoritative (2.5) but it is not a ceiling: a row whose cells reach past it has columns the grid did not declare, and clamping to the grid is exactly the silent loss row 19 forbids. Every row is then padded to that width, because GFM reads a pipe table only where the delimiter row holds as many cells as the header — one short row and the whole table is a paragraph. Session-derived at M9 |
+| How wide a pipe table is | The **wider** of what `w:tblGrid` declares and what the widest row's cells actually reach. The grid is authoritative (2.5) but it is not a ceiling: a row whose cells reach past it has columns the grid did not declare, and clamping to the grid is exactly the silent loss row 19 forbids. Every row is then padded to that width. For the header row that is required: GFM reads a pipe table only where the delimiter row holds as many cells as the header, so a short header row turns the whole table into a paragraph. A renderer pads a short body row itself, so padding those is this build's choice rather than GFM's requirement. Session-derived at M9 |
 | Column alignment | `:---`, `:---:` or `---:` from the **first row's** own `w:jc`, because a delimiter row is the only place an alignment can be written and it stands under the header. `start` and `end` read as left and right, having no bidirectional layout here to reverse them against (2.5's `w:bidiVisual` is "note and ignore"); `both` and `distribute` are alignments GFM cannot spell and become none. A cell spanning several columns aligns all of them. Session-derived at M9 |
 | Block content in a pipe table's cell | Flattened to one line, its blocks joined by `<br>`: a list item keeps its marker as literal text, because losing `3.` from a cell loses the document's own count; a code paragraph becomes a **code span**, which is the inline form of the fence it would otherwise have been; a heading, a quotation and a horizontal rule keep only what they say, because a `#` or a `> ` in a cell is literal text a reader has to ignore. Nesting inside a cell's list is lost, which is a known limit rather than a policy: GFM has no spelling for indentation inside a cell. Session-derived at M9 |
 | A `w:vMerge` restart wider than the row continuing it | The `rowspan` is written only where **every** column the restart covers is continued, so a ragged merge becomes an ordinary cell of its own width and the row below it keeps its columns. HTML can only spell a rectangle; counted at the restart's first column alone, the cell claimed columns nothing continued and a browser pushed the next cell of that row past them, so the raw-HTML form rendered one column wider than the pipe form of the same document. Session-derived at M9, and found by the grid oracle once its generator was widened to put a restart on a spanning cell |
@@ -1535,7 +1552,7 @@ implementation session must respect:
 | EMF and WMF | Extracted and linked like any other picture, which reference 1.2 leaves to policy between that and a warning. Session-derived at M7: no Markdown renderer will display one, but the file is what the document had and dropping it loses more than linking it does |
 | Footnotes/endnotes | `[^n]` refs + definitions at end, renumbered 1..n |
 | Horizontal rule (`pBdr` bottom on empty ¶) | `---` with blank lines around |
-| `w:br` (textWrapping) / page break | Backslash hard break (`<br>` in cells, under either table form, because a row is one line by construction) / nothing |
+| `w:br` (textWrapping) / page break | Backslash hard break (`<br>` in cells, under either table form: a pipe table's row is one line by construction, and a line end inside an HTML cell renders only as a space) / nothing |
 | Hidden text | Dropped, for `w:vanish` (a toggle) and `w:webHidden` (nearest-wins) alike |
 | `w:caps` | The run's text is uppercased — ASCII and the Latin-1 supplement, which is where a 0x20 offset is exactly right; anything beyond needs Unicode's case tables and is a `To Do` |
 | TOC (field or SDT), headers/footers, comments | Skipped |
@@ -1554,7 +1571,8 @@ implementation session must respect:
 
 M9 added no module, which is worth stating where a reader counts them: a table is a shape over blocks
 that already exist rather than a stage of its own, so it landed in `Ir`, `DocWalker`, `MdEscape`,
-`MdEmitter` and `CliOptions` and the count stayed at twenty.
+`MdEmitter` and `CliOptions`, plus one line of `Convert` that hands `--tables` to the emitter, and the
+count stayed at twenty.
 
 **Written so far (M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9)**: `src/main.cpp`, `src/BuildGuards.h`,
 `src/CliOptions.h`/`.cpp`, `src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`,
@@ -1611,7 +1629,8 @@ src/
                          [written at M5; the .cpp is a session addition, see above; the list fields on
                          a block at M8, which added no sixth block kind; M9's table records, the sixth
                          block kind and the row and cell chains -- a cell's blocks are blocks in the
-                         same flat array, which is why no pass between the walk and the emitter changed]
+                         same flat array, which is why no pass between the walk and the emitter changed
+                         but IrDropEmptyBlocks, which moves a table whole]
    DocWalker.h/.cpp      document walk → IR (tracked changes, sdt, AlternateContent) [written at M5;
                          hyperlinks, pictures and bookmarks at M7; w:numPr read as a reference at M8;
                          w:tbl, w:tr and w:tc at M9, as two more dispatch levels so that every
@@ -2422,7 +2441,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   converts to the same bytes either way, so the container and golden tallies stand at **133** and
   **94**; the unit suite gains ten checks and returns **1344**, measured on the shim and not on
   Windows. The marker stays `[done]` on M5's precedent: a verification record is of what was run, and
-  a later bug fix does not un-verify a milestone.
+  a later bug fix does not un-verify a milestone. The gap that left -- the changed `DocWalker` and
+  `NumberingModel` and their ten checks never having been through `/W3` or run on Windows -- was closed
+  by M9's Windows run on 2026-09-23, which built both clean along with the rest of the solution and
+  whose 1419 unit checks include all ten.
   - **The three tallies are the shim's, exactly.** 133, 94 and 1334, the same three numbers in the same
     order a Linux session measured before any of this reached a Windows machine, and the fixture count
     with them. That is the **sixth** milestone running where the shim predicted the real MSVC binary
@@ -2501,14 +2523,28 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     Windows where it cannot be identical, and it was never a substitute for any of that -- what stays
     Linux-only is the other half of the pair, AddressSanitizer and UndefinedBehaviorSanitizer, neither
     of which is switched on in `DOCXtoMD.vcxproj`.
-- **M9 `[done-unverified]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.
+- **M9 `[done]` Tables** — grid normalization, gridSpan/vMerge policy, HTML fallback.
   DoD: the milestone names no commands of its own, so the global five apply; `tests/fixtures/tables`,
   `tablemerges`, `tablenested` and `tablecells` are the fixture pairs bullet 4 asks for.
-  **Status**: the code landed from Linux on 2026-09-22 as `[done-unverified]`. Every command a Linux
-  session can run passes — see the two verification bullets below — and none of the four a Windows one
-  must run has been run, which is the whole of what the marker means. **A Windows session must verify
-  before starting new work**: both x64 configurations build with zero warnings at `/W3`, and the three
-  suites return **141**, **106** and **1419**.
+  **Status**: the code landed from Linux on 2026-09-22 as `[done-unverified]`, and the owner verified it
+  on Windows on 2026-09-23. Both x64 configurations build with **zero errors and zero warnings**;
+  `python tests\make_fixtures.py` builds all **75** fixtures; `python tests\run_container.py` passes all
+  **141** checks against `x64\Release` and all **141** again against `x64\Debug`;
+  `python tests\run_golden.py` passes all **106**; and `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
+  **1419**. Those runs discharge the two global bullets no Linux session can reach: bullet 1, zero
+  warnings at `/W3`, and bullet 4, where `run_golden.py` byte-compares the `tables`, `tablemerges`,
+  `tablenested` and `tablecells` pairs against an `expected.md` written by hand from the specification
+  before the converter was run at it. Bullets 2, 3 and 5 are mechanical and were checked on Linux, so
+  the marker is `[done]` with nothing outstanding.
+  - **The three tallies are the shim's, exactly.** 141, 106 and 1419, the same three numbers in the
+    same order a Linux session measured before any of this reached a Windows machine, and the fixture
+    count with them. That is the **seventh** milestone running where the shim predicted the real MSVC
+    binary rather than only itself -- and it is worth what it costs precisely because it proves nothing
+    about `/W3`, `/sdl`, `/arch:AVX2` or the real `include/` headers, which is what the owner's run
+    covers instead. The Debug run carries its own half of that: `/RTCu` is where an indeterminate read
+    surfaces, and Debug is where `mzero`'s aligned 256-bit path over the two `al32` structures M9 grew
+    -- `IR_DOCUMENT`, which gained the table records and the align arena, and `MD_EMITTER`, which gained
+    the table mode, each pinned by its own `static_assert` -- would fault had the alignment been lost.
   - **What the milestone is, in one line**: a `w:tbl` becomes a GFM pipe table, or a raw `<table>` where
     a nested table or `--tables=html-on-merge` asks for one. `src/` gained **no new module**, which is
     the first milestone since M2 that did not: a table is a shape over the blocks that already exist,
@@ -2613,8 +2649,9 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     one nested thirteen deep is dropped.
   - **Every rule M9 introduced was mutation-tested**, the way M6 established and M7 and M8 repeated,
     and the two the battery found unpinned are now pinned: the trailing-`<br>` trim, in both forms, and
-    the ragged merge above. One mutation is *deliberately* left surviving and is recorded under Known
-    gaps rather than papered over — the inter-cell gap loop, which no input this build reads can reach.
+    the ragged merge above. Two mutations are *deliberately* left surviving and are recorded under Known
+    gaps rather than papered over — the inter-cell gap loop in each table form, `MdEmitPipeRow`'s and
+    `MdEmitTableHtml`'s, which no input this build reads can reach.
 - **M10 `[todo]` Fields, notes, tracked changes** — field state machine, footnotes/endnotes, sdt,
   accept-all revisions. Two things M9 leaves for it by name: a second part's relationships, which is
   what finally tests that relationship ids are scoped per part (M4's open coverage gap), and a
