@@ -82,6 +82,13 @@ static constexpr cchptr NUMS = NUM_A NUM_B NUM_C NUM_D NUM_E NUM_F NUM_G NUM_H N
 #define T2         "<w:tbl>" GRID(COL COL)
 #define CELLS(c)   "<w:tr><w:tc>" c "</w:tc></w:tr></w:tbl>"
 
+// M11's rows that start part-way across the grid, and the three-column table they are measured against.
+#define ROWP(p, c)      "<w:tr><w:trPr>" p "</w:trPr>" c "</w:tr>"
+#define GRID_BEFORE(n)  "<w:gridBefore w:val=\"" n "\"/>"
+#define GRID_AFTER(n)   "<w:gridAfter w:val=\"" n "\"/>"
+#define RESTART_CELL(t) "<w:tc>" VRESTART "<w:p><w:r><w:t>" t "</w:t></w:r></w:p></w:tc>"
+#define ABC3            "<w:tbl>" GRID(COL COL COL) "<w:tr>" CELL("a") CELL("b") CELL("c") "</w:tr>"
+
 // One numbered paragraph: its level, its numId and its text. Two halves, for the same reason.
 #define NUM_PR(level, id)     "<w:numPr><w:ilvl w:val=\"" level "\"/><w:numId w:val=\"" id "\"/></w:numPr>"
 #define ITEM_HEAD(level, id)  "<w:p><w:pPr>" NUM_PR(level, id) "</w:pPr>"
@@ -315,6 +322,12 @@ static cbool Cited(cchptr note, cchptr wanted) {
 // the default table policy, which is every case but the ones that name --tables.
 static cbool ConvertsWith(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cHARD_BREAK hardBreak) {
    return ConvertsUnder(styleBody, numberBody, body, wanted, hardBreak, TABLE_MODE_GFM);
+}
+
+// Appends a NUL-terminated literal to a buffer the caller has sized, for the cases that build one in a loop.
+static void EmitPut(chptrc dest, ui64ptrc length, cchptr text) {
+   for(ui64 index = 0; text[index]; ++index) dest[(*length)++] = text[index];
+   dest[*length] = 0;
 }
 
 // Converts under the html-on-merge policy, which is the one thing --tables changes.
@@ -1026,6 +1039,43 @@ void TestMdEmitter(void) {
 
       CHECK(Converts(shifted, "| a | b |\n| --- | --- |\n| c | d |\n\nafter\n"));
    }
+
+   CheckGroup("MdEmitter: a row that starts part-way across the grid");
+   // w:gridBefore, which Word writes for an indented row and for a row whose leading cells were deleted:
+   // the row's cells start where it says, and the columns before them are empty cells rather than the
+   // row sliding left. Both table forms fill the gap the same way.
+   {
+      cchptr indented = ABC3 ROWP(GRID_BEFORE("1"), CELL("e") CELL("f")) ROWP(GRID_BEFORE("2") GRID_AFTER("0"), CELL("i")) "</w:tbl>";
+
+      CHECK(Converts(indented, "| a | b | c |\n| --- | --- | --- |\n|  | e | f |\n|  |  | i |\n"));
+      CHECK(Merged(ABC3 ROWP(GRID_BEFORE("1"), "<w:tc>" WIDE2 "<w:p><w:r><w:t>ef</w:t></w:r></w:p></w:tc>") "</w:tbl>",
+                   "<table>\n<tr><th>a</th><th>b</th><th>c</th></tr>\n<tr><td></td><td colspan=\"2\">ef</td></tr>\n</table>\n"));
+   }
+   // A vertical merge is matched by column, so a row shifted by w:gridBefore continues the merge in the
+   // column the document meant rather than in the one its cell count would put it in.
+   CHECK(Merged(T2 "<w:tr>" CELL("a") RESTART_CELL("b") "</w:tr>" ROWP(GRID_BEFORE("1"), "<w:tc>" VMERGED "<w:p/></w:tc>") "</w:tbl>",
+                "<table>\n<tr><th>a</th><th rowspan=\"2\">b</th></tr>\n<tr><td></td></tr>\n</table>\n"));
+   // A cell starting inside the grid and spanning past IR_MAX_COLUMNS spans only what is left of it, in the
+   // raw-HTML form as in the pipe one: written with its whole w:gridSpan its row came out wider than
+   // every other. The grid oracle found it at the cap's edge, which no fixture reaches.
+   {
+      static char edge[4096];
+      static char wanted[4096];
+      ui64        used = 0;
+      ui64        at   = 0;
+
+      EmitPut(edge, &used, "<w:tbl><w:tr>");
+      EmitPut(wanted, &at, "<table>\n<tr>");
+      for(ui32 column = 0; column + 1u < IR_MAX_COLUMNS; ++column) {
+         EmitPut(edge, &used, "<w:tc/>");
+         EmitPut(wanted, &at, "<th></th>");
+      }
+      EmitPut(edge, &used, "<w:tc><w:tcPr><w:gridSpan w:val=\"3\"/></w:tcPr><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>");
+      EmitPut(wanted, &at, "<th>x</th></tr>\n</table>\n");
+      CHECK(Merged(edge, wanted));
+   }
+   // w:gridAfter reaches the table's width when nothing else declares the columns it leaves empty.
+   CHECK(Converts("<w:tbl>" ROWP(GRID_AFTER("2"), CELL("a")) "</w:tbl>", "| a |  |  |\n| --- | --- | --- |\n"));
 
    CheckGroup("MdEmitter: the raw-HTML fallback");
    // A nested table has no pipe form at all, so it takes the fallback whatever --tables says.

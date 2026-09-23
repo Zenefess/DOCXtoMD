@@ -158,6 +158,7 @@ struct STYLE_PARAGRAPH_PROPS {
    si32       numLevel;     ///< The effective w:ilvl, resolved the same way; -1 when no layer named one
    STYLE_ROLE role;         ///< What the style chain says the paragraph is
    ui8        headingLevel; ///< 1 to 6 when the paragraph is a heading, otherwise 0
+   si8        border;       ///< The nearest w:pBdr along the chain: 1 row 25's rule, 0 any other, -1 none
 };
 
 /// Constant form of STYLE_PARAGRAPH_PROPS, spelled per GCS r2.
@@ -196,6 +197,7 @@ struct STYLE_RECORD {
    si32             outlineLvl;   ///< w:pPr/w:outlineLvl, or -1 when this style does not specify it
    si32             numId;        ///< w:pPr/w:numPr/w:numId, or -1 when this style does not specify it
    si32             numLevel;     ///< w:pPr/w:numPr/w:ilvl, or -1 when this style does not specify it
+   si8              border;       ///< w:pPr/w:pBdr: 1 row 25's rule pattern, 0 any other, -1 none here
    STYLE_ROLE       role;         ///< What this one style's own name and id say it is
    ui8              headingLevel; ///< 1 to 9 as the name said, before clamping; 0 when the role is not heading
    si8              doubleStrike; ///< -1 unspecified, 0 specified false, 1 specified true
@@ -213,6 +215,7 @@ struct STYLE_RESOLVED {
    si32             outlineLvl;   ///< The nearest w:outlineLvl along the chain, or -1
    si32             numId;        ///< The nearest w:numPr/w:numId along the chain, or -1
    si32             numLevel;     ///< The nearest w:numPr/w:ilvl along the chain, or -1
+   si8              border;       ///< The nearest w:pBdr along the chain, as STYLE_RECORD reads it, or -1
    STYLE_ROLE       role;         ///< The nearest role along the chain
    ui8              headingLevel; ///< Its heading level, before clamping
    si8              doubleStrike; ///< The nearest w:dstrike along the chain, or -1
@@ -365,6 +368,11 @@ cchptr StyleName(cSTYLE_MODELptr model, csi32 styleIndex);
 /// @note The numbering is returned whatever the role is, a heading included. The walker needs to know
 ///       that a heading carried a w:numPr in order to drop its marker knowingly rather than by never
 ///       having looked.
+/// @note So is the border, and for the same reason. It is the nearest w:pBdr along the chain taken as a
+///       whole, which is what LibreOffice's Horizontal Line style needs -- its rule lives in the style
+///       and the paragraph carries none of its own. A paragraph's own w:pBdr is the walker's to read and
+///       wins outright; w:docDefaults is deliberately not read for it, since a document default border
+///       would make every empty paragraph in the document a horizontal rule.
 cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleIndex, csi32 directOutline, csi32 directNumId, csi32 directLevel);
 
 /// Resolves the properties in force on one run.
@@ -402,6 +410,20 @@ cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cS
 ///       names. A w:rFonts carrying only w:asciiTheme leaves the verdict unspecified rather than false:
 ///       the theme part is not loaded, and a specified false would override an inherited monospace.
 void StyleReadDirectProperty(XML_READERptrc reader, STYLE_DIRECT_RUNptrc direct);
+
+/// Reads the w:pBdr the reader is on and consumes it, reporting whether its borders are the pattern Word
+/// writes for an autoformatted horizontal rule: a bottom or a between border and no other (CONVERSION_
+/// REFERENCE 2.4 and mapping row 25).
+/// @param reader  A reader whose last token is the start of a w:pBdr.
+/// @param rule    Receives true for the rule's pattern and false for any other set of borders.
+/// @return false only when the part stopped being readable.
+/// @note One reader for a style's w:pBdr and a paragraph's own, for the reason StyleReadDirectProperty is
+///       one reader for both halves of a w:rPr: two copies of a rule are how its two uses drift apart.
+/// @note A w:val of none or nil is a border switched off, which every producer writes rather than omitting
+///       the element; a border element with no w:val at all is taken as present. The sides are matched by
+///       name, so an element this build has never heard of -- a vendor extension, an mc:AlternateContent
+///       -- is ignored rather than counted as a border, which is the OOXML compatibility model.
+cbool StyleReadBorders(XML_READERptrc reader, boolptrc rule);
 
 /// Clears a direct run-property record to "nothing specified".
 /// @param direct  Receives the cleared record. May not be null.

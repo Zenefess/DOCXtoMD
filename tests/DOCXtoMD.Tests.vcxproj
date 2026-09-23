@@ -118,6 +118,7 @@
     <ClCompile Include="unit\TestStyleModel.cpp" />
     <ClCompile Include="unit\TestUtf.cpp" />
     <ClCompile Include="unit\TestXmlPull.cpp" />
+    <ClCompile Include="unit\TestZipReader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\BuildGuards.h" />

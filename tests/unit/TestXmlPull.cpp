@@ -3,9 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-09-23
  * Description: Unit tests for XmlPull: token streams driven from string literals, and every refusal.
- * To Do: 1) Add the producer-shaped fixtures (Google Docs, LibreOffice, Pandoc) when M11 collects them.
+ * To Do: 1) Tokenize literals cut from the producer parts M11 collected in tests/fixtures, which reach
+ *           the tokenizer today only through the goldens.
  *        2) Drive a fuzz corpus through XmlNext once a corpus exists to drive it from.
  * Dependencies: BuildGuards.h, Check.h, XmlPull.h, typedefs.h, memory management.h, windows.h, stdio.h
  * ISA: Scalar

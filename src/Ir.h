@@ -175,11 +175,23 @@ struct IR_TABLE {
 };
 
 /// One row of one table, and a link to the next row of the same table.
+/// @note skipBefore is w:gridBefore, the one place WordprocessingML lets a row start part-way across the
+///       grid: Word writes it for an indented row and for a row whose leading cells were deleted. The row's
+///       first cell starts there rather than at column 0, which is what leaves the columns before it empty
+///       instead of sliding every cell of the row left. skipAfter is w:gridAfter, the same at the far end,
+///       and counts toward the table's width without placing anything.
 struct IR_ROW {
-   ui32 firstCell; ///< The row's first cell, or IR_NO_INDEX when it has none
-   ui32 nextRow;   ///< The next row of the same table, or IR_NO_INDEX
-   ui8  flags;     ///< The IR_ROW bits in force
+   ui32 firstCell;  ///< The row's first cell, or IR_NO_INDEX when it has none
+   ui32 nextRow;    ///< The next row of the same table, or IR_NO_INDEX
+   ui16 skipBefore; ///< w:gridBefore: grid columns before the first cell, clamped to IR_MAX_COLUMNS
+   ui16 skipAfter;  ///< w:gridAfter: grid columns after the last cell, clamped to IR_MAX_COLUMNS
+   ui8  flags;      ///< The IR_ROW bits in force
 };
+
+// The two offsets are 16 bits because IR_MAX_COLUMNS fits there, which keeps a row record at sixteen
+// bytes: an empty w:tr is seven bytes of input, and a row is one of the records a hostile part can
+// make this module hold the most of per byte it spends.
+static_assert(IR_MAX_COLUMNS <= 0xFFFFu, "Ir: IR_ROW keeps its grid offsets in 16 bits, so IR_MAX_COLUMNS must fit in them.");
 
 /// One cell of one row, and a link to the next cell of the same row. Its blocks are a contiguous range
 /// in the document's own block array, because a cell's content is walked where it stands and every pass
@@ -438,12 +450,14 @@ void IrEndTable(IR_DOCUMENTptrc document, csi32 table, csi32 lastRow, cui32 grid
 /// @param table     Which table, as IrBeginTable returned it.
 /// @param after     The row this one follows, or -1 when it is the table's first.
 /// @param header    Whether the row carried w:trPr/w:tblHeader.
+/// @param skipBefore  The row's w:gridBefore, 0 when it has none; a value past IR_MAX_COLUMNS is clamped.
+/// @param skipAfter   The row's w:gridAfter, 0 when it has none; clamped the same way.
 /// @return Which row it is, or -1 when the document could not grow.
 /// @note The caller holds the chain's tail rather than this module, and that is what makes a rewind
 ///       cost nothing: an mc:AlternateContent may wrap a w:tr, and the walker that unwinds a discarded
 ///       mc:Choice restores its own tail, so the next row links behind the row that really precedes it
 ///       and IrEndTable writes the terminator. Nothing here has to find a chain's severed end.
-csi32 IrBeginRow(IR_DOCUMENTptrc document, csi32 table, csi32 after, cbool header);
+csi32 IrBeginRow(IR_DOCUMENTptrc document, csi32 table, csi32 after, cbool header, cui32 skipBefore, cui32 skipAfter);
 
 /// Closes a row, terminating its cell chain.
 /// @param document  A prepared document.
@@ -458,10 +472,25 @@ void IrEndRow(IR_DOCUMENTptrc document, csi32 row, csi32 lastCell);
 /// @param span      The w:gridSpan, clamped to at least 1.
 /// @param flags     The IR_CELL bits the cell's w:tcPr named.
 /// @return Which cell it is, or -1 when the document could not grow.
-/// @note The cell's column is where the cell before it ended, because w:gridSpan says how many columns
-///       a cell covers and nothing says which -- so a row is read left to right and a cell begins where
-///       its predecessor stopped. A row whose cells reach past the grid still reports each one's start.
+/// @note The cell's column is IrNextColumn's answer, because w:gridSpan says how many columns a cell
+///       covers and nothing says which -- so a row is read left to right from its w:gridBefore and a cell
+///       begins where its predecessor stopped. A row whose cells reach past the grid still reports each
+///       one's start.
 csi32 IrBeginCell(IR_DOCUMENTptrc document, csi32 row, csi32 after, cui32 span, cui8 flags);
+
+/// The grid column the next cell of a row would start at.
+/// @param document  A prepared document.
+/// @param row       Which row, as IrBeginRow returned it.
+/// @param after     The cell the next one would follow, or -1 when it would be the row's first.
+/// @return Where the cell before it ended, or the row's w:gridBefore for its first cell; 0 for a row
+///         outside the document.
+/// @note Exposed so the walker can refuse a cell before any of it is stored. A cell starting at or past
+///       IR_MAX_COLUMNS is outside every grid the emitter writes, so the walker skips it whole -- its
+///       record, its content, and every picture, list item and note reference inside it -- which is the
+///       cap on cells per row that M11 put beside the cap on columns. Without it a row could hold any
+///       number of IR_CELL records at seven bytes of input apiece, and a picture in a cell nobody could
+///       see was still extracted to disk.
+cui32 IrNextColumn(cIR_DOCUMENTptr document, csi32 row, csi32 after);
 
 /// Closes a cell, recording the blocks its content turned out to be.
 /// @param document  A prepared document.

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Rows that start part-way across the grid.</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
+      <w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Team</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Role</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:trPr><w:gridBefore w:val="1"/><w:wBefore w:w="3000" w:type="dxa"/></w:trPr><w:tc><w:p><w:r><w:t>platform</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>lead</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:trPr><w:gridBefore w:val="2"/></w:trPr><w:tc><w:p><w:r><w:t>reviewer</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:trPr><w:gridAfter w:val="1"/><w:wAfter w:w="3000" w:type="dxa"/></w:trPr><w:tc><w:p><w:r><w:t>Kim</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>ops</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+    <w:p><w:r><w:t>A table whose only width past its one cell is that row's own trailing columns.</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tr><w:trPr><w:gridAfter w:val="2"/></w:trPr><w:tc><w:p><w:r><w:t>alone</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+    <w:p><w:r><w:t>After the tables.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+  </w:body>
+</w:document>

@@ -3,10 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: Unit tests for the context-aware escaping writer and the line-start and heading passes.
- * To Do: 1) Check the link-destination rule against the targets real producers write, once M11's
- *           producer-variance corpus makes a real one available to check against.
+ * To Do: 1) Check the link-destination rule against the targets real producers write, once a corpus holds
+ *           an awkward one: M11's exports all link https://example.com/page, which needs no escaping.
  *        2) Check the raw-HTML block rules against what GitHub really renders, which needs a
  *           round-trip harness this suite deliberately does not have.
  * Dependencies: BuildGuards.h, Check.h, MdEscape.h, typedefs.h

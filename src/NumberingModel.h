@@ -72,6 +72,10 @@ typedef const NUM_RESULT cNUM_RESULT;
 /// What one level's w:numFmt classifies as. The enumeration ST_NumberFormat holds sixty-odd tokens and
 /// this reader needs none of them by name: GitHub-Flavored Markdown can spell a bullet, a decimal
 /// number and nothing else, so every counting format collapses onto one value.
+/// @note A level whose w:lvlText is written as blank space -- one or more spaces, tabs or no-break spaces
+///       -- is NUM_FORMAT_PLAIN whatever its w:numFmt says, because a marker a reader cannot see is not a
+///       marker. Pandoc writes a bullet level of " " for a list item's continuation paragraphs. An empty
+///       w:lvlText is left as its w:numFmt says; NumberingModel.cpp's NumMarkerIsBlank says why.
 /// @note An unrecognised token, and an absent w:numFmt, both read as NUM_FORMAT_ORDERED. Every token
 ///       the specification defines but bullet and none is a counting format, so a token this build has
 ///       never heard of is far likelier to be one than to be a bullet -- and degrading it to a bullet
@@ -81,7 +85,7 @@ enum NUM_FORMAT : si8 {
    NUM_FORMAT_ABSENT  = -1, ///< No definition at all: the numId names no list this model can resolve
    NUM_FORMAT_ORDERED = 0,  ///< A counting format, whatever its glyph; the marker is a decimal number
    NUM_FORMAT_BULLET,       ///< w:numFmt bullet, or a level whose marker is a picture
-   NUM_FORMAT_PLAIN         ///< w:numFmt none: an item indented like its neighbours with no marker at all
+   NUM_FORMAT_PLAIN         ///< w:numFmt none, or w:lvlText of blank space: an item with no marker at all
 };
 
 /// Constant form of NUM_FORMAT, spelled per GCS r2.

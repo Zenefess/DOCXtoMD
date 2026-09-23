@@ -170,6 +170,35 @@ static cNUM_FORMAT NumFormatOfToken(cXML_TEXT value) {
    return NUM_FORMAT_ORDERED;
 }
 
+// Whether a w:lvlText value is written out as blank space: one or more spaces, tabs or no-break spaces and
+// nothing else. Pandoc writes a bullet level of " " for a list item's continuation paragraphs, so that Word
+// indents one like an item and draws no marker beside it.
+//
+// An *empty* value is deliberately not blank here. What an empty w:lvlText draws on a bullet level is a
+// question no producer this build has seen answers -- none of the four writes one -- and the one fixture
+// that carries it, tests/fixtures/tablecells, was verified on Windows reading it as a bullet. Widening this
+// to cover it is one line, and it should be done on evidence rather than on a reading of the schema.
+static cbool NumMarkerIsBlank(cXML_TEXT value) {
+   ui64 index = 0;
+
+   if(!value.length) return false;
+
+   while(index < value.length) {
+      cui8 byte = ui8(value.bytes[index]);
+
+      if(byte == ' ' || byte == '\t') {
+         ++index;
+         continue;
+      }
+      if(byte == 0xC2u && index + 1u < value.length && ui8(value.bytes[index + 1u]) == 0xA0u) {
+         index += 2u; // U+00A0, which is what a no-break space is spelled in UTF-8
+         continue;
+      }
+      return false;
+   }
+   return true;
+}
+
 // Reads the w:lvl the reader is on and consumes it, reporting which level it defines.
 //
 // Children are accumulated and evaluated at the close tag rather than as they arrive: the schema fixes
@@ -180,6 +209,7 @@ static cbool NumReadLevel(XML_READERptrc reader, NUM_LEVELptrc level, si32ptrc i
    si32       start     = -1;
    si32       restart   = -1;
    bool       picture   = false;
+   bool       blank     = false;
 
    *ilvl = -1;
    NumParseValue(XmlAttribute(reader, XML_NS_W, "ilvl"), ilvl);
@@ -195,6 +225,11 @@ static cbool NumReadLevel(XML_READERptrc reader, NUM_LEVELptrc level, si32ptrc i
          format = NumFormatOfToken(XmlAttribute(reader, XML_NS_W, "val"));
       } else if(XmlIsElement(reader, XML_NS_W, "lvlRestart")) {
          NumParseValue(XmlAttribute(reader, XML_NS_W, "val"), &restart);
+      } else if(XmlIsElement(reader, XML_NS_W, "lvlText")) {
+         // Only a w:lvlText that is written and blank counts. An absent one says nothing about the marker.
+         cXML_TEXT value = XmlAttribute(reader, XML_NS_W, "val");
+
+         blank = (value.bytes != nullptr && NumMarkerIsBlank(value));
       } else if(XmlIsElement(reader, XML_NS_W, "lvlPicBulletId")) {
          // A level whose marker is a picture cannot count, so it is a bullet whatever w:numFmt says.
          // The picture itself is never extracted: it is list decoration rather than document content,
@@ -213,6 +248,12 @@ static cbool NumReadLevel(XML_READERptrc reader, NUM_LEVELptrc level, si32ptrc i
    level->start   = start;
    level->restart = restart;
    level->format  = (picture ? NUM_FORMAT_BULLET : format);
+   // A marker a reader cannot see is not a marker. A level whose w:lvlText draws nothing is a continuation
+   // paragraph of the list, which is what w:numFmt none says in so many words -- so it becomes that, and
+   // is not given a "-" or a number the document never showed. A picture bullet draws its picture whatever
+   // the text says, which is why it is the one exception. The counter still counts such a level, exactly
+   // as it counts a numFmt none one: the specification increments a level whatever its marker looks like.
+   if(blank && !picture) level->format = NUM_FORMAT_PLAIN;
    return true;
 }
 
@@ -823,5 +864,9 @@ cchptr NumResultText(OPC_PACKAGEptrc package, cNUM_MODELptr model, cNUM_RESULT r
    // of an element" does not say which, and the numbering part is found through a relationship, not by name.
    if(result == NUM_ERROR_XML && model && model->lastXml != XML_OK) return OpcMessageIn(package, XmlResultText(model->lastXml), model->part);
    if(result < 0 || result >= NUM_RESULT_COUNT) return "the numbering part could not be read";
+   // So does every other sentence about the part's content -- a root that is not w:numbering, and more
+   // definitions than the caps allow, which M11's generated fixtures found saying neither which part nor
+   // where. A failed allocation is this program's problem rather than the part's, and names nothing.
+   if(result != NUM_OK && result != NUM_ERROR_MEMORY && model) return OpcMessageIn(package, NUM_RESULT_TEXT[result], model->part);
    return NUM_RESULT_TEXT[result];
 }

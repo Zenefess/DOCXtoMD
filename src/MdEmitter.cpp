@@ -1539,11 +1539,9 @@ static cbool MdEmitPipeRow(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR
       cIR_CELLptr cell = IrCellAt(document, index);
 
       if(!cell) break;
-      // Defensive, and reachable by nothing this build reads: a cell's column is derived from the one
-      // before it in IrBeginCell rather than taken from the document, so a row's cells are contiguous
-      // and this loop cannot run. What would make it live is w:gridBefore, the one place OOXML lets a
-      // row start part-way across the grid -- see the note in CLAUDE.md's Known gaps. Kept because
-      // filling a gap is what that element will need, and because closing one up slides a row left.
+      // The columns a row's w:gridBefore leaves empty in front of its first cell. A row's cells are
+      // otherwise contiguous -- each starts where the one before it ended -- so this is the one gap a
+      // row can have, and filling it rather than closing it up is what keeps the row from sliding left.
       while(column < cell->column && column < table->columns) {
          if(!MdEmitPipeCell(emitter, document, nullptr)) return false;
          ++column;
@@ -1844,10 +1842,19 @@ static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, c
          cIR_CELLptr cell = IrCellAt(document, at);
 
          if(!cell) break;
+
+         // A cell spans only the grid it stands in. One starting inside the grid and spanning past its
+         // edge -- which only IR_MAX_COLUMNS can make happen, since IrEndTable widens a table to every
+         // other cell's reach -- is written as wide as the columns left to it. Written with its whole
+         // w:gridSpan it made its row wider than every other, which is the ragged grid a colspan exists
+         // to prevent; M11's grid oracle found it at the cap's edge, and the pipe form never had it.
+         cui32 room  = (cell->column < table->columns ? table->columns - cell->column : 0u);
+         cui32 width = (cell->span < room ? cell->span : room);
+
          if(cell->flags & IR_CELL_VMERGED) {
             // A continuation the merge above it covers writes nothing at all; one that nothing covers
             // is an ordinary empty cell, because dropping it leaves the row a column short.
-            for(ui32 span = 0; span < cell->span && column < IR_MAX_COLUMNS; ++span, ++column) {
+            for(ui32 span = 0; span < width && column < IR_MAX_COLUMNS; ++span, ++column) {
                if(!held[column] && !MdEmitHtmlPad(emitter, bare, close)) return false;
             }
             at = cell->nextCell;
@@ -1858,8 +1865,8 @@ static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, c
          // expires on the row after the last of them -- and a row whose cell at that column is
          // ordinary rather than a continuation is the row the run stopped at. So no skip is written
          // for it, and none is needed.
-         // The loop below is the pipe form's gap loop and is dead for the same reason that one is --
-         // w:gridBefore is what would make it live. The held[] test is what it would then need.
+         // The pipe form's gap loop, for the columns a w:gridBefore leaves empty. A merge from a row
+         // above may still hold one of them, which is what the held[] test is for.
          while(column < cell->column && column < IR_MAX_COLUMNS) {
             if(!held[column] && !MdEmitHtmlPad(emitter, bare, close)) return false;
             ++column;
@@ -1869,11 +1876,15 @@ static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, c
          // so its row span is never asked for: that guard is what bounds the walk below at 256 calls,
          // and nothing caps how many cells a row may hold.
          cbool restart = (cell->flags & IR_CELL_VRESTART) && cell->column < IR_MAX_COLUMNS;
-         cui32 rows    = (restart ? MdRowSpanOf(document, row, cell->column, cell->span) : 1u);
+         cui32 rows    = (restart ? MdRowSpanOf(document, row, cell->column, width) : 1u);
 
+         if(!width) {
+            at = cell->nextCell; // Defensive: the walker stores no cell outside the grid
+            continue;
+         }
          if(!MdAppendText(emitter, open)) return false;
-         if(cell->span > 1u) {
-            if(!MdAppendText(emitter, " colspan=\"") || !MdAppendNumber(emitter, cell->span) || !MdAppendByte(emitter, '"')) return false;
+         if(width > 1u) {
+            if(!MdAppendText(emitter, " colspan=\"") || !MdAppendNumber(emitter, width) || !MdAppendByte(emitter, '"')) return false;
          }
          if(rows > 1u) {
             if(!MdAppendText(emitter, " rowspan=\"") || !MdAppendNumber(emitter, rows) || !MdAppendByte(emitter, '"')) return false;
@@ -1888,7 +1899,7 @@ static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, c
          // prefix every other line of the table does.
          if(emitter->used > contentAt && emitter->out[emitter->used - 1u] == '\n' && !MdWritePrefix(emitter, prefix, false)) return false;
          if(!MdAppendText(emitter, close)) return false;
-         for(ui32 span = 0; span < cell->span && column < IR_MAX_COLUMNS; ++span, ++column) held[column] = rows;
+         for(ui32 span = 0; span < width && column < IR_MAX_COLUMNS; ++span, ++column) held[column] = rows;
          at = cell->nextCell;
       }
       while(column < table->columns && column < IR_MAX_COLUMNS) {

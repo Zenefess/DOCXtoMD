@@ -10,7 +10,7 @@
  *           body's sequence, and no case here pins that.
  *        2) Drive a w:lvlOverride carrying a full w:lvl replacement *and* a w:startOverride at once,
  *           which Word writes for a hybrid list and which no case below separates from either alone.
- * Dependencies: BuildGuards.h, Check.h, Ir.h, NumberingModel.h, StyleModel.h, typedefs.h
+ * Dependencies: BuildGuards.h, Check.h, Ir.h, NumberingModel.h, StyleModel.h, typedefs.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -18,6 +18,7 @@
  */
 #include "BuildGuards.h"
 
+#include <stdio.h>
 #include "typedefs.h"
 #include "Check.h"
 #include "Ir.h"
@@ -75,6 +76,53 @@ static cbool NumTestStyles(STYLE_MODELptrc styles, cchptr body) {
    NumTestAppend(part, sizeof(part), &used, body);
    NumTestAppend(part, sizeof(part), &used, "</w:styles>");
    return StyleLoadBytes(styles, (cui8ptr)part, used) == STYLE_OK;
+}
+
+// Builds a w:numStyleLink chain of the given number of hops and reports what the list at its head
+// resolves to. Abstract definition 0 delegates to numbering style S1, whose w:numPr names numId 101, whose
+// w:num names abstract definition 1, and so on; definition `hops` is the one carrying a decimal level.
+// Built rather than written out, because the case is about a count and a literal would bury it.
+static cNUM_FORMAT NumTestChain(cui32 hops) {
+   static char numbering[16384];
+   static char styles[16384];
+   ui64        numberUsed = 0;
+   ui64        styleUsed  = 0;
+   char        piece[256];
+
+   numbering[0] = 0;
+   styles[0]    = 0;
+   NumTestAppend(numbering, sizeof(numbering), &numberUsed, NUM_HEAD);
+   NumTestAppend(styles, sizeof(styles), &styleUsed, NUM_STYLE);
+   for(ui32 link = 0; link < hops; ++link) {
+      snprintf(piece, sizeof(piece), "<w:abstractNum w:abstractNumId=\"%u\"><w:numStyleLink w:val=\"S%u\"/></w:abstractNum>", link, link + 1u);
+      NumTestAppend(numbering, sizeof(numbering), &numberUsed, piece);
+      snprintf(piece, sizeof(piece), "<w:num w:numId=\"%u\"><w:abstractNumId w:val=\"%u\"/></w:num>", 101u + link, link + 1u);
+      NumTestAppend(numbering, sizeof(numbering), &numberUsed, piece);
+      snprintf(piece, sizeof(piece), "<w:style w:type=\"numbering\" w:styleId=\"S%u\"><w:pPr><w:numPr>", link + 1u);
+      NumTestAppend(styles, sizeof(styles), &styleUsed, piece);
+      snprintf(piece, sizeof(piece), "<w:numId w:val=\"%u\"/>", 101u + link);
+      NumTestAppend(styles, sizeof(styles), &styleUsed, piece);
+      NumTestAppend(styles, sizeof(styles), &styleUsed, "</w:numPr></w:pPr></w:style>");
+   }
+   snprintf(piece, sizeof(piece), "<w:abstractNum w:abstractNumId=\"%u\">", hops);
+   NumTestAppend(numbering, sizeof(numbering), &numberUsed, piece);
+   NumTestAppend(numbering, sizeof(numbering), &numberUsed, "<w:lvl w:ilvl=\"0\"><w:numFmt w:val=\"decimal\"/></w:lvl></w:abstractNum>");
+   NumTestAppend(numbering, sizeof(numbering), &numberUsed, "<w:num w:numId=\"100\"><w:abstractNumId w:val=\"0\"/></w:num>");
+   NumTestAppend(numbering, sizeof(numbering), &numberUsed, NUM_TAIL);
+   NumTestAppend(styles, sizeof(styles), &styleUsed, "</w:styles>");
+
+   STYLE_MODEL model;
+   NUM_MODEL   lists;
+   NUM_FORMAT  format = NUM_FORMAT_ABSENT;
+
+   StyleOpen(&model);
+   NumOpen(&lists);
+   if(StyleLoadBytes(&model, (cui8ptr)styles, styleUsed) == STYLE_OK && NumLoadBytes(&lists, (cui8ptr)numbering, numberUsed, &model) == NUM_OK) {
+      format = NumLevelOf(&lists, 100, 0u).format;
+   }
+   NumClose(&lists);
+   StyleClose(&model);
+   return format;
 }
 
 // Whether two NUL-terminated strings are the same bytes.
@@ -228,6 +276,36 @@ void TestNumberingModel(void) {
                         "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>",
                         nullptr) == NUM_OK);
       CHECK(NumLevelOf(&model, 1, 0u).format == NUM_FORMAT_BULLET);
+      NumClose(&model);
+   }
+   {
+      NUM_MODEL model;
+
+      // A marker a reader cannot see is not a marker. Pandoc writes a bullet level of " " for a list
+      // item's continuation paragraphs, and a w:lvlText of nothing but blank space is a continuation
+      // whatever its w:numFmt says -- including a no-break space, and a tab. An empty one stays what its
+      // w:numFmt says, because tests/fixtures/tablecells reads it as a bullet; a picture draws itself.
+      // The tab is spelled &#9; because XML 1.0 3.3.3 turns a literal one in an attribute value into a
+      // space before any reader sees it, so a character reference is the only way a tab arrives as one.
+      NumOpen(&model);
+      CHECK(NumTestLoad(&model,
+                        "<w:abstractNum w:abstractNumId=\"0\">"
+                        "<w:lvl w:ilvl=\"0\"><w:numFmt w:val=\"bullet\"/><w:lvlText w:val=\" \"/></w:lvl>"
+                        "<w:lvl w:ilvl=\"1\"><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"\xC2\xA0 \"/></w:lvl>"
+                        "<w:lvl w:ilvl=\"2\"><w:numFmt w:val=\"bullet\"/><w:lvlText w:val=\"\"/></w:lvl>"
+                        "<w:lvl w:ilvl=\"3\"><w:numFmt w:val=\"bullet\"/><w:lvlText w:val=\" \"/><w:lvlPicBulletId w:val=\"0\"/></w:lvl>"
+                        "<w:lvl w:ilvl=\"4\"><w:numFmt w:val=\"bullet\"/><w:lvlText w:val=\" o\"/></w:lvl>"
+                        "<w:lvl w:ilvl=\"5\"><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%6.\"/></w:lvl>"
+                        "<w:lvl w:ilvl=\"6\"><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"&#9;\"/></w:lvl></w:abstractNum>"
+                        "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>",
+                        nullptr) == NUM_OK);
+      CHECK(NumLevelOf(&model, 1, 0u).format == NUM_FORMAT_PLAIN);
+      CHECK(NumLevelOf(&model, 1, 1u).format == NUM_FORMAT_PLAIN);
+      CHECK(NumLevelOf(&model, 1, 2u).format == NUM_FORMAT_BULLET);
+      CHECK(NumLevelOf(&model, 1, 3u).format == NUM_FORMAT_BULLET);
+      CHECK(NumLevelOf(&model, 1, 4u).format == NUM_FORMAT_BULLET);
+      CHECK(NumLevelOf(&model, 1, 5u).format == NUM_FORMAT_ORDERED);
+      CHECK(NumLevelOf(&model, 1, 6u).format == NUM_FORMAT_PLAIN);
       NumClose(&model);
    }
 
@@ -428,6 +506,13 @@ void TestNumberingModel(void) {
       CHECK(NumLevelOf(&model, 1, 0u).format == NUM_FORMAT_BULLET);
       NumClose(&model);
    }
+   // The cap itself, which M8 left pinned by nothing: a chain of exactly NUM_MAX_DELEGATE hops reaches the
+   // definition carrying the levels, and one hop more leaves the delegation unresolved -- a bullet, as a
+   // loop is. A single hop and a chain of none bracket the arithmetic from the other side.
+   CHECK(NumTestChain(0u) == NUM_FORMAT_ORDERED);
+   CHECK(NumTestChain(1u) == NUM_FORMAT_ORDERED);
+   CHECK(NumTestChain(NUM_MAX_DELEGATE) == NUM_FORMAT_ORDERED);
+   CHECK(NumTestChain(NUM_MAX_DELEGATE + 1u) == NUM_FORMAT_BULLET);
 
    CheckGroup("NumberingModel: the counters");
    {

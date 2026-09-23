@@ -3,10 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-08-24
+ * Last Modified: 2026-09-23
  * Description: ZIP container reader: EOCD and ZIP64 discovery, directory parsing, and capped extraction.
- * To Do: 1) Validate entry names against ZIP path-traversal shapes at M11, which decision D10 gave the question to.
- *        2) Expose the decompression caps on the command line as --max-decompressed and friends.
+ * To Do: 1) Expose the decompression caps on the command line as --max-decompressed and friends.
+ *        2) Say which cap a ZIP_ERROR_LIMIT refusal reached, the way an entry-name refusal names its rule.
  *        3) Read entry names as CP437 when the UTF-8 flag is clear; every OPC part name seen so far is ASCII.
  * Dependencies: BuildGuards.h, Crc32.h, Inflate.h, ZipReader.h, typedefs.h, memory management.h, windows.h
  * ISA: Scalar
@@ -113,6 +113,18 @@ static constexpr cchptr ZIP_INFLATE_TEXT[INFLATE_RESULT_COUNT] = {
     "not a valid DOCX; a deflate stream matches data from before the start of the entry"       // DISTANCE
 };
 
+// The sentence a caller shows for each rule of decision D10 an entry name can break, indexed by
+// ZIP_NAME_RULE. ZipResultText follows it with the entry's own name, so the rule is all it has to say.
+static constexpr cchptr ZIP_NAME_TEXT[ZIP_NAME_RULE_COUNT] = {
+    // One sentence per ZIP_NAME_RULE, in the order the enum declares them
+    "not a valid DOCX; an entry name is not a relative path this reader will hold",             // ZIP_NAME_OK
+    "not a valid DOCX; an entry name begins with a drive letter, which ZIP forbids",            // DRIVE
+    "not a valid DOCX; an entry name is an absolute path, which ZIP forbids",                   // ABSOLUTE
+    "not a valid DOCX; an entry name uses a backslash as a path separator, which ZIP forbids",  // BACKSLASH
+    "not a valid DOCX; an entry name holds a colon, which names an NTFS alternate data stream", // STREAM
+    "not a valid DOCX; an entry name holds a . or .. segment, the shape a path traversal takes" // DOT_SEGMENT
+};
+
 //-- Little-endian field readers
 
 // ZIP stores every integer field little-endian whatever the host is, so the bytes are assembled by hand
@@ -131,6 +143,41 @@ static cbool ZipNameEqual(cchptr a, cchptr b) {
 
    while(a[i] && a[i] == b[i]) ++i;
    return a[i] == b[i];
+}
+
+//-- Entry names
+
+cZIP_NAME_RULE ZipCheckEntryName(cchptr name, cui64 nameBytes) {
+   if(!name || !nameBytes) return ZIP_NAME_OK; // An empty name is ZipParseCentral's to refuse, as malformed
+
+   cchar first  = name[0];
+   cbool letter = (first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z');
+
+   // Checked rule by rule rather than byte by byte, so that a name breaking several reports the one the
+   // enum puts first: "C:\\x" is a drive letter before it is a backslash.
+   if(nameBytes >= 2u && letter && name[1] == ':') return ZIP_NAME_DRIVE;
+   if(first == '/') return ZIP_NAME_ABSOLUTE;
+   for(ui64 index = 0; index < nameBytes; ++index) {
+      if(name[index] == '\\') return ZIP_NAME_BACKSLASH;
+   }
+   for(ui64 index = 0; index < nameBytes; ++index) {
+      if(name[index] == ':') return ZIP_NAME_STREAM;
+   }
+
+   // A segment of one or two dots, wherever it stands. An empty segment is left alone -- "word//x.xml" and
+   // a directory entry's trailing '/' both have one, and neither is a way out of the package.
+   ui64 start = 0;
+
+   for(ui64 index = 0; index <= nameBytes; ++index) {
+      if(index < nameBytes && name[index] != '/') continue;
+
+      cui64 span = index - start;
+
+      if(span == 1u && name[start] == '.') return ZIP_NAME_DOT_SEGMENT;
+      if(span == 2u && name[start] == '.' && name[start + 1u] == '.') return ZIP_NAME_DOT_SEGMENT;
+      start = index + 1u;
+   }
+   return ZIP_NAME_OK;
 }
 
 //-- Signature checks
@@ -345,6 +392,17 @@ static cZIP_RESULT ZipParseCentral(ZIP_READERptrc reader, cui64 cdOffset, cui64 
       name[nameBytes] = '\0';
       used += nameBytes + 1u;
 
+      // Decision D10, answered at M11: a name shaped like a way out of the package refuses the archive,
+      // whether or not anything would ever have looked the entry up. The copy is kept, so the message
+      // can say which entry it was.
+      cZIP_NAME_RULE rule = ZipCheckEntryName(name, nameBytes);
+
+      if(rule != ZIP_NAME_OK) {
+         reader->lastName = rule;
+         reader->badName  = name;
+         return ZIP_ERROR_NAME;
+      }
+
       ZIP_ENTRYptrc entry = &reader->entries[i];
 
       entry->name              = name;
@@ -404,7 +462,10 @@ cZIP_RESULT ZipOpen(ZIP_READERptrc reader, cwchptr path, cZIP_LIMITSptrc limits)
    reader->inflatedBytes = 0;
    reader->limits        = *limits;
    reader->lastInflate   = INFLATE_OK;
+   reader->lastName      = ZIP_NAME_OK;
+   reader->badName       = nullptr;
    reader->entryCount    = 0;
+   reader->message[0]    = 0;
 
    cZIP_RESULT read = ZipReadWholeFile(path, &reader->bytes, &reader->byteCount, limits->maxArchiveBytes);
 
@@ -423,6 +484,7 @@ void ZipClose(ZIP_READERptrc reader) {
    reader->entries       = nullptr;
    reader->nameHeap      = nullptr;
    reader->inflatedBytes = 0;
+   reader->badName       = nullptr; // It pointed into the heap just released
    reader->entryCount    = 0;
 }
 
@@ -508,7 +570,31 @@ cZIP_RESULT ZipReadEntry(ZIP_READERptrc reader, cui32 index, ui8ptrptrc bytes, u
    return ZIP_OK;
 }
 
-cchptr ZipResultText(cZIP_READERptr reader, cZIP_RESULT result) {
+// Composes a refused entry's sentence in the reader's own buffer: the rule, then the name that broke it.
+static cchptr ZipNameMessage(ZIP_READERptrc reader) {
+   cui32  rule     = ui32(reader->lastName);
+   cchptr sentence = ZIP_NAME_TEXT[rule < ui32(ZIP_NAME_RULE_COUNT) ? rule : 0u];
+
+   if(!reader->badName) return sentence;
+
+   cui64 room = sizeof(reader->message) - 1u;
+   ui64  used = 0;
+
+   for(ui64 index = 0; sentence[index] && used < room; ++index) reader->message[used++] = sentence[index];
+   for(cchptr walk = ", in "; *walk && used < room; ++walk) reader->message[used++] = *walk;
+   // An entry name is attacker-controlled bytes. A carriage return or an escape sequence in one would
+   // overwrite or forge a console line, so anything below a space is replaced rather than printed.
+   for(ui64 index = 0; reader->badName[index] && used < room; ++index) {
+      cchar byte = reader->badName[index];
+
+      reader->message[used++] = (ui8(byte) < 0x20u || ui8(byte) == 0x7Fu ? '?' : byte);
+   }
+   reader->message[used] = 0;
+   return reader->message;
+}
+
+cchptr ZipResultText(ZIP_READERptrc reader, cZIP_RESULT result) {
+   if(result == ZIP_ERROR_NAME) return (reader ? ZipNameMessage(reader) : ZIP_NAME_TEXT[ZIP_NAME_OK]);
    switch(result) {
    case ZIP_OK: return "the container is intact";
    case ZIP_ERROR_OPEN: return "cannot open input file";
