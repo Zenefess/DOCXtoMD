@@ -1228,12 +1228,12 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough. At
 M10 they return **157**, **118** and **1518** checks, over the **83** fixtures `make_fixtures.py`
 builds, and all four were confirmed on Windows on 2026-09-23. Two fixtures landed after that run,
-`bad-styles.docx` and `bad-numbering.docx`, so the tables now declare **161** container checks over
-**85** fixtures -- numbers no Windows run has confirmed yet; the golden and unit counts do not change.
-The three check counts are the interesting ones: they are what the shim measures on Linux, and at every
-milestone since M3 they have been exactly what the real MSVC binary then returned. The fixture count is
-not evidence of that -- `make_fixtures.py` is the same Python on both platforms -- and is recorded only
-so a run that builds a different number is noticed.
+`bad-styles.docx` and `bad-numbering.docx`, so the container runner now returns **161** checks over
+**85** fixtures -- the shim's numbers from Linux on 2026-09-23, which no Windows run has confirmed yet;
+the golden and unit counts do not change. The three check counts are the interesting ones: they are what
+the shim measures on Linux, and at every milestone since M3 they have been exactly what the real MSVC
+binary then returned. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
+on both platforms -- and is recorded only so a run that builds a different number is noticed.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -2882,10 +2882,12 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   **One fix landed after that verification**, the way one did after M7's and M8's. A malformed styles or
   numbering part was refused with `XmlResultText`'s bare sentence, which names no part, while every other
   refusal names the part that broke; each model now records the part it loaded, and the sentence goes
-  through `OpcMessageIn` as the walk's does. `bad-styles.docx` and `bad-numbering.docx` pin it, which takes
-  `make_fixtures.py` to **85** fixtures and `run_container.py` to **161** checks; `run_golden.py` stays at
-  **118** and the unit suite at **1518**. The marker stays `[done]` on M5's precedent: a verification
-  record is of what was run, and a later bug fix does not un-verify a milestone. The changed
+  through `OpcMessageIn` as the walk's does. `bad-styles.docx` and `bad-numbering.docx` pin it, which
+  takes `make_fixtures.py` to **85** fixtures and `run_container.py` to **161** checks; `run_golden.py`
+  stays at **118** and the unit suite at **1518**. All four are the shim's, measured plain and under
+  AddressSanitizer and UndefinedBehaviorSanitizer with no diagnostic, and not on Windows; reverting the
+  fix fails exactly the two new container checks. The marker stays `[done]` on M5's precedent: a
+  verification record is of what was run, and a later bug fix does not un-verify a milestone. The changed
   `StyleModel` and `NumberingModel` have not been through `/W3` or run on Windows, and the next Windows
   run closes that.
   - **The three tallies are the shim's, exactly.** 157, 118 and 1518, the same three numbers in the
