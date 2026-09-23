@@ -1472,7 +1472,7 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    if(deleted) return XmlSkipElement(context->reader);
    if(inserted || tagged) return DocWalkChildren(context, level, paragraphStyle, heading);
    // A bookmark is a range marker rather than content, and it appears at every level for the same
-   // reason every wrapper does: a bookmark may wrap whole rows, whole paragraphs or part of one.
+   // reason every wrapper does: a bookmark may wrap whole rows, whole cells, whole paragraphs or part of one.
    if(XmlIsElement(context->reader, XML_NS_W, "bookmarkStart")) return DocReadBookmark(context, level);
    if(XmlIsElement(context->reader, XML_NS_W, "sdt")) return DocWalkStructuredTag(context, level, paragraphStyle, heading);
    if(XmlIsElement(context->reader, XML_NS_MC, "AlternateContent")) return DocWalkAlternate(context, level, paragraphStyle, heading);
