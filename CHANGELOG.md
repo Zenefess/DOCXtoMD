@@ -8,6 +8,83 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M10, fields, notes and tracked changes.** The second milestone running that added **no module**: a
+  field is a state the walk carries, a revision is a rule the walk applies, and a note is a run of
+  ordinary blocks with a record beside them. `Ir` grew a span kind and a record array, `DocWalker` the
+  field state machine, the paragraph join and the notes walk, `LinkResolver` per-part resolution and the
+  note labels, `MdEmitter` a base every line start writes, and `Convert` the notes stage.
+- The **field state machine** of correctness rule 7, with its stack on the walk rather than on a paragraph
+  because a result may span several. Everything between a `begin` and its `separate` is instruction and
+  never content; a `HYPERLINK`'s result, and a `REF`'s that carries `\h`, becomes a link whose destination
+  is built from the instruction -- the target, a `\l` location joined on by `#`, a `REF`'s bookmark behind
+  one; a `TOC` vanishes result and all; every other field is the cached result it was showing, and one
+  with no `separate` shows nothing (`docs/CONVERSION_REFERENCE.md` 2.7) -- `INCLUDEPICTURE` included,
+  where 2.7 would build `![](url)` from the instruction; its result is the picture Word last drew, and
+  building one from the URL is `DocWalker.h`'s To Do 3. `w:fldSimple` is the same
+  machine in one element. An instruction is read the way Word writes one -- over any number of
+  `w:instrText`, its keyword in either case, a switch glued to its argument, `\"` and `\\` escaped in
+  quotes -- and every switch that takes an argument consumes it wherever it stands. A field link is
+  closed at the end of each block and reopened at the start of the next; links do not nest, so the outer
+  one wins. Eight fields deep are tracked and a deeper one is counted, its content dropped rather than
+  guessed at; an instruction past 2,048 bytes is never linked, because a truncated URL is worse than none.
+- A field's **structure is read even inside a hidden run**, because Word sets `w:webHidden` on every run of
+  the `PAGEREF` in each TOC entry, `w:fldChar` included -- a hidden `begin` dropped while its `end` was read
+  would misread every field after it. A paragraph that began inside a field nobody sees and came to
+  nothing is unwound whole, list marker, blank code line and border included, which is every paragraph of
+  a TOC after the one it begins in; a table standing wholly inside one goes the same way, and so does a
+  bookmark.
+- A `w:sdt` whose `w:docPartGallery` is "Table of Contents" is skipped whole (mapping rows 31 and 32),
+  which is how Word wraps every TOC it inserts.
+- **Footnotes and endnotes** (mapping row 24). A `w:footnoteReference` or `w:endnoteReference` becomes the
+  new `IR_SPAN_NOTE`, carrying its `w:id` and, for an endnote, `IR_SPAN_FLAG_END`; `DocWalkNotes` reads a
+  notes part after the body and reads **only the notes something already walked references** -- a notes
+  part holds Word's separators and every note whose reference a user deleted, and GitHub drops a
+  definition nothing references -- so a notes part nothing cites is never even validated. Footnotes are
+  read before endnotes, so an endnote cited from a footnote is found. A note's `w:type` decides whether it
+  is one, not its `w:id` (2.10), and a second note of one `w:id` is not read. A note's blocks are ordinary
+  blocks after the body's, each carrying the new `IR_BLOCK.note`, and a note is an `IR_NOTE` record of its
+  story, its `w:id`, its part and its label.
+- `LinkResolveNotes`: **one** label sequence for both stories, in the order the references are read --
+  the body first, then each note in the order it was numbered -- which is the order GitHub numbers
+  footnotes by on the rendered page, so the label in the `.md` and the number on the page agree. That is
+  why the two stories are interleaved rather than the endnotes following the footnotes, which
+  `docs/CONVERSION_REFERENCE.md` row 24 offers. A note referenced twice keeps one label; a reference to a
+  note the document does not hold is muted, and the text either side of it meets. It runs before
+  `LinkResolveAnchors`, because a heading's slug includes the labels in its text.
+- **Per-part relationship resolution.** `LinkResolveRefs` resolves each block against the part it was
+  read in -- the body's against the main part, a note's against its own -- through one index per part,
+  and `ConvertNotes` loads a notes part's relationships once one of its notes has been read. That closes
+  M4's coverage gap: `tests/fixtures/footnotes` gives `rId5` and `rId2` different meanings in the two
+  parts, so an id declared in both `footnotes.xml.rels` and `document.xml.rels` is finally tested as two
+  relationships.
+- Note definitions in the emitter. A reference is `[^n]`; the definitions follow the body in label order,
+  each `[^n]: ` with every later line indented four columns, through a **base** every line start in the
+  module writes before its own prefix -- nothing in the body, the marker and then four columns in a
+  definition -- so every block kind is writable inside a note without learning that notes exist. A note
+  that came to nothing is `[^n]:` alone, which GFM reads as an empty definition. A `(` after a reference
+  and a `:` after one opening its line are escaped, because either would change what the reference is.
+  Inside a raw-HTML table a reference is `<sup>n</sup>`; inside a fence it writes nothing.
+- **Accept-all for the last two revisions that are not wrappers** (correctness rule 8, 5.11). A paragraph whose
+  mark a `w:del` or a `w:moveFrom` removed runs on into the next paragraph, which gives the pair its
+  classification because the mark is where a paragraph's style lives; where a table, or the end of a
+  cell, a note or the body, comes first, it ends as written. A cell a `w:cellDel` removed is dropped with
+  its content, as a deleted row already was.
+- `WALK_ERROR_NOTES_ROOT`, for a notes part whose root element does not match the relationship that named
+  it, and a `part` field on `WALK_STATUS` so that a sentence about a part's bytes can name it.
+- Four golden fixtures -- `fields`, `toc`, `footnotes` and `revisions` -- with an `expected.md` each written
+  by hand before the converter was run at it; all four matched on their first run. `footnotes` also
+  extracts one picture from inside a note and must **not** extract the one in a note nothing cites. Four
+  container fixtures beside them: a malformed `footnotes.xml`, an endnotes part whose root is
+  `w:footnotes`, a malformed `footnotes.xml.rels` -- each exit 3 naming its part -- and a malformed notes
+  part nothing references, which converts to exactly the bytes the minimal document does.
+- Unit cases in three suites: `TestDocWalker` (the field machine, the TOC, the join, `w:cellDel`, the notes
+  walk and `LinkResolveNotes`'s labels, through new `NotedAs` and `NotesWalkedTo` helpers and trace letters
+  `F`, `E` and `f2:`), `TestMdEmitter` (every block kind inside a definition, the two escapes, the four
+  places a reference stands, fields and revisions end to end, through new `Noted` and `Cited` helpers), and
+  `TestRunCoalescer` (a note reference as a merge barrier until muted, and a field's result merging like
+  any run). `TestLinkResolver` and `TestConvert` gained none: per-part resolution and the notes stage both
+  need a package, which no unit suite builds, and `tests/fixtures/footnotes` pins both.
+
 - **M9, tables.** A `w:tbl` becomes a GFM pipe table, or a raw `<table>` where a nested table or
   `--tables=html-on-merge` asks for one. It is the first milestone since M2 that added **no module**: a
   table is a shape over the blocks that already exist rather than a stage of its own, so `Ir` grew three
@@ -289,6 +366,32 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   nothing.
 
 ### Changed
+- The walk's sentence for a part that is not well-formed XML now **names the part**, because a walk
+  reads more than one, and so does its new sentence for a notes part whose root is not the story its
+  relationship names: `DocWalkResultText` appends `, in <part>` to both. A malformed body now reads
+  `... ends in the middle of an element, in word/document.xml`.
+- `LinkResolveRefs` resolves block by block; its `partIndex` is now the main part's, whose relationships
+  the body's blocks resolve against, and a note's blocks resolve against the part their `IR_NOTE` names.
+- `IrHasContent` counts a note reference nothing has muted as content, so a paragraph holding only a
+  reference is kept.
+- `ConvertStylesPart` and `ConvertNumberingPart` are one `ConvertRelatedPart` over four relationship
+  kinds, all four looked up at once, straight after the main part's own relationships are loaded.
+- `MdEmitDocument` emits the body and then each note through one `MdEmitRange`, and `MdEmitTableHtml`
+  takes whether it opens in the middle of a line, because a nested table's first line must not take the
+  prefix a note's definition gives every other line.
+- `w:fldSimple` is a field rather than a wrapper merely descended into, and `w:fldChar` and `w:instrText`
+  are read rather than skipped whole.
+- Prolog `To Do` items M10 settled are gone: the field state machine and the deleted paragraph mark
+  `DocWalker.h` waited for; the note-reference span kind and the part a reference came from in `Ir.h`;
+  per-part resolution and a `HYPERLINK` field's destination in `LinkResolver.h`; the note loading
+  `Convert.h` waited for; the field traces `TestDocWalker.cpp` waited for; and the field-result barrier
+  `RunCoalescer.h`, `RunCoalescer.cpp` and `TestRunCoalescer.cpp` waited for, which M10 needed not at all
+  -- a plain field's result is text and a link field's is bounded by link markers. `DocWalker.h` gained
+  `w:customMarkFollows`, an unclosed field's pre-scan and an `INCLUDEPICTURE`'s own URL; `LinkResolver.h`
+  a note cited only from another note of its own story; `Ir.h` a comment as a note of a third kind;
+  `TestDocWalker.cpp` a note's own relationships; and `MdEmitter.cpp` the definition GitHub drops for a
+  reference inside a raw-HTML table.
+
 - `MdEscapeMeasure` and `MdEscapeWrite` take one more argument. Every existing call site passes `false`
   and behaves exactly as it did; what the argument reaches is the runs inside a table cell, which are
   the only ones a pipe can end.
@@ -362,8 +465,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 - `ConvertPackage` resolves the numbering part through the main part's relationships, exactly as it
   resolves the styles part, and loads it between the styles and the walk. The pipeline is now walk,
   coalesce, resolve references, resolve anchors, coalesce again, plan the media, **assign the markers**,
-  drop the emptied blocks, emit -- the numbers last of the four passes, because `MediaPlan` can still
-  turn a picture back into alt text and an item's content is not settled until it has.
+  drop the emptied blocks, emit -- the markers before the drop, which spares every block the counter pass
+  leaves a list reference on.
 - The two independent trace renderers in `TestDocWalker` and `TestRunCoalescer` gained the same notation
   rather than two: `[level#numId]` before a block letter is the reference the walk read, and
   `[level=marker]` is what the counter pass settled, with `!` for the first item of a list. They are
@@ -501,6 +604,58 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- A **malformed styles or numbering part was refused without naming it.** `StyleResultText` and
+  `NumResultText` returned `XmlResultText`'s bare sentence -- "not a valid DOCX; a part ends in the middle
+  of an element" -- while every other refusal names the part that broke, and both parts are found through
+  a relationship rather than by name, so a reader cannot assume which one it was. Each model now records
+  the part `StyleLoad` or `NumLoad` read, and the sentence goes through `OpcMessageIn` as the walk's does.
+  Pinned by `bad-styles.docx`, built on the relocated tree so that only a name read off the package can
+  match `shared/theme-styles.xml`, and `bad-numbering.docx`.
+- Comments that gave `NumAssignMarkers` a job the walk does. `Convert.cpp`, `Ir.cpp` and `Ir.h` said that
+  the pass clearing a dangling list reference is what lets `IrDropEmptyBlocks` treat the paragraph as
+  empty. Since M8's review the walk records a reference only for a `w:numId` the numbering part resolves,
+  so no dangling one reaches the pass in the program, and its clearing is a guard for a caller that
+  records references itself. Comments only.
+- A **nested raw-HTML table inside a note** broke the note. The line a nested table's `</table>` leaves
+  the rest of its cell on was written without the table's prefix, which inside a definition is the four
+  columns that keep a line in it -- so the definition ended there, the rest of the table landed in the
+  body, and the note's next paragraph became an indented code block. Every line of a raw-HTML table takes
+  the prefix now. Found by M10's hostile-input pass before commit, so no commit ever carried it; in the
+  body a table's prefix is always empty, which is why no earlier milestone could reach it. Pinned by two
+  `TestMdEmitter` cases.
+- Comments and file prologs that the M10 tree contradicted. `NumberingModel.h` still asked M10 to decide
+  whether a note's lists share the body's counters, which M10 settled by numbering the body and the notes
+  in one pass, and `TestNumberingModel.cpp` still waited for M10 to walk footnotes. `Convert.cpp` and
+  `tests/make_fixtures.py` said a notes part is read only when the body references one of its notes, when
+  an endnotes part is read for a footnote's reference too, and `Convert.cpp` required the four related
+  parts to be looked up before any further relationships are loaded, which a part index does not need.
+  `DocWalker.h` said a begin with no end leaves the rest of its story unread, which is true only of a begin
+  that neither separates nor ends; gave hiding a run as what keeps field instructions out of the output,
+  when an instruction is read before a run's hiddenness is asked; called `w:sym` and `m:oMath` the two
+  places text is lost, when a text box and a text-bearing `mc:AlternateContent` in a run lose theirs too,
+  which its own To Do 1 and `DocWalker.cpp`'s To Do 4 name; and named only `DocWalk` as the status
+  `DocWalkResultText` takes. `DocWalker.cpp`'s Description left out the notes walk and the fields, and its
+  comment called a note cited from its own story the one note not read, when a footnote cited only from an
+  endnote is not read either -- which `LinkResolver.h`'s To Do now names beside it. It also called the
+  deleted paragraph mark the one revision that is not a wrapper, when a deleted row and a deleted cell are
+  two more, and said twice that a field still open at the end of a story has read its result, which one
+  that never separated has not: the rest of its story was read as instruction. `Ir.h` called the emitter
+  the only reader that groups a note's blocks, when `LinkResolveNotes` groups them too; an anchor's muting
+  the only way a block can be emptied after it was ended, and M7's two passes the only ones that break the
+  emitter's invariant, when a muted note reference does both; the mute flag an anchor's alone; and `IrMark`
+  the only source of the mark `IrRewind` takes, when the paragraph walk rewinds to `IrBeginBlock`'s.
+  `MdEmitter.cpp` left the muted note reference out of what a silent span can be, and called an empty text
+  span a run that carried properties and no text, when `RunCoalesce` drops every such run and the one that
+  reaches the emitter is a picture `MediaPlan` turned into an empty alt text; `MdEmitter.h` gave the output
+  buffer as the only thing whose failure is `MD_ERROR_MEMORY`, when the line buffer and the note-order
+  table fail the same way. `TestDocWalker.cpp` and `TestRunCoalescer.cpp` had their range renderer's
+  comment separated from it by the note writer M10 inserted, and neither notation comment named the note
+  letters; `TestRunCoalescer.cpp` also called its notation two letters wider than `TestDocWalker`'s, which
+  it is not. `TestMdEmitter.cpp` said its helper runs every pass `Convert.cpp` runs between the walk and
+  the emitter, when it leaves out `MediaPlan`; described `Noted`'s styles part as the list and code cases'
+  own; had `ConvertsTo`'s comment above `ConvertsWith`; and gave colour to rows 8 and 9, which are
+  underline and highlight. Comments only -- no executable line changed.
+
 - Comments and file prologs that the M9 tree contradicted. `DocWalker.h` still listed walking `w:tbl` and
   saving the paragraph classification around a cell as To Do items -- the first is M9's own work and the
   second has existed since M6 -- named `w:tbl` among what the walk skips whole, and left out of its

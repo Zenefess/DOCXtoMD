@@ -4,7 +4,7 @@
  * Owner: David William Bull
  * Created: 2026-08-25
  * Last Modified: 2026-09-23
- * Description: The body walk: wrappers, paragraph classification, runs and run content into the IR.
+ * Description: The body and notes walk: wrappers, fields, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
  *        2) Uppercase beyond ASCII and Latin-1 for w:caps, which needs Unicode's case tables.
@@ -38,11 +38,12 @@
 
 // One sentence per WALK_RESULT, in enumeration order.
 static constexpr cchptr WALK_RESULT_TEXT[] = {
-    "the document part was walked",                           // WALK_OK
-    "not enough memory to hold the converted document",       // WALK_ERROR_MEMORY
-    "the main document part could not be read",               // WALK_ERROR_PART
-    "the main document part is not well-formed XML",          // WALK_ERROR_XML
-    "the main document part's root element is not w:document" // WALK_ERROR_ROOT
+    "the document part was walked",                               // WALK_OK
+    "not enough memory to hold the converted document",           // WALK_ERROR_MEMORY
+    "the main document part could not be read",                   // WALK_ERROR_PART
+    "the main document part is not well-formed XML",              // WALK_ERROR_XML
+    "the main document part's root element is not w:document",    // WALK_ERROR_ROOT
+    "a notes part's root element does not match its relationship" // WALK_ERROR_NOTES_ROOT
 };
 
 static_assert(sizeof(WALK_RESULT_TEXT) / sizeof(WALK_RESULT_TEXT[0]) == ui64(WALK_RESULT_COUNT),
@@ -79,6 +80,77 @@ struct DOC_NUM_REF {
 
 typedef DOC_NUM_REF *const DOC_NUM_REFptrc;
 
+// How deeply fields may nest before one is counted rather than tracked. A TOC holding a PAGEREF is two,
+// and an IF holding a MERGEFIELD in each of its branches is three; eight is past anything a producer
+// writes, and the ceiling is what keeps the instruction buffers below off the document's content.
+constexpr cui32 DOC_MAX_FIELDS = 8u;
+
+// How many bytes of one field's instruction are kept. It matches the longest destination LinkResolver
+// will build, because a HYPERLINK's URL is the longest thing an instruction carries that anything reads.
+constexpr cui64 DOC_FIELD_BYTES = 2048u;
+
+// Where one field has got to. Everything between w:fldChar begin and separate is its instruction, and
+// everything between separate and end is the result a reader was shown.
+enum DOC_FIELD_STATE : ui8 {
+   DOC_FIELD_CODE = 0, ///< Between begin and separate: the instruction, which is never content
+   DOC_FIELD_RESULT    ///< Between separate and end: the cached result
+};
+
+// What a field's result becomes, decided from its instruction when the result starts (correctness rule 7).
+enum DOC_FIELD_KIND : ui8 {
+   DOC_FIELD_PLAIN = 0, ///< The cached result, as it stands
+   DOC_FIELD_SKIP,      ///< Nothing at all: a TOC, whose result is stale layout
+   DOC_FIELD_LINK       ///< The cached result inside a link: a HYPERLINK, or a REF carrying \h
+};
+
+typedef const DOC_FIELD_KIND cDOC_FIELD_KIND;
+
+// One open field. Its instruction lives beside it in DOC_CONTEXT's text array rather than in here, so that
+// this part is small enough for mc:AlternateContent to copy whole -- see DOC_FIELDS.
+struct DOC_FIELD {
+   ui32 bytes; ///< Instruction bytes kept
+   ui8  state; ///< A DOC_FIELD_STATE
+   ui8  kind;  ///< A DOC_FIELD_KIND, settled at separate
+   bool full;  ///< Whether the instruction outgrew its buffer, which makes the field plain
+};
+
+typedef DOC_FIELD *const DOC_FIELDptrc;
+
+// The open fields, innermost last. A field is walker state that outlives the paragraph it began in -- a
+// TOC always spans several, and a HYPERLINK's result may -- so it lives on the walk and not on a frame.
+// @note This is exactly what mc:AlternateContent saves and puts back. Only the innermost field can change
+//       without a new one being pushed: an instruction is appended to, a separate flips the state, an
+//       end pops. And an instruction is never rewritten -- a destination is derived from it whenever one
+//       is needed -- so a discarded mc:Choice is undone by restoring the counts, and the bytes past them
+//       are simply never read again.
+struct DOC_FIELDS {
+   DOC_FIELD frame[DOC_MAX_FIELDS]; ///< The fields being tracked, outermost first
+   ui32      depth;                 ///< How many are
+   ui32      overflow;              ///< Fields begun past the cap and not yet ended, whose content is dropped
+   si32      link;                  ///< The field whose link is open in the block being built, or -1
+};
+
+typedef const DOC_FIELDS cDOC_FIELDS;
+
+// Everything one paragraph settles about itself, carried to the point its block is ended. That is the
+// paragraph's own end, except where a tracked change deleted its mark: then the paragraph runs on into
+// the next one, which decides what the two of them are (CONVERSION_REFERENCE 5.11).
+struct DOC_PARAGRAPH {
+   IR_MARK       mark;      ///< Where its block began; the block is -1 while none has
+   IR_BLOCK_KIND kind;      ///< What its style chain made it
+   ui8           level;     ///< Its heading level, or 0
+   si32          listId;    ///< The w:numId its w:numPr resolved to
+   si32          listLevel; ///< Its w:ilvl, or 0
+   bool          list;      ///< Whether it is an item of a list the document resolves
+   bool          rule;      ///< Whether its w:pBdr is mapping row 25's lone bottom border
+   bool          sawText;   ///< Whether any of its runs produced a visible character
+   bool          allMono;   ///< Whether every such run was set in a monospace family
+   bool          quiet;     ///< Whether it began inside a field whose content is dropped
+};
+
+typedef DOC_PARAGRAPH *const DOC_PARAGRAPHptrc;
+typedef const DOC_PARAGRAPH  cDOC_PARAGRAPH;
+
 // Everything one walk carries. One worker owns one of these on its own stack and never shares it (D6).
 //
 // The five table fields are the open table, the open row, and the tails of their two chains. They are
@@ -97,6 +169,10 @@ struct DOC_CONTEXT {
    char            pending[DOC_PENDING_ANCHORS][DOC_ANCHOR_BYTES]; ///< Bookmarks awaiting the next block
    ui64            pendingLength[DOC_PENDING_ANCHORS];             ///< How long each of them is
    ui32            pendingCount;                                   ///< How many are waiting
+   char            fieldText[DOC_MAX_FIELDS][DOC_FIELD_BYTES];     ///< Each tracked field's instruction
+   DOC_FIELDS      fields;                                         ///< The fields open around the walk
+   DOC_PARAGRAPH   joined;                                         ///< A paragraph whose deleted mark runs it on
+   bool            joining;                                        ///< Whether joined is waiting for the next paragraph
    si32            table;                                          ///< The table whose rows are being read, or -1
    si32            row;                                            ///< The row whose cells are being read, or -1
    si32            lastRow;                                        ///< The last row appended to that table, or -1
@@ -119,6 +195,7 @@ static cbool DocWalkTable(DOC_CONTEXTptrc context);
 // A picture is run content, so DocWalkRun reaches it; it is declared beside the link and bookmark
 // helpers it belongs with, further down, rather than being lifted above the run walk it serves.
 static cbool DocWalkImage(DOC_CONTEXTptrc context);
+static cbool DocReadNoteRef(DOC_CONTEXTptrc context, cbool endnote);
 
 //-- Small helpers
 
@@ -282,6 +359,331 @@ static cbool DocAppendText(DOC_CONTEXTptrc context, cchptr bytes, cui64 byteCoun
    return true;
 }
 
+//-- Numbers
+
+// Reads a run of bytes as a decimal integer, reporting whether it was one. A leading minus is accepted only
+// where the caller says so: a note's w:id may be negative -- Word gives its separators -1 -- while every
+// other value this file reads is not.
+//
+// No cap on how many digits are read, because ST_DecimalNumber is an xsd:integer and leading zeros are
+// legal in one. A cap on the value's *length* rather than on its magnitude turns "007" into a refusal, and
+// every refusal here is silent; the overflow test is the real bound, and it stops after ten significant
+// digits whatever the value is padded to.
+static cbool DocParseNumber(cchptr bytes, cui64 length, cbool signs, si32ptrc out) {
+   ui64 index    = 0;
+   bool negative = false;
+
+   if(!bytes || !length) return false;
+   if(signs && bytes[0] == '-') {
+      negative = true;
+      index    = 1u;
+   }
+   if(index >= length) return false;
+
+   si64 parsed = 0;
+
+   for(; index < length; ++index) {
+      if(bytes[index] < '0' || bytes[index] > '9') return false;
+      parsed = parsed * 10 + si64(bytes[index] - '0');
+      if(parsed > 0x7FFFFFFF) return false;
+   }
+   *out = si32(negative ? -parsed : parsed);
+   return true;
+}
+
+//-- Fields
+
+// Whether any open field makes what the walk is reading invisible: a field still collecting its
+// instruction, whose runs are code and never content, or a field whose kind is to vanish result and all,
+// which is what correctness rule 7 rules for a TOC. A field begun past the cap is counted but not
+// tracked, so what stands inside one is dropped rather than guessed at.
+static cbool DocQuiet(DOC_CONTEXTptrc context) {
+   if(context->fields.overflow) return true;
+   for(ui32 index = 0; index < context->fields.depth; ++index) {
+      if(context->fields.frame[index].state == DOC_FIELD_CODE || context->fields.frame[index].kind == DOC_FIELD_SKIP) return true;
+   }
+   return false;
+}
+
+// Whether a byte separates the tokens of a field instruction.
+static cbool DocFieldSpace(cchar byte) { return byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n'; }
+
+// Reads the next token of a field instruction into a buffer, and reports whether there was one.
+//
+// A token is a quoted argument, a switch, or a run of anything else up to the next space. Inside quotes a
+// backslash escapes a quotation mark or a backslash and nothing else, which is how Word spells both in a
+// path; a switch is a backslash and the one character after it, so "\l" and "\*" are tokens of their own
+// even where a producer wrote no space between the switch and its argument.
+static cbool DocFieldToken(cchptr text, cui64 length, ui64ptrc at, chptrc dest, cui64 destBytes, ui64ptrc used) {
+   ui64 index = *at;
+
+   *used = 0;
+   while(index < length && DocFieldSpace(text[index])) ++index;
+   if(index >= length) {
+      *at = index;
+      return false;
+   }
+   if(text[index] == '"') {
+      for(++index; index < length && text[index] != '"'; ++index) {
+         cbool escaped = (text[index] == '\\' && index + 1u < length && (text[index + 1u] == '"' || text[index + 1u] == '\\'));
+
+         if(escaped) ++index;
+         if(*used + 1u < destBytes) dest[(*used)++] = text[index];
+      }
+      if(index < length) ++index; // The closing quotation mark
+   } else if(text[index] == '\\' && index + 1u < length) {
+      dest[(*used)++] = text[index];
+      dest[(*used)++] = text[index + 1u];
+      index += 2u;
+   } else {
+      for(; index < length && !DocFieldSpace(text[index]); ++index) {
+         if(*used + 1u < destBytes) dest[(*used)++] = text[index];
+      }
+   }
+   dest[*used] = 0;
+   *at         = index;
+   return true;
+}
+
+// Whether a token is a field keyword, ignoring ASCII case: Word writes them upper case and reads either.
+static cbool DocFieldNamed(cchptr token, cui64 tokenBytes, cchptr name) {
+   ui64 index = 0;
+
+   for(; index < tokenBytes && name[index]; ++index) {
+      cchar byte = (token[index] >= 'a' && token[index] <= 'z' ? char(token[index] - 'a' + 'A') : token[index]);
+
+      if(byte != name[index]) return false;
+   }
+   return index == tokenBytes && !name[index];
+}
+
+// Reads a field instruction, and reports what its result becomes -- building the destination when it is
+// a link. Correctness rule 7 is the whole of the policy: a HYPERLINK is a link, a TOC vanishes with its
+// result, and everything else is its cached result. A REF carrying \h is a link as well, because the
+// switch is its author asking for exactly that (CONVERSION_REFERENCE 2.7); every other REF, and PAGEREF,
+// NOTEREF, SEQ, DATE and the rest, is the text it was showing.
+//
+// A HYPERLINK's destination is its first argument, with its \l location joined on by the '#' that will
+// separate them in the output; one with only a location is a link into the document, exactly as a
+// w:hyperlink with only a w:anchor is. A REF's is its bookmark behind a '#'. Either comes back as the
+// bytes a link span carries, and LinkResolveAnchors treats a leading '#' the same whichever produced it.
+// A destination that will not fit is no destination, and the field degrades to its text.
+static cDOC_FIELD_KIND DocFieldAnalyse(cchptr text, cui64 length, chptrc dest, cui64 destBytes, ui64ptrc used) {
+   char token[DOC_FIELD_BYTES];
+   char place[DOC_FIELD_BYTES];
+   ui64 at         = 0;
+   ui64 tokenBytes = 0;
+   ui64 placeBytes = 0;
+   bool named      = false;
+   bool hyper      = false;
+
+   *used = 0;
+   if(!DocFieldToken(text, length, &at, token, sizeof(token), &tokenBytes)) return DOC_FIELD_PLAIN;
+   if(DocFieldNamed(token, tokenBytes, "TOC")) return DOC_FIELD_SKIP;
+
+   cbool link = DocFieldNamed(token, tokenBytes, "HYPERLINK");
+   cbool ref  = DocFieldNamed(token, tokenBytes, "REF");
+
+   if(!link && !ref) return DOC_FIELD_PLAIN;
+   while(DocFieldToken(text, length, &at, token, sizeof(token), &tokenBytes)) {
+      if(tokenBytes == 2u && token[0] == '\\') {
+         cchar which = (token[1] >= 'A' && token[1] <= 'Z' ? char(token[1] - 'A' + 'a') : token[1]);
+         // The switches that take an argument: the three every field has -- the format, the number
+         // picture and the date picture -- and HYPERLINK's location, tooltip and target frame, and REF's
+         // separator. The argument is read here so that it is never mistaken for the field's own.
+         cbool general = (which == '*' || which == '#' || which == '@');
+         cbool argued  = general || (link && (which == 'l' || which == 'o' || which == 't')) || (ref && which == 'd');
+
+         if(ref && which == 'h') hyper = true;
+         if(!argued) continue;
+         if(link && which == 'l') {
+            DocFieldToken(text, length, &at, place, sizeof(place), &placeBytes);
+            continue;
+         }
+         DocFieldToken(text, length, &at, token, sizeof(token), &tokenBytes);
+         continue;
+      }
+      if(named) continue;
+      named = true;
+      for(ui64 index = 0; index < tokenBytes && index + 1u < destBytes; ++index) dest[(*used)++] = token[index];
+   }
+   if(ref) {
+      if(!hyper || !*used || *used + 1u >= destBytes) {
+         *used = 0;
+         return DOC_FIELD_PLAIN;
+      }
+      for(ui64 index = *used; index; --index) dest[index] = dest[index - 1u];
+      dest[0] = '#';
+      *used += 1u;
+      return DOC_FIELD_LINK;
+   }
+   if(placeBytes) {
+      if(*used + 1u + placeBytes >= destBytes) {
+         *used = 0;
+         return DOC_FIELD_PLAIN;
+      }
+      dest[(*used)++] = '#';
+      for(ui64 index = 0; index < placeBytes; ++index) dest[(*used)++] = place[index];
+   }
+   return (*used ? DOC_FIELD_LINK : DOC_FIELD_PLAIN);
+}
+
+// Adds a link start carrying a destination to the block being built.
+static cbool DocAddLinkStart(DOC_CONTEXTptrc context, cchptr dest, cui64 destBytes) {
+   if(!IrAddSpan(context->document, IR_SPAN_LINK_START, IR_FMT_NONE) || !IrAppendDest(context->document, dest, destBytes)) {
+      context->memory = true;
+      return false;
+   }
+   return true;
+}
+
+// Adds a link end to the block being built.
+static cbool DocAddLinkEnd(DOC_CONTEXTptrc context) {
+   if(IrAddSpan(context->document, IR_SPAN_LINK_END, IR_FMT_NONE)) return true;
+   context->memory = true;
+   return false;
+}
+
+// Opens the link a field's result becomes, in the block being built. The destination is derived from the
+// instruction again rather than stored, which is what lets a discarded mc:Choice be undone by counts.
+//
+// Links do not nest in Markdown, so a field inside a w:hyperlink, or inside another field's link, keeps
+// its text and loses its brackets -- the outer link is the one a reader was given. And one whose result
+// nobody will see opens nothing, because a link with nothing between its brackets is muted anyway.
+static cbool DocFieldOpenLink(DOC_CONTEXTptrc context, cui32 index) {
+   char dest[DOC_FIELD_BYTES];
+   ui64 used = 0;
+
+   if(context->inLink || DocQuiet(context)) return true;
+   DocFieldAnalyse(context->fieldText[index], context->fields.frame[index].bytes, dest, sizeof(dest), &used);
+   if(!used) return true;
+   if(!DocAddLinkStart(context, dest, used)) return false;
+   context->fields.link = si32(index);
+   context->inLink      = true;
+   return true;
+}
+
+// Opens a field: w:fldChar begin.
+static void DocFieldBegin(DOC_CONTEXTptrc context) {
+   if(context->fields.overflow || context->fields.depth >= DOC_MAX_FIELDS) {
+      context->fields.overflow += 1u;
+      return;
+   }
+
+   DOC_FIELD fresh = {0, DOC_FIELD_CODE, DOC_FIELD_PLAIN, false};
+
+   context->fields.frame[context->fields.depth] = fresh;
+   context->fields.depth += 1u;
+}
+
+// Appends instruction text to the innermost field, while it is still collecting one. Word splits an
+// instruction over as many w:instrText as it likes, so appending is the only operation there is.
+static void DocFieldAppend(DOC_CONTEXTptrc context, cchptr bytes, cui64 byteCount) {
+   if(context->fields.overflow || !context->fields.depth) return;
+
+   cui32         index = context->fields.depth - 1u;
+   DOC_FIELDptrc field = context->fields.frame + index;
+
+   if(field->state != DOC_FIELD_CODE) return;
+   for(ui64 at = 0; at < byteCount; ++at) {
+      if(field->bytes >= DOC_FIELD_BYTES) {
+         field->full = true;
+         return;
+      }
+      context->fieldText[index][field->bytes++] = bytes[at];
+   }
+}
+
+// Turns the innermost field from its instruction to its result: w:fldChar separate.
+static cbool DocFieldSeparate(DOC_CONTEXTptrc context) {
+   if(context->fields.overflow || !context->fields.depth) return true;
+
+   cui32         index = context->fields.depth - 1u;
+   DOC_FIELDptrc field = context->fields.frame + index;
+   char          dest[DOC_FIELD_BYTES];
+   ui64          used = 0;
+
+   if(field->state != DOC_FIELD_CODE) return true;
+   field->state = DOC_FIELD_RESULT;
+   // An instruction that outgrew its buffer is one this walk cannot read to the end, so its result is
+   // kept as the text it is -- and a truncated URL is never linked.
+   field->kind = ui8(field->full ? DOC_FIELD_PLAIN : DocFieldAnalyse(context->fieldText[index], field->bytes, dest, sizeof(dest), &used));
+   return (field->kind == DOC_FIELD_LINK ? DocFieldOpenLink(context, index) : true);
+}
+
+// Closes the innermost field, and the link its result became: w:fldChar end.
+static cbool DocFieldEnd(DOC_CONTEXTptrc context) {
+   if(context->fields.overflow) {
+      context->fields.overflow -= 1u;
+      return true;
+   }
+   if(!context->fields.depth) return true;
+   context->fields.depth -= 1u;
+   if(context->fields.link != si32(context->fields.depth)) return true;
+   context->fields.link = -1;
+   context->inLink      = false;
+   return DocAddLinkEnd(context);
+}
+
+// Opens again, in a block that has just begun, the link a field's result left open in the block before
+// it. Markdown cannot spell a link across two paragraphs, so a field whose result spans them is two links
+// to one destination -- the same answer the emitter gives a hyperlink broken by a hard break.
+static cbool DocFieldReopen(DOC_CONTEXTptrc context) {
+   char dest[DOC_FIELD_BYTES];
+   ui64 used = 0;
+
+   if(context->fields.link < 0) return true;
+
+   cui32 index = ui32(context->fields.link);
+
+   DocFieldAnalyse(context->fieldText[index], context->fields.frame[index].bytes, dest, sizeof(dest), &used);
+   return (used ? DocAddLinkStart(context, dest, used) : true);
+}
+
+// Closes, in a block about to end, the link a field's result has open. The field stays open; the next
+// block opens its link again.
+static cbool DocFieldSuspend(DOC_CONTEXTptrc context) { return (context->fields.link < 0 ? true : DocAddLinkEnd(context)); }
+
+// Forgets every open field, at the end of a part or of a note. A field is a story's own and never runs on
+// into the next one, so one still open here is malformed: one that separated has had its result read as it
+// came, one that never separated has had the rest of its story read as instruction, and all that is left
+// is to stop treating what follows as part of it.
+static void DocFieldReset(DOC_CONTEXTptrc context) {
+   if(context->fields.link >= 0) context->inLink = false;
+   context->fields.depth    = 0;
+   context->fields.overflow = 0;
+   context->fields.link     = -1;
+}
+
+// Reads the w:fldChar the reader is on, and consumes it.
+static cbool DocReadFieldChar(DOC_CONTEXTptrc context) {
+   cXML_TEXT type = XmlAttribute(context->reader, XML_NS_W, "fldCharType");
+   bool      ok   = true;
+
+   if(XmlTextEqual(type, "begin")) DocFieldBegin(context);
+   else if(XmlTextEqual(type, "separate")) ok = DocFieldSeparate(context);
+   else if(XmlTextEqual(type, "end")) ok = DocFieldEnd(context);
+   // w:ffData, a form field's own data, is the one child a w:fldChar may have, and it is not content.
+   return ok && XmlSkipElement(context->reader);
+}
+
+// Reads the w:instrText the reader is on into the innermost field's instruction, and consumes it.
+static cbool DocReadInstruction(DOC_CONTEXTptrc context) {
+   cui32 depthHere = context->reader->depth;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
+      if(token == XML_TOKEN_TEXT) {
+         DocFieldAppend(context, context->reader->text.bytes, context->reader->text.length);
+         continue;
+      }
+      if(token == XML_TOKEN_START_ELEMENT && !XmlSkipElement(context->reader)) return false;
+   }
+}
+
 //-- Run properties
 
 // Reads the w:rPr the reader is on into a direct-formatting record, and consumes it. The property
@@ -428,9 +830,22 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
          if(heading) bits &= ~IR_FMT_BOLD;
          resolved = true;
       }
-      if(hidden) {
-         // Hidden text is omitted whole, which is CONVERSION_REFERENCE row 10. Word hides the
-         // instruction half of a field this way, so emitting it would put field codes in the document.
+      // A field's structure is read whatever the run's formatting says about its text. Word sets
+      // w:webHidden on every run of the PAGEREF inside each entry of a TOC, w:fldChar included, and a
+      // field whose begin was dropped for being hidden while its end was not would leave every field
+      // after it misread. Hiddenness is about characters on the page; these are not characters.
+      if(XmlIsElement(context->reader, XML_NS_W, "fldChar")) {
+         textOpen = false;
+         if(!DocReadFieldChar(context)) return false;
+         continue;
+      }
+      if(XmlIsElement(context->reader, XML_NS_W, "instrText")) {
+         if(!DocReadInstruction(context)) return false;
+         continue;
+      }
+      if(hidden || DocQuiet(context)) {
+         // Hidden text is omitted whole, which is CONVERSION_REFERENCE row 10. And so is everything a
+         // field makes invisible: its instruction, and the whole of a TOC (correctness rule 7).
          if(!XmlSkipElement(context->reader)) return false;
          continue;
       }
@@ -486,6 +901,17 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
          if(!XmlSkipElement(context->reader)) return false;
          continue;
       }
+      // A note reference is a marker like a picture: it ends the text span beside it and votes on nothing,
+      // and it carries no formatting of its own -- the superscript its FootnoteReference style gives it
+      // is what "[^n]" already means.
+      cbool footnote = XmlIsElement(context->reader, XML_NS_W, "footnoteReference");
+      cbool endnote  = XmlIsElement(context->reader, XML_NS_W, "endnoteReference");
+
+      if(footnote || endnote) {
+         textOpen = false;
+         if(!DocReadNoteRef(context, endnote)) return false;
+         continue;
+      }
       // A picture, in any of the four shapes one arrives in. Skipping an mc:AlternateContent whole --
       // which is what happened before M7 -- lost the picture in both of its branches at once.
       cbool picture = DocIsNamed(context->reader, XML_NS_W, DOC_PICTURES) || XmlIsElement(context->reader, XML_NS_MC, "AlternateContent");
@@ -497,9 +923,10 @@ static cbool DocWalkRun(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool hea
          if(!DocWalkImage(context)) return false;
          continue;
       }
-      // Everything else a run can hold belongs to a later milestone: the field and note elements to
-      // M10, w:sym to a symbol table. w:instrText in particular must never be emitted as text, and
-      // skipping it whole is how that is kept true.
+      // Everything else a run can hold is skipped whole: w:footnoteRef and w:endnoteRef, the marker a
+      // note's own body opens with, which the "[^n]:" label replaces; w:separator and its continuation
+      // twin, which only a separator note holds; w:delInstrText, which only a w:del holds; and w:sym,
+      // which waits for a symbol table.
       if(!XmlSkipElement(context->reader)) return false;
    }
 }
@@ -523,8 +950,8 @@ static constexpr cchptr DOC_BLIP_REF[] = {"embed", "link", nullptr};
 // The same for VML, where the one attribute serves both and r:href is the external form.
 static constexpr cchptr DOC_IMAGEDATA_REF[] = {"id", "href", nullptr};
 
-// The run containers whose own meaning waits for a later milestone but whose text is content now.
-static constexpr cchptr DOC_CONTAINERS[] = {"fldSimple", "dir", "bdo", nullptr};
+// The run containers whose own meaning is bidirectional layout and nothing else, but whose text is content.
+static constexpr cchptr DOC_CONTAINERS[] = {"dir", "bdo", nullptr};
 
 // The VML shapes that can carry a picture, and so an alt text worth reading.
 static constexpr cchptr DOC_VML_SHAPES[] = {"shape", "rect", "roundrect", "oval", "shapetype", nullptr};
@@ -664,8 +1091,9 @@ static cbool DocWalkHyperlink(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbo
    cbool     internal  = (anchor.bytes != nullptr && anchor.length != 0);
 
    // A hyperlink naming nothing is a container and nothing else, and so is one inside another: links do
-   // not nest in Markdown, and the outer one is the one a reader was given.
-   if((!related && !internal) || context->inLink) return DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
+   // not nest in Markdown, and the outer one is the one a reader was given. One inside a field nobody
+   // sees -- a TOC's entries are all hyperlinks -- writes no markers, since its content comes to nothing.
+   if((!related && !internal) || context->inLink || DocQuiet(context)) return DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
    if(!IrAddSpan(context->document, IR_SPAN_LINK_START, IR_FMT_NONE)) {
       context->memory = true;
       return false;
@@ -707,7 +1135,8 @@ static cbool DocWalkHyperlink(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbo
 static cbool DocReadBookmark(DOC_CONTEXTptrc context, cDOC_LEVEL level) {
    cXML_TEXT name = XmlAttribute(context->reader, XML_NS_W, "name");
 
-   if(name.bytes && name.length) {
+   // A bookmark inside a field nobody sees marks a place the output does not have.
+   if(name.bytes && name.length && !DocQuiet(context)) {
       if(level == DOC_LEVEL_RUN) {
          if(!IrAddSpan(context->document, IR_SPAN_ANCHOR, IR_FMT_NONE) || !IrAppendDest(context->document, name.bytes, name.length)) {
             context->memory = true;
@@ -717,6 +1146,25 @@ static cbool DocReadBookmark(DOC_CONTEXTptrc context, cDOC_LEVEL level) {
          context->pendingLength[context->pendingCount] = DocCopyView(name, context->pending[context->pendingCount], DOC_ANCHOR_BYTES);
          ++context->pendingCount;
       }
+   }
+   return XmlSkipElement(context->reader);
+}
+
+// Records a w:footnoteReference or a w:endnoteReference as a note reference span, carrying the w:id as
+// written. Which note it names, and what its label will be, is LinkResolveNotes's question: a note is
+// numbered by the order its references are *read* in, which is only known once every part is walked.
+static cbool DocReadNoteRef(DOC_CONTEXTptrc context, cbool endnote) {
+   cXML_TEXT id = XmlAttribute(context->reader, XML_NS_W, "id");
+
+   if(id.bytes && id.length) {
+      if(!IrAddSpan(context->document, IR_SPAN_NOTE, IR_FMT_NONE) || !IrAppendDest(context->document, id.bytes, id.length)) {
+         context->memory = true;
+         return false;
+      }
+
+      IR_SPANptr span = IrSpanMutable(context->document, IrSpanCount(context->document) - 1u);
+
+      if(span && endnote) span->flags = IR_SPAN_FLAG_END;
    }
    return XmlSkipElement(context->reader);
 }
@@ -796,27 +1244,12 @@ static cbool DocReadBorders(DOC_CONTEXTptrc context, boolptrc rule) {
 
 // Reads the w:val of the element the reader is on as a decimal integer, reporting whether it was one.
 // A value that is absent, empty or not all digits leaves the destination alone, which is what keeps
-// "the paragraph said nothing" apart from "the paragraph said zero".
+// "the paragraph said nothing" apart from "the paragraph said zero". DocParseNumber carries the note on
+// why the value's length is not capped.
 static cbool DocReadDecimal(DOC_CONTEXTptrc context, si32ptrc out) {
    cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
 
-   // No cap on how many digits are read, because ST_DecimalNumber is an xsd:integer and leading zeros
-   // are legal in one. A cap on the value's *length* rather than on its magnitude turns "007" into a
-   // refusal, and every refusal here is silent: a padded w:outlineLvl stopped being a heading, and a
-   // padded w:ilvl lost the level it named. StyleModel's twin dropped its own cap during M8 for this
-   // reason; this is the other half of it. The overflow test below is the real bound and it stops
-   // after ten significant digits whatever the value is padded to.
-   if(!value.bytes || !value.length) return false;
-
-   si64 parsed = 0;
-
-   for(ui64 index = 0; index < value.length; ++index) {
-      if(value.bytes[index] < '0' || value.bytes[index] > '9') return false;
-      parsed = parsed * 10 + si64(value.bytes[index] - '0');
-      if(parsed > 0x7FFFFFFF) return false;
-   }
-   *out = si32(parsed);
-   return true;
+   return DocParseNumber(value.bytes, value.length, false, out);
 }
 
 // Reads the w:numPr the reader is on, and consumes it. Its two values live in children rather than in
@@ -863,8 +1296,26 @@ static cIR_ALIGN DocAlignOf(cXML_TEXT value) {
    return IR_ALIGN_NONE;
 }
 
+// Reads the w:rPr of a paragraph's own mark, and reports whether a tracked change removed the mark. A
+// w:del there is a deletion of the pilcrow itself, and so is a w:moveFrom: the paragraph was moved away
+// from here, and accept-all takes it. Every other property of the mark formats a glyph nobody sees.
+static cbool DocReadMarkProperties(DOC_CONTEXTptrc context, boolptrc struck) {
+   cui32 depthHere = context->reader->depth;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_W, "del") || XmlIsElement(context->reader, XML_NS_W, "moveFrom")) *struck = true;
+      if(!XmlSkipElement(context->reader)) return false;
+   }
+}
+
 // Reads the w:pPr the reader is on, and consumes it.
-static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style, si32ptrc outline, boolptrc rule, DOC_NUM_REFptrc num) {
+static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style, si32ptrc outline, // Its style and heading level
+                                        boolptrc rule, DOC_NUM_REFptrc num, boolptrc struck) {     // Its rule, list and deleted mark
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -879,6 +1330,10 @@ static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style,
       }
       if(XmlIsElement(context->reader, XML_NS_W, "numPr")) {
          if(!DocReadNumbering(context, num)) return false;
+         continue;
+      }
+      if(XmlIsElement(context->reader, XML_NS_W, "rPr")) {
+         if(!DocReadMarkProperties(context, struck)) return false;
          continue;
       }
       if(XmlIsElement(context->reader, XML_NS_W, "jc")) {
@@ -926,98 +1381,61 @@ static cbool DocListSurvives(cIR_BLOCK_KIND kind, cSTYLE_PARAGRAPH_PROPS props, 
    return props.numId > 0 && kind != IR_BLOCK_HEADING && NumFind(numbering, props.numId) >= 0;
 }
 
-// Walks one w:p into one block, which IrEndBlock throws away again when it holds nothing.
-static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
-   cui32         depthHere = context->reader->depth;
-   si32          style     = StyleDefaultParagraph(context->styles);
-   si32          outline   = -1;
-   DOC_NUM_REF   num       = {-1, -1};
-   IR_MARK       mark      = {-1, 0, 0, 0, 0, 0, 0, 0};
-   IR_BLOCK_KIND kind      = IR_BLOCK_PARAGRAPH;
-   ui8           level     = 0;
-   si32          listId    = -1;
-   si32          listLevel = 0;
-   bool          list      = false;
-   bool          rule      = false;
-   bool          settled   = false;
-   bool          begun     = false;
-   bool          head      = false;
-   bool          ok        = true;
-   // Saved and restored rather than merely cleared, so that a paragraph walked while another is open
-   // cannot settle the outer one's classification. Nothing this build reads nests one -- a w:tbl is a
-   // sibling of a paragraph and never a child of one -- so the case it guards is still hypothetical.
-   cbool outerText = context->sawText;
-   cbool outerMono = context->allMono;
+// Settles a paragraph's classification from its resolved properties.
+static void DocSettleParagraph(DOC_CONTEXTptrc context, DOC_PARAGRAPHptrc para, cSTYLE_PARAGRAPH_PROPS props, cbool rule) {
+   para->level     = props.headingLevel;
+   para->kind      = DocBlockKind(props);
+   para->list      = DocListSurvives(para->kind, props, context->numbering);
+   para->listId    = props.numId;
+   para->listLevel = (props.numLevel > 0 ? props.numLevel : 0);
+   para->rule      = rule;
+}
 
-   context->sawText = false;
-   context->allMono = true;
-   for(;;) {
-      cXML_TOKEN token = XmlNext(context->reader);
-
-      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
-      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
-      if(token != XML_TOKEN_START_ELEMENT) continue;
-      if(!settled && XmlIsElement(context->reader, XML_NS_W, "pPr")) {
-         if(!DocReadParagraphProperties(context, &style, &outline, &rule, &num)) return false;
-         continue;
-      }
-      if(!settled) {
-         // The properties are settled by the time any content is reached: w:pPr is the paragraph's first
-         // child whenever it is present, so anything else means there is no more of it to come.
-         cSTYLE_PARAGRAPH_PROPS props = StyleResolveParagraph(context->styles, style, outline, num.numId, num.level);
-
-         head      = (props.headingLevel > 0);
-         level     = props.headingLevel;
-         kind      = DocBlockKind(props);
-         list      = DocListSurvives(kind, props, context->numbering);
-         listId    = props.numId;
-         listLevel = (props.numLevel > 0 ? props.numLevel : 0);
-         settled   = true;
-      }
-      if(!begun) {
-         mark  = IrBeginBlock(context->document, kind, level);
-         begun = true;
-         if(mark.block < 0) {
-            context->memory = true;
-            return false;
-         }
-         if(!DocFlushBookmarks(context)) return false;
-      }
-      // A paragraph's children are run-level content, and every transparent wrapper is handled there.
-      if(!DocDispatchChild(context, DOC_LEVEL_RUN, style, head)) {
-         ok = false;
-         break;
-      }
+// Opens a paragraph's block, or adopts the one a paragraph whose mark was deleted left open.
+//
+// An adopted block keeps every span it already holds and takes this paragraph's classification when it
+// is finished, which is what Word does on accepting the deletion: the paragraph's text runs on into the
+// next paragraph and takes that paragraph's mark -- and the mark is where a paragraph's style lives. A
+// field link is opened again only in a block that is really new, because an adopted block never closed it.
+static cbool DocOpenParagraph(DOC_CONTEXTptrc context, DOC_PARAGRAPHptrc para) {
+   if(context->joining) {
+      para->mark       = context->joined.mark;
+      context->joining = false;
+      return DocFlushBookmarks(context);
    }
-   if(!settled) {
-      cSTYLE_PARAGRAPH_PROPS props = StyleResolveParagraph(context->styles, style, outline, num.numId, num.level);
-
-      level     = props.headingLevel;
-      kind      = DocBlockKind(props);
-      list      = DocListSurvives(kind, props, context->numbering);
-      listId    = props.numId;
-      listLevel = (props.numLevel > 0 ? props.numLevel : 0);
+   para->mark = IrBeginBlock(context->document, para->kind, para->level);
+   if(para->mark.block < 0) {
+      context->memory = true;
+      return false;
    }
-   // A paragraph with no children at all is how every producer writes an empty line, and inside a run of
-   // code paragraphs that is a blank line of the fence rather than nothing -- so a code paragraph gets
-   // its block even when there was never any content to open one. The emitter drops such a block again
-   // wherever it falls at the edge of a fence, which is the only place it would be a blank line.
-   // A list item gets its block whatever else the paragraph carried, because a marker on a line of its
-   // own is content the border test below has already been told not to speak for.
-   if(!begun && ok && (list || (!rule && kind == IR_BLOCK_CODE))) {
-      mark  = IrBeginBlock(context->document, kind, level);
-      begun = true;
-      if(mark.block < 0) {
-         context->memory = true;
-         return false;
-      }
-      if(!DocFlushBookmarks(context)) return false;
-   }
+   return DocFlushBookmarks(context) && DocFieldReopen(context);
+}
 
+// Ends a paragraph's block, classifying it by everything its runs said, and writes mapping row 25's rule
+// where a lone bottom border stood on a paragraph that came to nothing.
+//
+// A paragraph that began inside a field nobody sees and came to nothing is gone whole -- its list marker,
+// its blank line of code and its border with it. That is every paragraph of a TOC after the one it begins
+// in: each is an entry, and an entry's number, border or style says nothing about the document once the
+// entry itself is dropped.
+static cbool DocFinishParagraph(DOC_CONTEXTptrc context, DOC_PARAGRAPHptrc para, cbool ok) {
    bool kept = false;
    bool ink  = false;
 
-   if(begun) {
+   if(para->mark.block >= 0) {
+      IR_BLOCKptr block = IrBlockMutable(context->document, ui32(para->mark.block));
+
+      // Written here rather than trusted from IrBeginBlock, because an adopted block was begun with the
+      // classification of the paragraph whose mark was deleted and ends with the one that kept it.
+      if(block) {
+         block->kind         = para->kind;
+         block->headingLevel = para->level;
+      }
+      if(!DocFieldSuspend(context)) return false;
+      if(para->quiet && !IrHasContent(context->document, para->mark.spanAt, IrSpanCount(context->document))) {
+         IrRewind(context->document, para->mark);
+         return true;
+      }
       // CONVERSION_REFERENCE row 12's second detection: a paragraph whose every text-bearing run is set
       // in a monospace family is code even where no style says so. It is settled here rather than in
       // RunCoalescer because the font is a run property the intermediate representation does not carry,
@@ -1025,19 +1443,15 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
       // A list item is exempt, and the reasoning is StyleReadBaseline's: the font is a *guess* at what
       // a paragraph is, and a paragraph carrying a w:numPr has already stated it. A list of code lines
       // set in Consolas would otherwise become a run of fences, each having lost its marker.
-      if(kind == IR_BLOCK_PARAGRAPH && !list && context->sawText && context->allMono) {
-         IR_BLOCKptr block = IrBlockMutable(context->document, ui32(mark.block));
-
-         if(block) block->kind = IR_BLOCK_CODE;
-      }
+      if(block && para->kind == IR_BLOCK_PARAGRAPH && !para->list && para->sawText && para->allMono) block->kind = IR_BLOCK_CODE;
       // Recorded before the block is ended, because IrEndBlock reads it: an empty list item is a marker
       // on a line of its own and must not be unwound the way an empty paragraph is.
-      if(list) IrSetListRef(context->document, mark, listId, ui32(listLevel));
-      ink  = DocBlockIsInk(context->document, mark);
-      kept = IrEndBlock(context->document, mark);
+      if(para->list) IrSetListRef(context->document, para->mark, para->listId, ui32(para->listLevel));
+      ink  = DocBlockIsInk(context->document, para->mark);
+      kept = IrEndBlock(context->document, para->mark);
+   } else if(para->quiet) {
+      return true;
    }
-   context->sawText = outerText;
-   context->allMono = outerMono;
    // Row 25: a lone bottom border on a paragraph that came to nothing is Word's autoformatted horizontal
    // rule. The test is "came to nothing" and not "has no runs", so a paragraph of empty runs is one too.
    // A bookmark keeps a block alive without putting anything on the page, so the rule's test is what
@@ -1046,7 +1460,7 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    // its marker and its border both. Emitting "---" there would delete the item and invent a rule the
    // document does not have -- and Word's own autoformatted rule never carries numbering, so the
    // exemption costs nothing. The same reasoning IrHasInk gives for counting a picture as ink.
-   if(ok && rule && !list && (!kept || !ink)) {
+   if(ok && para->rule && !para->list && (!kept || !ink)) {
       cIR_MARK ruled = IrBeginBlock(context->document, IR_BLOCK_RULE, 0);
 
       if(ruled.block < 0) {
@@ -1055,7 +1469,110 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
       }
       IrEndBlock(context->document, ruled);
    }
-   return ok;
+   return true;
+}
+
+// Ends the paragraph a deleted mark left waiting, where no paragraph turned up to take it: the next block
+// is a table, or the container it stood in has ended. Word will not delete the last mark of a cell, a
+// note or the body, so this is a producer's malformation -- and the paragraph is kept as it was written.
+static cbool DocFlushJoin(DOC_CONTEXTptrc context) {
+   if(!context->joining) return true;
+   context->joining = false;
+
+   DOC_PARAGRAPH para = context->joined;
+
+   return DocFinishParagraph(context, &para, true);
+}
+
+// Walks one w:p into one block, which IrEndBlock throws away again when it holds nothing.
+static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
+   cui32         depthHere = context->reader->depth;
+   si32          style     = StyleDefaultParagraph(context->styles);
+   si32          outline   = -1;
+   DOC_NUM_REF   num       = {-1, -1};
+   DOC_PARAGRAPH para;
+   bool          rule    = false;
+   bool          struck  = false;
+   bool          settled = false;
+   bool          begun   = false;
+   bool          head    = false;
+   bool          ok      = true;
+   // Saved and restored rather than merely cleared, so that a paragraph walked while another is open
+   // cannot settle the outer one's classification. Nothing this build reads nests one -- a w:tbl is a
+   // sibling of a paragraph and never a child of one, and a note is walked after the body rather than
+   // at its reference -- so the case it guards is still hypothetical; row 38's text boxes would make it real.
+   cbool outerText = context->sawText;
+   cbool outerMono = context->allMono;
+   // A paragraph a deleted mark ran on into this one lends it its votes and the moment it began.
+   cbool adopting = context->joining;
+
+   para.mark        = {-1, 0, 0, 0, 0, 0, 0, 0};
+   para.kind        = IR_BLOCK_PARAGRAPH;
+   para.level       = 0;
+   para.listId      = -1;
+   para.listLevel   = 0;
+   para.list        = false;
+   para.rule        = false;
+   para.quiet       = (adopting ? context->joined.quiet : DocQuiet(context));
+   context->sawText = (adopting ? context->joined.sawText : false);
+   context->allMono = (adopting ? context->joined.allMono : true);
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(!settled && XmlIsElement(context->reader, XML_NS_W, "pPr")) {
+         if(!DocReadParagraphProperties(context, &style, &outline, &rule, &num, &struck)) return false;
+         continue;
+      }
+      if(!settled) {
+         // The properties are settled by the time any content is reached: w:pPr is the paragraph's first
+         // child whenever it is present, so anything else means there is no more of it to come.
+         DocSettleParagraph(context, &para, StyleResolveParagraph(context->styles, style, outline, num.numId, num.level), rule);
+         head    = (para.level > 0);
+         settled = true;
+      }
+      if(!begun) {
+         if(!DocOpenParagraph(context, &para)) return false;
+         begun = true;
+      }
+      // A paragraph's children are run-level content, and every transparent wrapper is handled there.
+      if(!DocDispatchChild(context, DOC_LEVEL_RUN, style, head)) {
+         ok = false;
+         break;
+      }
+   }
+   if(!settled) DocSettleParagraph(context, &para, StyleResolveParagraph(context->styles, style, outline, num.numId, num.level), rule);
+   para.sawText     = context->sawText;
+   para.allMono     = context->allMono;
+   context->sawText = outerText;
+   context->allMono = outerMono;
+   // Accept-all revisions, correctness rule 8, for a revision that is not a wrapper: a tracked
+   // change deleted this paragraph's mark, so its text runs on into the next paragraph and the two are one
+   // (CONVERSION_REFERENCE 5.11). The block stays open for the next w:p to adopt. A paragraph that opened
+   // none has nothing to lend, and one already carrying an adopted block passes that block on.
+   if(struck && ok) {
+      if(begun) {
+         context->joined  = para;
+         context->joining = true;
+      }
+      return true;
+   }
+   // A paragraph with no children at all is how every producer writes an empty line, and inside a run of
+   // code paragraphs that is a blank line of the fence rather than nothing -- so a code paragraph gets
+   // its block even when there was never any content to open one. The emitter drops such a block again
+   // wherever it falls at the edge of a fence, which is the only place it would be a blank line.
+   // A list item gets its block whatever else the paragraph carried, because a marker on a line of its
+   // own is content the border test below has already been told not to speak for. And a paragraph with
+   // no children takes a block a deleted mark left waiting, because its mark is the one that survived.
+   cbool wanted = context->joining || (!para.quiet && (para.list || (!para.rule && para.kind == IR_BLOCK_CODE)));
+
+   if(!begun && ok && wanted) {
+      if(!DocOpenParagraph(context, &para)) return false;
+      begun = true;
+   }
+   return DocFinishParagraph(context, &para, ok) && ok;
 }
 
 //-- Tables
@@ -1110,8 +1627,9 @@ static cbool DocReadRowProperties(DOC_CONTEXTptrc context, boolptrc header, bool
 // Reads the w:tcPr the reader is on, and reports what it said about the cell: how many grid columns it
 // covers, and whether it is the start of a vertical merge or a continuation of one. A w:vMerge with no
 // w:val, or one saying "continue", is a continuation -- which is the cell the row above is still
-// filling, and which carries an empty paragraph rather than content of its own.
-static cbool DocReadCellProperties(DOC_CONTEXTptrc context, ui32ptrc span, ui8ptrc flags) {
+// filling, and which carries an empty paragraph rather than content of its own. A w:cellDel is a cell a
+// tracked change removed, which accept-all drops with its content exactly as it drops a deleted row.
+static cbool DocReadCellProperties(DOC_CONTEXTptrc context, ui32ptrc span, ui8ptrc flags, boolptrc deleted) {
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -1128,6 +1646,8 @@ static cbool DocReadCellProperties(DOC_CONTEXTptrc context, ui32ptrc span, ui8pt
          cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
 
          *flags |= ui8(XmlTextEqual(value, "restart") ? IR_CELL_VRESTART : IR_CELL_VMERGED);
+      } else if(XmlIsElement(context->reader, XML_NS_W, "cellDel")) {
+         *deleted = true;
       }
       if(!XmlSkipElement(context->reader)) return false;
    }
@@ -1174,6 +1694,7 @@ static cbool DocWalkCell(DOC_CONTEXTptrc context) {
    si32      cell         = -1;
    ui32      blockAt      = IrBlockCount(context->document);
    bool      settled      = false;
+   bool      deleted      = false;
    bool      ok           = true;
 
    context->justify = IR_ALIGN_NONE;
@@ -1183,8 +1704,14 @@ static cbool DocWalkCell(DOC_CONTEXTptrc context) {
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
       if(token != XML_TOKEN_START_ELEMENT) continue;
-      if(!settled && XmlIsElement(context->reader, XML_NS_W, "tcPr")) {
-         if(!DocReadCellProperties(context, &span, &flags)) return false;
+      if(!settled && !deleted && XmlIsElement(context->reader, XML_NS_W, "tcPr")) {
+         if(!DocReadCellProperties(context, &span, &flags, &deleted)) return false;
+         continue;
+      }
+      // Accept-all revisions, correctness rule 8: a cell a tracked change deleted is not in its row, and
+      // neither is its content. It opens no cell record, so the row's chain simply runs past it.
+      if(deleted) {
+         if(!XmlSkipElement(context->reader)) return false;
          continue;
       }
       if(!settled) {
@@ -1198,10 +1725,16 @@ static cbool DocWalkCell(DOC_CONTEXTptrc context) {
          break;
       }
    }
+   if(deleted) {
+      context->justify = outerJustify;
+      return ok;
+   }
    // A w:tc of nothing but its w:tcPr, or of nothing whatever. It is still a cell and still a column
    // the grid has to account for: the schema says a cell always holds a w:p, and a producer that leaves
    // one out must not cost its row a column.
    if(!settled && !DocOpenCell(context, span, flags, &cell, &blockAt)) return false;
+   // A paragraph whose deleted mark was waiting for another has none to go to in this cell.
+   if(!DocFlushJoin(context)) return false;
    IrEndCell(context->document, cell, blockAt, context->justify);
    context->justify = outerJustify;
    return ok;
@@ -1263,7 +1796,12 @@ static cbool DocWalkTable(DOC_CONTEXTptrc context) {
    // treatment of everything a document overdoes. The tokenizer's own element cap would stop a runaway
    // eventually; this is the bound that keeps this walk's *stack* off the document's content.
    if(context->depth >= IR_MAX_TABLE_DEPTH) return XmlSkipElement(context->reader);
+   // A paragraph whose deleted mark was waiting for the next one has a table instead, and a table cannot
+   // be adopted into a paragraph, so the paragraph ends where it stands.
+   if(!DocFlushJoin(context)) return false;
 
+   // A table that stands wholly inside a field nobody sees -- a TOC laid out as one -- is gone whole.
+   cbool    quiet  = DocQuiet(context);
    cIR_MARK before = IrMark(context->document);
    cIR_MARK mark   = IrBeginBlock(context->document, IR_BLOCK_TABLE, 0);
 
@@ -1333,7 +1871,7 @@ static cbool DocWalkTable(DOC_CONTEXTptrc context) {
    // Whether any row survived is this walk's own tail and never the table's firstRow, because a rewind
    // inside a discarded mc:Choice truncates the row array without touching the record that names it:
    // reading firstRow there keeps a table of no usable rows, which emits an empty <table> or nothing.
-   cbool empty = (context->lastRow < 0);
+   cbool empty = (context->lastRow < 0) || (quiet && !IrHasContent(context->document, before.spanAt, IrSpanCount(context->document)));
 
    // A table that came to nothing is unwound entirely, which is what keeps an empty w:tbl -- and one
    // whose every row a tracked change removed -- from costing a blank line and a delimiter row.
@@ -1353,9 +1891,10 @@ static cbool DocWalkTable(DOC_CONTEXTptrc context) {
 
 //-- Wrappers
 
-// Walks the w:sdt the reader is on, descending only into its w:sdtContent. The properties half is
-// metadata; the content half is ordinary document content that must not disappear with its wrapper.
-static cbool DocWalkStructuredTag(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 paragraphStyle, cbool heading) {
+// Reads the w:sdtPr the reader is on, and reports whether it marks a table of contents: a w:docPartObj
+// or w:docPartList whose w:docPartGallery is "Table of Contents", which is what Word wraps every TOC it
+// inserts in. Every other property of a content control is metadata about the content, not content.
+static cbool DocReadTagProperties(DOC_CONTEXTptrc context, boolptrc contents) {
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -1364,12 +1903,59 @@ static cbool DocWalkStructuredTag(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
       if(token != XML_TOKEN_START_ELEMENT) continue;
-      if(XmlIsElement(context->reader, XML_NS_W, "sdtContent")) {
+      if(!XmlIsElement(context->reader, XML_NS_W, "docPartGallery")) continue;
+      if(XmlTextEqual(XmlAttribute(context->reader, XML_NS_W, "val"), "Table of Contents")) *contents = true;
+   }
+}
+
+// Walks the w:sdt the reader is on, descending only into its w:sdtContent. The properties half is
+// metadata; the content half is ordinary document content that must not disappear with its wrapper --
+// except a table of contents, which is skipped whole exactly as a TOC field is (mapping row 31), and for
+// the same reason: it is stale page layout, and a Markdown reader navigates by the headings themselves.
+static cbool DocWalkStructuredTag(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 paragraphStyle, cbool heading) {
+   cui32 depthHere = context->reader->depth;
+   bool  contents  = false;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+      if(XmlIsElement(context->reader, XML_NS_W, "sdtPr")) {
+         if(!DocReadTagProperties(context, &contents)) return false;
+         continue;
+      }
+      if(!contents && XmlIsElement(context->reader, XML_NS_W, "sdtContent")) {
          if(!DocWalkChildren(context, level, paragraphStyle, heading)) return false;
          continue;
       }
       if(!XmlSkipElement(context->reader)) return false;
    }
+}
+
+// Walks the w:fldSimple the reader is on: a field whose instruction is an attribute and whose children
+// are its cached result. It is the complex field's begin, instruction and separate in one element, and it
+// ends where the element does, so it is handled by the same stack -- which is what lets one nest inside
+// the other in either order.
+static cbool DocWalkSimpleField(DOC_CONTEXTptrc context, csi32 paragraphStyle, cbool heading) {
+   cXML_TEXT instruction = XmlAttribute(context->reader, XML_NS_W, "instr");
+   cui32     depth       = context->fields.depth;
+   cui32     overflow    = context->fields.overflow;
+
+   DocFieldBegin(context);
+   // The attribute is copied before anything moves the reader on, because the view dies at the next token.
+   if(instruction.bytes) DocFieldAppend(context, instruction.bytes, instruction.length);
+   if(!DocFieldSeparate(context)) return false;
+
+   cbool walked = DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
+
+   // Every field opened inside the result and never ended is ended here with this one: an element cannot
+   // leave anything open past its own end tag, and a link one of them opened has to close in this block.
+   while(context->fields.overflow > overflow || context->fields.depth > depth) {
+      if(!DocFieldEnd(context)) return false;
+   }
+   return walked;
 }
 
 // Walks the w:ruby the reader is on, descending only into its w:rubyBase. The w:rt half is the
@@ -1428,6 +2014,13 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    // w:bookmarkStart in a discarded Choice was flushed into the Fallback's first block instead.
    cIR_ALIGN markedJustify = context->justify;
    cui32     markedPending = context->pendingCount;
+   // So does every field the discarded Choice opened, separated or ended, and the link one of them opened;
+   // DOC_FIELDS says why copying the counts is enough. And a paragraph inside the Choice whose mark was
+   // deleted would leave a join pointing at a block the rewind has just thrown away.
+   cDOC_FIELDS    markedFields  = context->fields;
+   cbool          markedLink    = context->inLink;
+   cDOC_PARAGRAPH markedJoined  = context->joined;
+   cbool          markedJoining = context->joining;
 
    for(;;) {
       cXML_TOKEN token = XmlNext(context->reader);
@@ -1444,6 +2037,10 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
             context->lastCell     = markedCell;
             context->justify      = markedJustify;
             context->pendingCount = markedPending;
+            context->fields       = markedFields;
+            context->inLink       = markedLink;
+            context->joined       = markedJoined;
+            context->joining      = markedJoining;
          }
          if(!DocWalkChildren(context, level, paragraphStyle, heading)) return false;
          tookFallback = true;
@@ -1495,8 +2092,8 @@ static cbool DocDispatchChild(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    }
    if(XmlIsElement(context->reader, XML_NS_W, "r")) return DocWalkRun(context, paragraphStyle, heading);
    if(XmlIsElement(context->reader, XML_NS_W, "hyperlink")) return DocWalkHyperlink(context, paragraphStyle, heading);
-   // w:dir and w:bdo are bidirectional run containers and nothing else; w:fldSimple gets its field
-   // semantics at M10. All three hold text that is content now, so all three are descended into.
+   if(XmlIsElement(context->reader, XML_NS_W, "fldSimple")) return DocWalkSimpleField(context, paragraphStyle, heading);
+   // w:dir and w:bdo are bidirectional run containers and nothing else, and their text is content.
    cbool container = DocIsNamed(context->reader, XML_NS_W, DOC_CONTAINERS);
 
    if(container) return DocWalkChildren(context, DOC_LEVEL_RUN, paragraphStyle, heading);
@@ -1520,8 +2117,54 @@ static cbool DocWalkChildren(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 pa
 
 //== Entry points
 
+// Prepares the state one walk carries. The fields are written one by one rather than zeroed, because the
+// context holds the field instructions -- sixteen kilobytes that only ever need their counts cleared.
+static void DocContextOpen(DOC_CONTEXTptrc context, IR_DOCUMENTptrc document,                        // What is built
+                           cSTYLE_MODELptr styles, cNUM_MODELptr numbering, XML_READERptrc reader) { // From what
+   context->document        = document;
+   context->styles          = styles;
+   context->numbering       = numbering;
+   context->reader          = reader;
+   context->cachedStyle     = -1;
+   context->cachedId[0]     = 0;
+   context->pendingCount    = 0;
+   context->fields.depth    = 0;
+   context->fields.overflow = 0;
+   context->fields.link     = -1;
+   context->joined.mark     = {-1, 0, 0, 0, 0, 0, 0, 0};
+   context->joining         = false;
+   context->table           = -1;
+   context->row             = -1;
+   context->lastRow         = -1;
+   context->lastCell        = -1;
+   context->depth           = 0;
+   context->justify         = IR_ALIGN_NONE;
+   context->inLink          = false;
+   context->sawText         = false;
+   context->allMono         = true;
+   context->memory          = false;
+}
+
+// Turns what a walk left behind into its status: an allocation failure first, because it makes every
+// other verdict meaningless, then the tokenizer's own, then the walk's.
+static cWALK_STATUS DocWalkVerdict(DOC_CONTEXTptrc context, XML_READERptrc reader, cWALK_STATUS status) {
+   WALK_STATUS verdict = status;
+   cXML_RESULT broke   = reader->result;
+
+   XmlClose(reader);
+   if(context->memory || IrFailed(context->document)) {
+      verdict.result = WALK_ERROR_MEMORY;
+      return verdict;
+   }
+   if(broke != XML_OK) {
+      verdict.result = WALK_ERROR_XML;
+      verdict.xml    = broke;
+   }
+   return verdict;
+}
+
 cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, csi32 partIndex) {
-   WALK_STATUS status = {WALK_OK, XML_OK, OPC_OK};
+   WALK_STATUS status = {WALK_OK, XML_OK, OPC_OK, partIndex};
 
    cOPC_RESULT loaded = OpcLoadXmlPart(package, partIndex);
 
@@ -1532,11 +2175,13 @@ cWALK_STATUS DocWalk(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_M
    }
    cui8ptr bytes = OpcPartBytes(package, partIndex);
 
-   return DocWalkBytes(document, styles, numbering, bytes, OpcPartByteCount(package, partIndex));
+   status      = DocWalkBytes(document, styles, numbering, bytes, OpcPartByteCount(package, partIndex));
+   status.part = partIndex;
+   return status;
 }
 
 cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, cui8ptr bytes, cui64 byteCount) {
-   WALK_STATUS status = {WALK_OK, XML_OK, OPC_OK};
+   WALK_STATUS status = {WALK_OK, XML_OK, OPC_OK, -1};
    XML_READER  reader;
    cXML_RESULT opened = XmlOpen(&reader, bytes, byteCount);
 
@@ -1549,23 +2194,7 @@ cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM
 
    DOC_CONTEXT context;
 
-   context.document     = document;
-   context.styles       = styles;
-   context.numbering    = numbering;
-   context.reader       = &reader;
-   context.cachedStyle  = -1;
-   context.cachedId[0]  = 0;
-   context.pendingCount = 0;
-   context.table        = -1;
-   context.row          = -1;
-   context.lastRow      = -1;
-   context.lastCell     = -1;
-   context.depth        = 0;
-   context.justify      = IR_ALIGN_NONE;
-   context.inLink       = false;
-   context.sawText      = false;
-   context.allMono      = true;
-   context.memory       = false;
+   DocContextOpen(&context, document, styles, numbering, &reader);
 
    bool sawDocument = false;
    bool sawBody     = false;
@@ -1586,24 +2215,17 @@ cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM
       if(reader.depth == 2u && XmlIsElement(&reader, XML_NS_W, "body")) {
          sawBody = true;
          if(!DocWalkChildren(&context, DOC_LEVEL_BLOCK, -1, false)) break;
+         // The body's last mark cannot be deleted, so a paragraph still waiting here is a producer's
+         // malformation, and it ends as it was written. A field still open is forgotten: one that separated has
+         // read its result already, and one that never separated has read the rest of the body as instruction.
+         if(!DocFlushJoin(&context)) break;
+         DocFieldReset(&context);
          continue;
       }
       // w:background is the only other child w:document has, and it describes a page colour.
       if(!XmlSkipElement(&reader)) break;
    }
-
-   cXML_RESULT broke = reader.result;
-
-   XmlClose(&reader);
-   if(context.memory || IrFailed(document)) {
-      status.result = WALK_ERROR_MEMORY;
-      return status;
-   }
-   if(broke != XML_OK) {
-      status.result = WALK_ERROR_XML;
-      status.xml    = broke;
-      return status;
-   }
+   status = DocWalkVerdict(&context, &reader, status);
    if(status.result != WALK_OK) return status;
    // A w:document with no w:body carries no content at all, which is a defective part rather than an
    // empty document: the schema makes the body mandatory.
@@ -1611,9 +2233,213 @@ cWALK_STATUS DocWalkBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM
    return status;
 }
 
+//-- Notes
+
+// One note identifier a reference names, and whether its body has been read yet.
+struct DOC_WANT {
+   si32 id;    ///< The w:id
+   ui8  state; ///< 0 for a free slot, 1 while the note is wanted, 2 once its body has been read
+};
+
+typedef DOC_WANT *DOC_WANTptr;
+
+// The notes of one story that something references: an open-addressed set over their identifiers.
+//
+// Only a note something references is read at all. A notes part holds Word's separators and every note
+// a user ever deleted the reference of, and an unreferenced note is one GitHub drops from the page -- so
+// reading it would put pictures on disk and numbers in lists for text nobody will see. It is a set
+// rather than a scan for the reason every index in this project exists: a document may carry thousands
+// of notes, and matching each against every reference is quadratic in a way no fixture notices.
+struct DOC_WANTED {
+   DOC_WANTptr slots; ///< Power-of-two table, zeroed on allocation
+   ui64        mask;  ///< One less than the slot count
+};
+
+typedef DOC_WANTED *const DOC_WANTEDptrc;
+
+// Where an identifier lives in the set, or the free slot it would take. Never null: the table is sized
+// past every reference the document holds and never grows.
+static DOC_WANTptr DocWantSlot(DOC_WANTEDptrc wanted, csi32 id) {
+   ui64 slot = (ui64(ui32(id)) * 0x9E3779B97F4A7C15ull >> 20) & wanted->mask;
+
+   while(wanted->slots[slot].state && wanted->slots[slot].id != id) slot = (slot + 1u) & wanted->mask;
+   return wanted->slots + slot;
+}
+
+// Whether a span is a reference to a note of one story.
+static cbool DocNamesNote(cIR_SPANptr span, cIR_NOTE_KIND kind) {
+   cbool endnote = (span->flags & IR_SPAN_FLAG_END) != 0;
+
+   return span->kind == IR_SPAN_NOTE && endnote == (kind == IR_NOTE_END);
+}
+
+// How many references to notes of one story the document holds so far.
+static cui64 DocWantCount(cIR_DOCUMENTptr document, cIR_NOTE_KIND kind) {
+   ui64 count = 0;
+
+   for(ui32 index = 0; index < IrSpanCount(document); ++index) {
+      if(DocNamesNote(IrSpanAt(document, index), kind)) ++count;
+   }
+   return count;
+}
+
+// Builds the set of one story's identifiers from every note reference the document holds so far -- the
+// body's, and the footnotes' when it is the endnotes being read. A reference inside a note to a note of
+// the same story is not seen, and neither is an endnote's reference to a footnote, because the footnotes
+// are read before any endnote is.
+// @return How many identifiers the set holds, or -1 when it could not be allocated.
+static csi64 DocWantOpen(DOC_WANTEDptrc wanted, cIR_DOCUMENTptr document, cIR_NOTE_KIND kind) {
+   cui64 count = DocWantCount(document, kind);
+
+   wanted->slots = nullptr;
+   wanted->mask  = 0;
+   if(!count) return 0;
+
+   ui64 slots = 16u;
+
+   while(slots < count * 2u + 2u) slots *= 2u;
+   wanted->slots = (DOC_WANTptr)amalloc(slots * sizeof(DOC_WANT), 32u);
+   wanted->mask  = slots - 1u;
+   if(!wanted->slots) return -1;
+   mzero(wanted->slots, slots * sizeof(DOC_WANT));
+
+   si64 held = 0;
+
+   for(ui32 index = 0; index < IrSpanCount(document); ++index) {
+      cIR_SPANptr span = IrSpanAt(document, index);
+      si32        id   = 0;
+
+      if(!DocNamesNote(span, kind)) continue;
+      if(!DocParseNumber(IrDest(document, span->destAt), span->destBytes, true, &id)) continue;
+
+      DOC_WANTptr slot = DocWantSlot(wanted, id);
+
+      if(slot->state) continue;
+      slot->id    = id;
+      slot->state = 1u;
+      ++held;
+   }
+   return held;
+}
+
+// Walks the notes of one story out of their part's root element.
+//
+// Each w:footnote or w:endnote something references becomes a note whose blocks are appended after every
+// block already in the document; the rest are skipped whole. A note whose w:type is anything but normal
+// is machinery -- the separator line, its continuation and the continuation notice -- and is skipped
+// whatever its identifier, because CONVERSION_REFERENCE 2.10 says to trust the type and not the id. A
+// second note with an identifier already read is skipped too, which is the first-wins rule this project
+// applies to every duplicate it meets.
+static cbool DocWalkNoteBodies(DOC_CONTEXTptrc context, DOC_WANTEDptrc wanted, cIR_NOTE_KIND kind, csi32 partIndex) {
+   cchptr element = (kind == IR_NOTE_END ? "endnote" : "footnote");
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(context->reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == 1u) return true;
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+
+      cXML_TEXT   type = XmlAttribute(context->reader, XML_NS_W, "type");
+      cXML_TEXT   name = XmlAttribute(context->reader, XML_NS_W, "id");
+      si32        id   = 0;
+      cbool       note = XmlIsElement(context->reader, XML_NS_W, element) && (!type.bytes || XmlTextEqual(type, "normal"));
+      DOC_WANTptr slot = (note && DocParseNumber(name.bytes, name.length, true, &id) ? DocWantSlot(wanted, id) : nullptr);
+
+      if(!slot || slot->state != 1u) {
+         if(!XmlSkipElement(context->reader)) return false;
+         continue;
+      }
+      slot->state = 2u;
+      if(IrBeginNote(context->document, kind, id, partIndex) < 0) {
+         context->memory = true;
+         return false;
+      }
+
+      cbool walked = DocWalkChildren(context, DOC_LEVEL_BLOCK, -1, false);
+
+      // A note is a story of its own: nothing it leaves open runs on into the next one. A paragraph
+      // whose deleted mark was waiting ends where it stands, a field still open is forgotten, and a
+      // bookmark after the note's last paragraph has no block to land on.
+      if(walked && !DocFlushJoin(context)) return false;
+      DocFieldReset(context);
+      context->pendingCount = 0;
+      IrEndNote(context->document);
+      if(!walked) return false;
+   }
+}
+
+cWALK_STATUS DocWalkNotes(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, // What is read
+                          csi32 partIndex, cIR_NOTE_KIND kind) {                                                              // Which notes
+   WALK_STATUS status = {WALK_OK, XML_OK, OPC_OK, partIndex};
+
+   // Nothing references a note of this story, so its part is not even read: a malformed part the
+   // document does not need is not a reason to refuse the document.
+   if(partIndex < 0 || !package || !DocWantCount(document, kind)) return status;
+
+   cOPC_RESULT loaded = OpcLoadXmlPart(package, partIndex);
+
+   if(loaded != OPC_OK) {
+      status.result = (loaded == OPC_ERROR_MEMORY ? WALK_ERROR_MEMORY : WALK_ERROR_PART);
+      status.opc    = loaded;
+      return status;
+   }
+   cui8ptr bytes     = OpcPartBytes(package, partIndex);
+   cui64   byteCount = OpcPartByteCount(package, partIndex);
+
+   status      = DocWalkNotesBytes(document, styles, numbering, bytes, byteCount, kind, partIndex);
+   status.part = partIndex;
+   return status;
+}
+
+cWALK_STATUS DocWalkNotesBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, // What is read
+                               cui8ptr bytes, cui64 byteCount, cIR_NOTE_KIND kind, csi32 partIndex) {     // Out of what
+   WALK_STATUS status = {WALK_OK, XML_OK, OPC_OK, -1};
+   DOC_WANTED  wanted;
+   csi64       held = DocWantOpen(&wanted, document, kind);
+
+   if(held <= 0) {
+      if(held < 0) status.result = WALK_ERROR_MEMORY;
+      mdealloc(wanted.slots);
+      return status;
+   }
+
+   XML_READER  reader;
+   cXML_RESULT opened = XmlOpen(&reader, bytes, byteCount);
+
+   if(opened != XML_OK) {
+      XmlClose(&reader);
+      mdealloc(wanted.slots);
+      status.result = WALK_ERROR_XML;
+      status.xml    = opened;
+      return status;
+   }
+
+   DOC_CONTEXT context;
+
+   DocContextOpen(&context, document, styles, numbering, &reader);
+
+   cXML_TOKEN first = XmlNext(&reader);
+   cchptr     root  = (kind == IR_NOTE_END ? "endnotes" : "footnotes");
+
+   if(first == XML_TOKEN_START_ELEMENT && XmlIsElement(&reader, XML_NS_W, root)) {
+      // Past the root element there is only the end of the part to reach, which is where the tokenizer
+      // refuses anything trailing.
+      if(DocWalkNoteBodies(&context, &wanted, kind, partIndex)) XmlNext(&reader);
+   } else if(first != XML_TOKEN_ERROR) {
+      status.result = WALK_ERROR_NOTES_ROOT;
+   }
+   mdealloc(wanted.slots);
+   IrEndNote(document);
+   return DocWalkVerdict(&context, &reader, status);
+}
+
 cchptr DocWalkResultText(OPC_PACKAGEptrc package, cWALK_STATUS status) {
    if(status.result == WALK_ERROR_PART && status.opc != OPC_OK) return OpcResultText(package, status.opc);
-   if(status.result == WALK_ERROR_XML && status.xml != XML_OK) return XmlResultText(status.xml);
+   // A sentence about the bytes of a part names the part, because since M10 there is more than one a
+   // walk reads and "a part ends in the middle of an element" does not say which.
+   if(status.result == WALK_ERROR_XML && status.xml != XML_OK) return OpcMessageIn(package, XmlResultText(status.xml), status.part);
    if(status.result < 0 || status.result >= WALK_RESULT_COUNT) return "the main document part could not be read";
+   if(status.result == WALK_ERROR_NOTES_ROOT) return OpcMessageIn(package, WALK_RESULT_TEXT[status.result], status.part);
    return WALK_RESULT_TEXT[status.result];
 }

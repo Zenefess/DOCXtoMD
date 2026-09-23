@@ -25,8 +25,8 @@ below.
 ## Current state (do not assume more exists)
 
 - `src/` — **exists** and holds the CLI skeleton (M2), the container layer (M3), the XML and package
-  layer (M4), the converter (M5/M6), M7's reference resolution, M8's lists and M9's tables — which
-  needed no module of their own: thirty-eight files, all
+  layer (M4), the converter (M5/M6), M7's reference resolution, M8's lists, M9's tables and M10's fields,
+  notes and tracked changes — neither of the last two needed a module of its own: thirty-eight files, all
   CRLF, tab-free, ASCII-only, none over 150 columns, each carrying a validated r17 prolog at `v0.1.0`
   with `ISA: Scalar`. Unlike
   `include/`, `src/` is **not** exempt from the repository style, and all thirty-eight are committed in
@@ -309,6 +309,19 @@ below.
     `NumAssignMarkers` untouched: each reads one array in the order the document is read, and a
     paragraph in a cell is a paragraph. A list inside a cell therefore continues a list outside it,
     which is what Word draws.
+    **M10 added a seventh span kind and no block kind.** `IR_SPAN_NOTE` is a footnote or endnote
+    reference, a marker like a link's brackets: it carries the `w:id` as written, with `IR_SPAN_FLAG_END`
+    for an endnote, until `LinkResolveNotes` rewrites it into the label, and `IrHasContent` counts it as
+    content unless it is muted -- a paragraph holding nothing but a reference holds something a reader
+    sees. A note itself is an `IR_NOTE` record -- its story, its `w:id`, the part it was read from and the
+    label it was given -- and **a note's blocks are ordinary blocks in the one flat array**, after every
+    block of the body, each stamped with the note's index in `IR_BLOCK.note`. That is the table's bargain
+    struck again for the same reason: every pass between the walk and the emitter reads one array, and
+    only two readers group a note's blocks -- `LinkResolveNotes`, which numbers the body's references
+    first and then each note's in the order the notes were numbered, and the emitter, which writes a
+    note's blocks somewhere other than where the walk put them. The part is on the record because
+    a note's relationship ids are scoped to its own part, and `LinkResolveRefs` resolves each block
+    against the part it came from.
     A table's rows and a row's cells are **chains** and not ranges, and those are the two places this
     module gives up a contiguous array. A cell's content is walked where it stands, so a table inside the
     first cell of a row appends its own rows and cells before the outer row's next cell and the outer
@@ -344,19 +357,25 @@ below.
     no marker is written for it, so the reason to trim one never arises and trimming loses a line — and
     then unwinds the whole block — records, spans and arena — when nothing but ASCII whitespace is left,
     which is
-    what collapses runs of empty paragraphs at no cost. `IrMark`/`IrRewind` have three callers, all in
-    `DocWalker`: `mc:AlternateContent`, where the first `mc:Choice` is walked speculatively and rewound
-    if an `mc:Fallback` turns out to follow it; since M7, the picture walk, which opens an image span
-    before it knows whether the container holds a reference and rewinds it when none turns up; and since
-    M9, the table walk, which opens a table's block before its first row and rewinds the whole table when
-    no row survives. A non-breaking space counts as content, per mapping row 35.
-  - `DocWalker.h`/`DocWalker.cpp` — the body walk, one dispatcher for both block and run level because
+    what collapses runs of empty paragraphs at no cost. `IrRewind` has four callers, all in `DocWalker`,
+    and `IrMark` the first three of them: `mc:AlternateContent`, where the first `mc:Choice` is walked
+    speculatively and rewound if an `mc:Fallback` turns out to follow it; since M7, the picture walk,
+    which opens an image span before it knows whether the container holds a reference and rewinds it
+    when none turns up; since M9, the table walk, which opens a table's block before its first row and
+    rewinds the whole table when no row survives -- and since M10 when it stood wholly inside a TOC; and
+    since M10, the paragraph walk, which rewinds to the mark `IrBeginBlock` returned when a paragraph
+    that began inside a field nobody sees came to nothing, list marker and all, which `IrEndBlock` alone
+    would have kept. A non-breaking space counts as content, per mapping
+    row 35.
+  - `DocWalker.h`/`DocWalker.cpp` — the body walk and, since M10, the notes walk, one dispatcher for both
+    block and run level because
     every transparent wrapper appears at both and means the same thing at each. Accept-all revisions
     (correctness rule 8): `w:ins` and `w:moveTo` are transparent, `w:del` and `w:moveFrom` are dropped
     whole, and `w:sdt`, `w:smartTag` and `w:customXml` are transparent. A run whose effective
-    `w:vanish` or `w:webHidden` is on is dropped with its text, which is what keeps Word's hidden field
-    instructions out of the output; a run whose `w:caps` is on has its text uppercased, which is
-    mapping row 37 and is a transform on the bytes rather than a delimiter, so it belongs here. A
+    `w:vanish` or `w:webHidden` is on is dropped with everything it holds but its field structure, which
+    is read even there, as the fields paragraph below says; a run whose `w:caps` is on has its text
+    uppercased, which is mapping row 37 and is a transform on the bytes rather than a delimiter, so it
+    belongs here. A
     heading's spans have their bold bit cleared, because mapping row 1 rules that heading text is never
     additionally bolded and `IR_FMT` is the only channel the emitter has; a code run has its bold and
     italic bits cleared for a different reason, which is that row 11 drops them and two runs that come
@@ -427,14 +446,66 @@ below.
     this walk's *stack* off the document's content -- the tokenizer's own element cap would stop a
     runaway eventually, but only after a great many frames. A table that turns out to have no rows is
     unwound entirely, so an empty `w:tbl` costs no block and no blank line.
+    Since M10 the walk runs **fields** through correctness rule 7's begin/separate/end state machine, whose
+    stack lives on the walk rather than on a paragraph because a result may span several. Everything
+    between a begin and its separate is instruction and never content. A `HYPERLINK`'s result -- and a
+    `REF`'s that carries `\h`, which is its author asking for a link -- becomes a link span pair whose
+    destination is built from the instruction: the first argument, a `\l` location joined on by `#`, or
+    a `REF`'s bookmark behind one. A `TOC` vanishes result and all, and so does a `w:sdt` whose
+    `w:docPartGallery` says it is one. Every other field -- `PAGE`, `SEQ`, `DATE`, `PAGEREF`, a `REF`
+    without `\h`, `INCLUDEPICTURE` -- is the cached result it was showing, and a field with no separate
+    shows nothing. A `w:fldSimple` is the same machine in one element, and a field left open inside one
+    is closed with it. The instruction is read the way Word writes one -- split over any number of
+    `w:instrText`, its keyword in either case, a switch glued to its argument, `\"` and `\\` escaped inside
+    quotes -- and every switch that takes an argument consumes it wherever it stands, so an argument
+    written in front of the target is never taken for it. A link a field's result opens is closed at the
+    end of each block and opened again at the start of the next, because Markdown cannot spell one
+    across two; links do not nest, so a field inside a `w:hyperlink`, or inside another field's link,
+    keeps its text and the outer link wins. Eight fields deep are tracked, past that a field is counted
+    rather than tracked and what it holds is dropped rather than guessed at -- every end still closes
+    something -- and an instruction that outgrows its 2,048 bytes is never linked, because a truncated URL
+    is worse than none. **A field's structure is read even in a hidden run**: Word sets `w:webHidden` on
+    every run of the `PAGEREF` in each TOC entry, `w:fldChar` included, and dropping a hidden begin whose
+    end was read would misread every field after it. A paragraph that **began inside a field nobody sees**
+    and came to nothing is unwound whole -- which is every paragraph of a TOC after the one it begins in,
+    list marker, blank code line and border included -- a table standing wholly inside one goes the same
+    way, and a bookmark inside one marks a place the output does not have and is dropped. The field
+    stack, the open link and the pending join below are all put back when an `mc:Choice` is rewound; at
+    the end of each story the field stack and the open link are forgotten, and a paragraph the join left
+    waiting ends as written.
+    Since M10 the walk also takes the last two of correctness rule 8's revisions that are not wrappers. A
+    paragraph whose **mark** a tracked change deleted -- a `w:del` or a `w:moveFrom` in the `w:rPr` of its
+    `w:pPr` -- runs on into the next paragraph (5.11): its block stays open, the next `w:p` adopts it, and
+    the paragraph that survives gives the pair its classification, because the mark is where a
+    paragraph's style lives. The adopted block keeps the moment the first of the two began, so one that
+    began inside a TOC is still a TOC entry. Where no paragraph turns up to take it -- a table, the end of
+    a cell, a note or the body -- it ends as written, which is a producer's malformation, since Word will
+    not delete those marks. A cell a `w:cellDel` removed is dropped with its content, as a deleted row
+    already was.
+    And since M10 the walk reads **notes**. A `w:footnoteReference` or `w:endnoteReference` becomes a note
+    reference span carrying the `w:id`; the `w:footnoteRef` a note's own body opens with is skipped,
+    because the `[^n]:` label replaces it. `DocWalkNotes` then reads a notes part after the body, and
+    reads **only the notes something already walked references** -- a notes part holds Word's
+    separators and every note whose reference a user deleted, and GitHub drops a definition nothing
+    references, so reading one would put its pictures on disk and its items in the list counters for
+    text nobody sees; a part nothing references a note of is never even validated. The footnotes are
+    read before the endnotes, so an endnote cited from a footnote is found; a note cited only from
+    another note of its own story, or a footnote cited only from an endnote, is not, because its
+    reference is not seen until the note holding it is.
+    A note's `w:type` decides whether it is one -- a separator, its continuation and the continuation
+    notice are machinery whatever their `w:id` -- and a second note of one `w:id` is not read, which is
+    the first-wins rule every duplicate in this project goes by. A note is a story of its own: a field it
+    left open, a paragraph join it left waiting and a bookmark after its last paragraph all end with it.
     What is skipped whole and why:
-    `w:instrText` and `w:fldChar` (M10's field state machine),
-    `w:sym` and `m:oMath` (neither has a milestone, and they are the two places text is lost rather
-    than merely unformatted — both are named in `DocWalker.cpp`'s To Do), and anything this build has
-    never heard of, which is the OOXML compatibility model. Descended into although their own meaning
-    waits: `w:fldSimple`, the bidirectional containers `w:dir` and `w:bdo`, and a `w:ruby`'s
-    `w:rubyBase`. `w:hyperlink` was on that list until M7 and is not any more -- it has a handler of its
-    own now, and the paragraph above says what it does. `mc:Ignorable` and `mc:ProcessContent` are **attributes**, not elements,
+    `w:sym` and `m:oMath` (neither has a milestone, and they are two of the places text is lost rather
+    than merely unformatted, beside a text box's `w:txbxContent` and a text-bearing `mc:AlternateContent`
+    inside a run, which the picture scan drops -- all four are named in the To Do lists of `DocWalker.h`
+    and `DocWalker.cpp`), the comment references and ranges (dropped by mapping row 30), and anything
+    this build has
+    never heard of, which is the OOXML compatibility model. Descended into although their own meaning is
+    layout this mapping has no spelling for: the bidirectional containers `w:dir` and `w:bdo`, and a
+    `w:ruby`'s `w:rubyBase`. `w:hyperlink` was on that list until M7 and `w:fldSimple` until M10; each has a
+    handler of its own now, and the paragraphs above say what they do. `mc:Ignorable` and `mc:ProcessContent` are **attributes**, not elements,
     and nothing reads either yet — an element in an ignorable namespace is skipped rather than having
     its children promoted, which is a `To Do` and not a claim of MCE conformance.
   - `MdEscape.h`/`MdEscape.cpp` — correctness rule 6's context-aware writer, pure and allocating
@@ -494,6 +565,12 @@ below.
     bold run either side of one emitted `**A****B**`, and an entity split across the pair went unescaped
     because `MdEscape`'s lookahead is span-local. That is M7's two coalescer rules -- brackets block a
     merge, an unresolved link is muted -- each right alone and wrong together.
+    M10 changed nothing here either, and the prolog To Do that waited for it to add a field barrier is
+    gone rather than done: a plain field's cached result is ordinary text, which Word splits from the
+    text around it as readily as it splits any run, so it must merge like one; a `HYPERLINK` field's
+    result is bounded by the same link markers a `w:hyperlink`'s is. A note reference is a marker like a
+    link's brackets and stops a merge -- until `LinkResolveNotes` mutes one whose note does not exist,
+    which is the second reason the pass runs twice. `TestRunCoalescer` pins all three.
   - `MdEmitter.h`/`MdEmitter.cpp` — one growable UTF-8 output buffer and one line buffer. Since M6 a
     line is assembled span by span in its **output** form — delimiters and escaped text together —
     rather than raw and escaped in one piece, because there is now markup between the spans and a pass
@@ -628,6 +705,26 @@ below.
     one" is asked of the last block that actually **emitted a line** rather than of the previous record
     — the two are not the same, and reading the record suppressed a blank line the block before it had
     earned, merging two paragraphs of one item into one.
+    M10's notes emit here too. A note reference is `[^n]`, n being the label `LinkResolveNotes` gave its
+    note, and the definitions follow the body in **label order**, each opening `[^n]: ` with every later
+    line of it indented four columns. A definition is a container like a list item, and it is carried by
+    the line-start mechanism rather than by a block kind: every line start in this module writes a
+    **base** before its own prefix -- nothing in the body, and in a definition the `[^n]: ` marker on its
+    first line and four columns on every line after -- so every block kind is writable inside a note
+    without one of them learning that notes exist: a second paragraph, a list at its content column, a
+    fence, a pipe table, a quotation, a heading, a rule. A note that came to nothing is `[^n]:` alone,
+    which GFM reads as an empty definition rather than leaving every reference to it as literal text. Two
+    bytes after a reference are escaped because they change what it is -- `(` would make `[^n](x)` a
+    link, and `:` where the reference opens a line would make `[^n]: x` a definition of its own -- and
+    nothing else is. The blank line before the definitions is a plain one even between two quotations,
+    because a bare `>` there would carry the body's blockquote into the note. Inside a raw-HTML table a
+    reference is `<sup>n</sup>`, because GFM parses no Markdown in an HTML block, and inside a fence it
+    writes nothing, because a fence emits its text and nothing else; the note is defined either way, and
+    what GitHub then does with it is under Known gaps. **Every line of a raw-HTML table takes the table's
+    prefix, the line a nested table's `</table>` leaves the rest of its cell on included**: at column zero
+    that line ended the definition and moved the rest of the note into the body. M10's hostile-input pass
+    found it before commit; in the body a table's prefix is always empty, so no earlier milestone could
+    reach it.
   - `LinkResolver.h`/`LinkResolver.cpp` — where a reference becomes a destination, and where correctness
     rule 1 is kept for content. `LinkResolveRefs` looks a relationship id up in the part it was read in,
     because ids are scoped per part; a hyperlink to an External target becomes that URI (with the
@@ -640,8 +737,9 @@ below.
     its own sanitised name and is emitted as an `<a id>` element where it stands. An anchor nothing points
     at is **muted**, which is what keeps `_GoBack` -- in every document Word saves -- out of the output
     without this module knowing its name; a link naming a bookmark the document does not define is muted
-    too, and `IrDropEmptyBlocks` then removes a block that held nothing else. Both passes are muted twice,
-    at each end, because resolution is itself a way for a link to lose its destination. Names are paired
+    too, and `IrDropEmptyBlocks` then removes a block that held nothing else. `LinkResolveAnchors` mutes
+    empty links before it resolves anything and again after its last pass, because resolution is itself
+    a way for a link to lose its destination. Names are paired
     through an **open-addressed index built once**, for the reason M5's review found in `StyleModel`: a
     document may carry tens of thousands of bookmarks and as many references, and pairing them by
     scanning is quadratic in a way no fixture notices. **Relationship ids are indexed the same way and for
@@ -671,6 +769,22 @@ below.
     `docs/CONVERSION_REFERENCE.md` 6.3's stage list and
     is a session addition like `Ir.cpp` and `Convert`: heading slugs are numbered over the whole document,
     so the pass has to see all of it, which neither the streaming walker nor the per-block emitter can.
+    Since M10 `LinkResolveRefs` resolves **block by block** rather than against one part: a block of the
+    body against the main part and a block of a note against the part its `IR_NOTE` names, through one
+    relationship index per part, so `rId3` in `footnotes.xml` and `rId3` in `document.xml` are two
+    relationships -- which is what finally tests correctness rule 1's scoping, because
+    `tests/fixtures/footnotes` gives both parts an `rId5` and an `rId2` meaning different things. And
+    `LinkResolveNotes` is mapping row 24's "renumbered 1..n": **one** sequence for footnotes and endnotes
+    together, in the order the references are *read* -- the body first, then each note in the order it
+    was numbered, so a reference inside a note to one not yet reached takes the next label. That is the
+    order GitHub itself numbers footnotes by on the rendered page, and it is why the two stories are
+    interleaved rather than the endnotes following the footnotes as `docs/CONVERSION_REFERENCE.md` row 24
+    offers: GitHub renumbers by first reference whatever the labels say, so any other order puts one
+    number in the `.md` and a different one on the page. A note referenced twice keeps one label; a
+    reference to a note the document does not hold -- an unknown `w:id`, a separator's, a missing part --
+    is muted, which is 5.4's degradation, and the text either side of it meets. It runs before
+    `LinkResolveAnchors` because a heading's slug includes the labels in it: GitHub builds a heading's id
+    from its rendered text, and a reference renders as its number.
   - `MediaExtractor.h`/`MediaExtractor.cpp` — stage [11], split in two so that nothing reaches disk before
     the document does. `MediaPlan` is the half that reads and writes nothing: it gives each distinct part
     a name, `imageN.ext` in the order the document first draws it, and rewrites the span to point at it. A
@@ -694,20 +808,28 @@ below.
     was for -- and the run still reports a failure. No archive entry name ever reaches disk, which is
     correctness rule 10's other half.
   - `Convert.h`/`Convert.cpp` — the per-file pipeline: container, package, relationships, styles,
-    numbering, walk, coalesce, resolve, plan the media, number the items, emit, write, extract. M9
+    numbering, walk, notes, coalesce, resolve, plan the media, number the items, emit, write, extract. M9
     added no stage to it: a table needs no part of its own, and its cells' blocks go through every pass
     already there. This is
     the function one worker runs when M13
     adds the bounded pool, which is why it
-    is a module and not a lump of `main.cpp`. The numbering part is resolved through the main part's
-    relationships exactly as the styles part is, by `ConvertNumberingPart` over `OPC_REL_NUMBERING`, and
-    an absent one is legal and yields an empty model. The five passes between the coalescer and the
+    is a module and not a lump of `main.cpp`. The styles, numbering, footnotes and endnotes parts are all
+    resolved through the main part's relationships, by `ConvertRelatedPart` over their four
+    `OPC_REL_*` kinds -- all four looked up at once, straight after the main part's own relationships
+    are loaded, each coming back as a part index -- and an absent one is legal. Since M10 the notes are
+    walked after the body, footnotes before endnotes, by `ConvertNotes`, which loads a notes part's own
+    relationships **only once one of its notes was read**: a malformed relationships part is then a
+    refusal naming that part, exactly as the main part's is.
+    The passes between the walk and the
     emitter run in
-    the one order that works: references resolve against the part they were read in, anchors resolve once
-    every reference is a destination (a heading's slug is numbered over the whole document), the media plan
+    the one order that works: references resolve against the part they were read in, note references take
+    their labels, anchors resolve once
+    every reference is a destination (a heading's slug is numbered over the whole document), the coalescer
+    runs a second time because muting a link or a note reference makes two spans adjacent that were not,
+    the media plan
     turns a part name into a path and can turn a picture back into its alt text, `NumAssignMarkers` runs
-    after that because an item's content is not settled until a picture has had its last chance to become
-    alt text, and dropping the emptied blocks last is what restores the invariant the emitter rests on —
+    before the drop, which spares every block that pass leaves a list reference on, and dropping the
+    emptied blocks last is what restores the invariant the emitter rests on —
     that every block it is handed
     produces at least one byte. `ConvertOutputPath` is pure and allocation-free and is
     therefore what the unit suite hammers: D7d's rule is `-o` as a filename for one input and a
@@ -732,7 +854,7 @@ below.
     replaces, so it lives there until then.
   - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, option handling, the input loop and the
     exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
-  - **What the binary does at M9**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+  - **What the binary does at M10**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
     input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and which
     part broke it**, an output that cannot be written exits 4, and a sound package is **converted** and
@@ -746,21 +868,34 @@ below.
     and **M9 changes one thing about it**: `--tables=<gfm|html-on-merge>` joins the option set, with
     `gfm` the default, and a bad value for it is a usage error like any other. A table needs no part of
     its own and a malformed one converts rather than refusing, so no new exit code and no new note
-    arrived with M9 either.
-  - **What M9 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
+    arrived with M9 either. **M10 adds no option, no exit code and no note**, but it reads two more
+    parts, and a footnotes or endnotes part a document needs -- one that something already walked
+    references a note of, or the relationships part of one a note was read from -- refuses the document
+    with exit 3 exactly as a malformed body does. The sentence for a part that is not well-formed XML
+    **names the part**, because a conversion reads more than one -- a malformed body says
+    `..., in word/document.xml`, and a malformed styles or numbering part names itself the same way --
+    and so does the walk's sentence for a notes part whose root is not the story its relationship names.
+    A notes part nothing references is never read, so it
+    can refuse nothing.
+  - **What M10 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
     escaping that keeps all of it from being re-read as markup; bold, italic,
     strikethrough, superscript, subscript, inline code, fenced code blocks, blockquotes and the
     horizontal rule; hyperlinks, bookmark anchors, heading slugs, images and the media
     files they come from; bullet and numbered **lists**, nested by `w:ilvl`, with real
     computed numbers, the whole `w:num`/`w:abstractNum`/`w:numStyleLink` indirection behind them,
     `w:lvlOverride`/`w:startOverride`/`w:lvlRestart`, and numbering that arrives through a paragraph
-    style; and — new at M9 — **tables**, as GFM pipe tables with a delimiter row sized from the grid,
+    style; **tables**, as GFM pipe tables with a delimiter row sized from the grid,
     alignment from the first row's `w:jc`, `w:gridSpan` and `w:vMerge` padded into it, a cell's blocks
     flattened and joined by `<br>`, and a raw `<table>` where a nested table or `--tables=html-on-merge`
-    asks for one. Notes and fields arrive at M10 and are
-    skipped until then, which means `w:instrText`, `w:fldChar`, the
-    note references, `w:sym` and `m:oMath` are all still skipped whole. Underline, highlight, colour and
-    size are dropped by policy and always will be (mapping rows 8 and 9).
+    asks for one; and — new at M10 — **fields**, complex and simple, with `HYPERLINK` and `REF \h`
+    becoming links, a `TOC` vanishing whole whether it is a field or a content control, and every other
+    field showing its cached result; **footnotes and endnotes**, as `[^n]` references and definitions
+    after the body in one sequence numbered by the order they are read, with a note's own relationships
+    resolved against its own part and a note holding any block the body can; and the last of the
+    **tracked changes** accept-all needs, a deleted paragraph mark joining two paragraphs and a deleted
+    cell dropping out of its row. `w:sym`, `m:oMath` and comments are still skipped whole. Underline,
+    highlight, colour and size are dropped by policy and always will be (mapping rows 8 and 9 for
+    underline and highlight, and `docs/CONVERSION_REFERENCE.md` 2.3 for colour and size).
 
 - `DOCXtoMD.sln` — **exists** (VS 17.14, UTF-8 BOM, CRLF, tab-indented) and exposes **only** `Debug|x64`
   and `Release|x64`, matching both project files exactly. It lists **two** projects since M4: `DOCXtoMD`
@@ -888,7 +1023,7 @@ below.
   `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
   code and the message; `run_golden.py` converts every golden and byte-compares it. All three
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
-  a POSIX host — run them as `python tests/<name>.py`. There are **twenty-seven** part trees under
+  a POSIX host — run them as `python tests/<name>.py`. There are **thirty-one** part trees under
   `fixtures/`: `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`,
   `nostyles` and `wrappers`, `dollars`, which D12 added, and M6's eight — `fragments` (mid-word run
   splits across rsids, a proofErr, a bookmark and an accepted insertion), `hoisting` (a trailing space
@@ -940,6 +1075,24 @@ below.
   in a paragraph after the table. `tablemerges` is converted a second time under
   `--tables=html-on-merge` by `run_golden.py`'s own options section, which is where a policy over one
   document is pinned rather than as a second fixture tree.
+  M10 adds four, and each pins something the others cannot. `fields` is every field shape the walk
+  reads -- a complex `HYPERLINK` with a tooltip, one whose instruction is split over three runs, one
+  with only a `\l` location, a `REF` with `\h` and one without, `PAGE`, `NUMPAGES`, `DATE` and `SEQ`
+  showing their results, a field with no separate showing nothing, an `IF` whose instruction holds a
+  `MERGEFIELD` of its own, both `w:fldSimple` shapes, a link field across a hard break and across a
+  paragraph, a field inside a `w:hyperlink` and a formatted result. `toc` is Word's two ways of writing a
+  table of contents -- a content control whose gallery says so, and a bare `TOC` field spanning
+  paragraphs, with a numbered entry, a bordered empty paragraph and hidden `PAGEREF` runs inside it --
+  both of which must vanish while a `REF \h` to a heading after them still links. `footnotes` is the
+  notes: four footnotes and an endnote cited from the body, one of them twice, a dangling reference, a
+  reference before a parenthesis and one opening its line, notes holding a link, a second paragraph, a
+  list, a picture and a table, an endnote cited only from a footnote, an empty note, and an unreferenced
+  note whose picture must **not** be extracted -- and its `footnotes.xml.rels` gives `rId5` and `rId2` other
+  meanings than `document.xml.rels` does, which is the test of per-part scoping M4 has been owed since
+  it was written. `revisions` is accept-all: an insertion, a deletion, a move's two ends, formatting and
+  style changes whose old values must not win, two deleted paragraph marks -- one joining into a
+  heading, whose style wins -- a deleted row, deleted and inserted cells, and field instructions a
+  tracked change edited or deleted. All four matched on their first run.
   `make_fixtures.py` also synthesises `media-binary.docx`, whose one media part holds every byte value,
   so that the byte path to disk is proved rather than assumed. Each case has an `expected.md` beside its
   `src/`, and every one was
@@ -978,7 +1131,7 @@ below.
   the `zipfile` cross-check.
 - `tests/unit/` — **exists** as of M4, doubled at M5, gained a ninth suite at M6, an eleventh at M7 and
   a twelfth at M8; M9 added no thirteenth, because a table is not a module — its cases went to the four
-  suites that already own the stages it touches:
+  suites that already own the stages it touches — and M10 added none either, for the same reason:
   `Check.h`/`Check.cpp` (one `CHECK` macro, a
   group heading and a pass/fail summary, over `typedefs.h` and `<stdio.h>` and nothing else — the header
   itself needs only `typedefs.h`, so a suite that includes it pulls in no I/O), `TestMain.cpp`, and one
@@ -995,7 +1148,8 @@ below.
   the exact sentence, because a sentence table and the enum indexing it drift apart silently; that
   check caught a real one-row misalignment during M4, and an M5 review caught the `OpcPackage` pair
   asserting only that the sentence was non-null, which `OpcResultText` can never return. `DocWalker`
-  pins one row and `ZipReader`'s table is unpinned; both are still To Do. M5's suites reach the parser and the walker from string literals
+  pins two rows -- the body's root and, since M10, the notes part's -- and `ZipReader`'s table is
+  unpinned; both are still To Do. M5's suites reach the parser and the walker from string literals
   through `StyleLoadBytes` and `DocWalkBytes`, which are the halves of `StyleLoad` and `DocWalk` that
   work over bytes rather than over a package; `TestDocWalker` renders the whole intermediate
   representation into a compact trace — `H1{…}` a heading, `P{…}` a paragraph, `[text]` a span, `|` a
@@ -1020,15 +1174,24 @@ below.
   are independent copies with no shared header, so a kind or a field added to one and not the other makes
   the pair
   disagree about the same document — edit both. Each carries a `static_assert` on the block-kind count,
-  so a seventh kind cannot be added without both traces being told about it.
-  `TestMdEmitter`'s helper runs every pass `Convert.cpp` runs, in the same order, so what it measures is
-  the shape the program really produces; with no package a relationship resolves to nothing, so a
-  `w:anchor` link is the half of M7 the emitter suite can reach and the rest is the goldens' to prove.
+  so a seventh kind cannot be added without both traces being told about it, and since M10 one on the
+  span-kind count too. M10 extended the notation a fifth time, and by letters again: `F(id)` is a
+  footnote reference and `E(id)` an endnote one, `F-(id)` a reference `LinkResolveNotes` muted, and a
+  block a note holds is prefixed `f2:` or `e7:` with its story and `w:id`. `NotedAs` walks a body and
+  then its notes parts, optionally labelling them, which is how a case shows the walk and the numbering
+  side by side.
+  `TestMdEmitter`'s helper runs every pass `Convert.cpp` runs between the walk and the emitter but
+  `MediaPlan`, in the same order, and no emitter case draws a picture, so what it measures is the shape
+  the program really produces for the documents it is given; with no package a relationship resolves to
+  nothing, so a `w:anchor` link is the half of M7 the emitter suite can reach and the rest is the
+  goldens' to prove.
   Since M9 it also drives `--tables`, beside the `--hard-break` policy it already took; those two are
   the policies an emitter case can choose.
   Since M8 it runs `NumAssignMarkers` in that order too, over a numbering part the case supplies as a
   literal, which is what lets the emitter's list rules — the content-column indent, the `<!-- -->`, the
-  three blank-line shapes and the setext hazard — be driven without a package.
+  three blank-line shapes and the setext hazard — be driven without a package. Since M10 a case may
+  supply notes parts as literals as well, walked after the body exactly as `Convert.cpp` walks them, and
+  `Cited` is the one-line form for the cases about what a single note may hold.
 - **Not yet created** (GCS obligations, see Roadmap): `bench/` and CI. Do not reference them as if they
   exist. Everything else this section names does exist, `tests/run_golden.py` included.
 
@@ -1062,13 +1225,15 @@ python tests\run_container.py --exe x64\Debug\DOCXtoMD.exe      :: or any other 
 tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite; prints a tally, returns 0 or 1
 ```
 
-`run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M9 they return **141**, **106** and **1419** checks, over the **75** fixtures `make_fixtures.py`
-builds. All four were confirmed on Windows on 2026-09-23. The three check counts are the interesting
-ones: they are what the shim measures on Linux, and at every milestone since M3 they have been exactly
-what the real MSVC binary then returned. The fixture count is not evidence of that -- `make_fixtures.py`
-is the same Python on both platforms -- and is recorded only so a run that builds a different number is
-noticed.
+`run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough. At
+M10 they return **157**, **118** and **1518** checks, over the **83** fixtures `make_fixtures.py`
+builds, and all four were confirmed on Windows on 2026-09-23. Two fixtures landed after that run,
+`bad-styles.docx` and `bad-numbering.docx`, so the container runner now returns **161** checks over
+**85** fixtures -- the shim's numbers from Linux on 2026-09-23, which no Windows run has confirmed yet;
+the golden and unit counts do not change. The three check counts are the interesting ones: they are what
+the shim measures on Linux, and at every milestone since M3 they have been exactly what the real MSVC
+binary then returned. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
+on both platforms -- and is recorded only so a run that builds a different number is noticed.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -1381,15 +1546,14 @@ forbidden; before D6 it was.
   `volatile ui32` with unconditional full barriers — there is no `std::atomic` and no memory-order
   argument to document. Record the locking contract in the prolog instead; adopting `std::atomic`
   anywhere would need a new decision.
-- **M4's coverage gap is still open, and neither M7 nor M8 closed it.** `OpcFindRelById` is exercised on
-  every
-  hyperlink and every picture, but the claim it exists to support -- that relationship ids are scoped
-  per part, so `rId3` in `document.xml` and `rId3` in `footnotes.xml` are unrelated -- still has no
-  test, because M7 loads exactly one part's relationships. It gets one at **M10**, when the footnote
-  walk loads a second part's. Note what M7 did add: `LinkResolver` now builds its id index over one
-  part, taking `partIndex` from the caller, so the scoping is in the *shape* of the code as well as in
-  `OpcPackage`'s -- but a shape is not a test. M8 reads a *third* part (`numbering.xml`) and still does
-  not close it, because nothing in a numbering part is reached through a relationship id.
+- **M4's coverage gap is closed by M10, at the golden level only.** The claim `OpcFindRelById` exists to
+  support -- that relationship ids are scoped per part, so `rId3` in `document.xml` and `rId3` in
+  `footnotes.xml` are unrelated -- is now tested: `tests/fixtures/footnotes` gives `rId5` and `rId2`
+  different meanings in `document.xml.rels` and `footnotes.xml.rels`, and the body's link, the note's
+  link and the note's picture each have to land on their own part's target. Resolving every block
+  against the body's part instead fails three golden checks, which is how the mutation pass confirmed
+  the test tests it. No unit case reaches it, because the unit suites build no package; `TestDocWalker`'s
+  To Do says so.
 - **Three M8 limits are declared and reachable by no test, and that is stated rather than carried
   quietly.** `NUM_MAX_ABSTRACT` and `NUM_MAX_NUMS` refuse a part declaring more than 4,096 definitions,
   and `NUM_MAX_DELEGATE` bounds a `w:numStyleLink` chase at sixteen links. None of the three thresholds
@@ -1414,14 +1578,15 @@ forbidden; before D6 it was.
   `DocWalker`'s save and restore of the paragraph classification, which M6 wrote and M9's roadmap entry
   expected to exercise, is **still exercised by nothing**: a `w:tbl` is a sibling of a paragraph and
   never a child of one, so a cell's paragraphs are walked with no outer paragraph open. The save is
-  right and the case it guards is hypothetical; M10's footnote bodies are the next candidate to make it
-  real.
+  right and the case it guards is hypothetical. M10's note bodies did not make it real either, because a
+  note is walked after the body rather than at its reference, so no paragraph is open when one is; row
+  38's text boxes are now the only candidate.
 - **`w:gridBefore` and `w:gridAfter` are not read, and two loops are dead because of it.** A row may
   declare that it starts part-way across the grid, which is what Word writes for an indented row or one
   whose leading cells were deleted; M9 reads neither element, so such a row's cells slide left into the
   wrong columns. That is a real gap rather than a policy -- `docs/CONVERSION_REFERENCE.md` does not name
-  either element, which is why M9's scope did not cover it, and it is the obvious thing for **M10 or
-  M11** to add. What makes it worth recording here rather than only in a `To Do` is that both table
+  either element, which is why M9's scope did not cover it, and it is the obvious thing for **M11** to
+  add -- M10's scope did not reach it either. What makes it worth recording here rather than only in a `To Do` is that both table
   forms already carry the loop that would serve it: a cell's column is derived from the one before it in
   `IrBeginCell` rather than read from the document, so a row's cells are contiguous and the gap-filling
   loop in `MdEmitPipeRow` and `MdEmitTableHtml` **cannot run**. Mutation testing found it -- deleting
@@ -1447,6 +1612,31 @@ forbidden; before D6 it was.
   and a nested table expressible, and adding style to it would make the two forms differ in more than
   structure. Three module headers -- `Ir.h`, `MdEmitter.h` and `MdEscape.h` -- carry it as a `To Do`,
   naming `w:shd` and `w:tcBorders`.
+- **Five M10 limits are declared, and each is a shape Word's own interface does not produce or a
+  renderer's rule this build cannot change.** A field **begin that neither separates nor ends** leaves
+  everything after it in its story read as instruction, where `docs/CONVERSION_REFERENCE.md` 5.7 asks for
+  the stream's end to count as an implicit end: a streaming walk cannot give back what it has already
+  discarded, and only a pre-scan could, which is `DocWalker.h`'s To Do 2. A field that did separate or
+  end is fine -- an end closes it, a separated field's result is read as it comes, and the end of the
+  story ends it. A **note cited only from another note of its own story, or a footnote cited only from
+  an endnote,** is not read, because its reference is not seen until the note holding it is, by which
+  time its own story has been read, and the reference is muted; an endnote cited from a footnote *is*
+  read, because the footnotes are read first. A **note reference inside a raw-HTML table** is written `<sup>n</sup>` and one inside
+  a **fence** is not written at all, because GFM parses no Markdown in either; the note is still defined,
+  and GitHub drops a definition no Markdown reference reaches, so that note reaches no reader. A
+  **`w:customMarkFollows`** reference is written `[^n]` like any other, and the custom mark Word shows in
+  its place is the content that follows it in its run, so it is emitted beside the reference as ordinary
+  text; the reference calls this rare, and it is `DocWalker.h`'s To Do 4. And **list counters run across
+  the stories in the order they are read** -- the body, then each footnote in the order its part holds
+  them, then the endnotes -- so a list in a note over the same abstract definition as one in the body
+  continues its numbers, which is what 2.9's counter keying says and may not be what Word shows.
+- **Two M10 guards are defensive rather than live, and the mutation pass says so.** `DocFieldOpenLink`
+  opens no link while the walk is quiet, and `DocFieldSeparate` ignores a second `separate`. Deleting
+  either changes no byte of any output -- checked on the three suites, on six shapes built to reach them
+  and on 1,500 generated documents -- because a link opened while quiet has nothing visible between its
+  brackets and is muted, and a second separate re-reads the same instruction. Both stay, because the
+  first keeps spans out of the IR that a later pass would have to know to discard, and the second keeps
+  a malformed field from re-running its own analysis.
 - **`w:lvlRestart` with a value is pinned at the unit level only.** `0` (never restart) and an absent one
   (restart under any shallower level) are both driven by `tests/fixtures/listcounters`; `N` is driven by
   `TestNumberingModel` alone, because a fixture for it would exercise nothing the counters fixture does
@@ -1551,7 +1741,14 @@ implementation session must respect:
 | A drawing container with no picture in it | Nothing — a chart, a SmartArt diagram, a drawn shape. Reference 2.6 leaves it to policy between a placeholder and a skip; skipping is session-derived at M7, because a placeholder invents content the document does not have and `docPr/@name` is "Chart 1" rather than a description |
 | An image whose part the archive does not hold | Its alt text, as plain text, exactly as `--no-images` renders every picture. Session-derived at M7: a picture that cannot be found is a defect in the document, not in the conversion, so it is not a refusal |
 | EMF and WMF | Extracted and linked like any other picture, which reference 1.2 leaves to policy between that and a warning. Session-derived at M7: no Markdown renderer will display one, but the file is what the document had and dropping it loses more than linking it does |
-| Footnotes/endnotes | `[^n]` refs + definitions at end, renumbered 1..n |
+| Footnotes/endnotes | `[^n]` refs + definitions at end, renumbered 1..n — **one** sequence for both stories, in the order the references are read: the body first, then each note in the order it was numbered, so a reference inside a note to one not yet reached takes the next label. The definitions follow in label order, each `[^n]: ` with its later lines indented four columns, so a note may hold anything the body may. A note referenced twice keeps one label. Session-derived at M10: reference row 24 offers the endnotes after the footnotes, but GitHub renumbers footnotes by first reference whatever the labels say, and this is the one order in which the number in the `.md` is the number on the page |
+| A note reference naming nothing — an unknown `w:id`, a separator's, a missing notes part — and a note cited only from another note of its own story, or a footnote cited only from an endnote | Muted: it writes nothing and the text either side meets, which is 5.4's degradation; `[^n]` with no definition is literal text to every renderer. The second shape is a limit, not a choice — see Known gaps. Session-derived at M10 |
+| A note that came to nothing | `[^n]:` alone, which GFM reads as an empty definition. Leaving it out would turn every reference to it into the literal text `[^n]`. Session-derived at M10 |
+| A note reference followed by `(`, and one opening its line followed by `:` | `[^n]\(` and `[^n]\:` — the first would make the pair a link, the second a definition of its own. Nothing else after a reference is escaped. Session-derived at M10 |
+| A note reference inside a raw-HTML table, or inside a fence | `<sup>n</sup>` and nothing, respectively, because GFM parses no Markdown in either; the note is still defined, and GitHub drops it — see Known gaps. Session-derived at M10 |
+| A field's cached result | Correctness rule 7 and reference 2.7 as written — a `HYPERLINK`, and a `REF` carrying `\h`, is a link around its result; a `TOC` field or a content control whose gallery says it is one vanishes whole; every other field is its result, and one with no separate is nothing — **except `INCLUDEPICTURE`**, which 2.7 would turn into `![](url)` from its instruction and which is its cached result here, a picture if it holds one. Session-derived at M10; `DocWalker.h`'s To Do 3 |
+| A link a field's result opens across a paragraph break | Closed at the end of each paragraph and opened again at the start of the next: two links to one destination, as a hyperlink across a hard break already is. Session-derived at M10 |
+| A paragraph whose mark a tracked change deleted | Runs on into the next paragraph (5.11), which gives the pair its classification; where the next block is a table, or the cell, note or body ends, it ends as written. Session-derived at M10 in the second half, because Word will not delete those marks |
 | Horizontal rule (`pBdr` bottom on empty ¶) | `---` with blank lines around |
 | `w:br` (textWrapping) / page break | Backslash hard break (`<br>` in cells, under either table form: a pipe table's row is one line by construction, and a line end inside an HTML cell renders only as a space) / nothing |
 | Hidden text | Dropped, for `w:vanish` (a toggle) and `w:webHidden` (nearest-wins) alike |
@@ -1573,9 +1770,12 @@ implementation session must respect:
 M9 added no module, which is worth stating where a reader counts them: a table is a shape over blocks
 that already exist rather than a stage of its own, so it landed in `Ir`, `DocWalker`, `MdEscape`,
 `MdEmitter` and `CliOptions`, plus one line of `Convert` that hands `--tables` to the emitter, and the
-count stayed at twenty.
+count stayed at twenty. **M10 added none either**, for the same reason: a field is a state the walk
+carries, a revision is a rule the walk applies, and a note is a run of ordinary blocks with a record
+beside them -- so it landed in `Ir`, `DocWalker`, `LinkResolver`, `MdEmitter` and `Convert`, and the
+count is still twenty.
 
-**Written so far (M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9)**: `src/main.cpp`, `src/BuildGuards.h`,
+**Written so far (M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9 + M10)**: `src/main.cpp`, `src/BuildGuards.h`,
 `src/CliOptions.h`/`.cpp`, `src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`,
 `src/ZipReader.h`/`.cpp`, `src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp`, `src/OpcPackage.h`/`.cpp`,
 `src/StyleModel.h`/`.cpp`, `src/NumberingModel.h`/`.cpp`, `src/Ir.h`/`.cpp`, `src/DocWalker.h`/`.cpp`,
@@ -1631,26 +1831,29 @@ src/
                          a block at M8, which added no sixth block kind; M9's table records, the sixth
                          block kind and the row and cell chains -- a cell's blocks are blocks in the
                          same flat array, which is why no pass between the walk and the emitter changed
-                         but IrDropEmptyBlocks, which moves a table whole]
+                         but IrDropEmptyBlocks, which moves a table whole; M10's note reference span
+                         and note records, a note's blocks being blocks in the same array too]
    DocWalker.h/.cpp      document walk → IR (tracked changes, sdt, AlternateContent) [written at M5;
                          hyperlinks, pictures and bookmarks at M7; w:numPr read as a reference at M8;
                          w:tbl, w:tr and w:tc at M9, as two more dispatch levels so that every
-                         transparent wrapper is handled once for all four];
-                         the footnote walk and the field state machine arrive at M10
+                         transparent wrapper is handled once for all four; the field state machine,
+                         the deleted paragraph mark and w:cellDel, and the notes walk at M10]
    RunCoalescer.h/.cpp   adjacent-run merging + whitespace hoisting  [written at M6; unchanged at M9,
-                         which is the point of putting a cell's blocks in the same array]. The effective
+                         which is the point of putting a cell's blocks in the same array, and at M10,
+                         whose fields needed no barrier of their own]. The effective
                          format is resolved one stage earlier, in DocWalker, which is where the run
                          properties are — a divergence from CONVERSION_REFERENCE 6.2's [7]+[8], noted
                          there and in the module's own header
    LinkResolver.h/.cpp   relationship ids → destinations; bookmarks → GFM heading slugs or <a id>
                          anchors; the anchors nothing points at muted  [written at M7; a session
-                         addition, see above]
+                         addition, see above; per-part resolution and the note labels at M10]
    MdEscape.h/.cpp       the context-aware escaping writer (pure, unit-testable)  [written at M5; the
                          pipes argument and MD_CONTEXT_HTML_BLOCK at M9]
    MdEmitter.h/.cpp      IR → Markdown text; blank-line discipline; delimiter sizing  [written at M5;
                          the delimiters, the block kinds and the flanking fallback at M6; the per-line
-                         prefix stack and the list rules at M8; the two table forms at M9]
-   Convert.h/.cpp        one file end to end: container → package → styles → numbering → walk →
+                         prefix stack and the list rules at M8; the two table forms at M9; the note
+                         references and definitions, through a base every line start writes, at M10]
+   Convert.h/.cpp        one file end to end: container → package → styles → numbering → walk → notes →
                          coalesce → resolve → plan → number → emit → write → extract, plus D7b's
                          output-path derivation and M7's
                          media-directory derivation. M13's Batch calls this per worker
@@ -1662,13 +1865,14 @@ src/
                          exit-code mapping. MT-safe from M13: every worker reports through this one
                          sink, so it locks then (D6). Reentrant at M2
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
-                         run_container.py [make_fixtures.py written at M3 and extended at M4, M5, M6,
-                         M7 and M8; run_container.py written at M3 and extended at M4]; run_golden.py
+                         run_container.py [make_fixtures.py written at M3 and extended at every
+                         milestone since; run_container.py written at M3 and extended at M4]; run_golden.py
                          [written at M5, with the media table and the media options at M7];
                          unit/ holds the CHECK header and one suite per module, built by
                          tests/DOCXtoMD.Tests.vcxproj [written at M4, five more suites at M5, a
-                         ninth at M6, an eleventh at M7, a twelfth at M8; M9 added no thirteenth and
-                         put its cases in the four suites that already own the stages a table touches]
+                         ninth at M6, an eleventh at M7, a twelfth at M8; M9 and M10 added no
+                         thirteenth and put their cases in the suites that already own the stages they
+                         touch]
 bench/                   GCS p4 microbenches (create with the first performance claim)
 docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
 include/                 the six owner-authored shared headers (already here); on the include path
@@ -1679,11 +1883,13 @@ There is **no `third_party/`** and there will not be one (D1/D2): the shipped bi
 code plus the CRT/Win32 and the six shared headers in `include/`, which every module may include.
 
 Allocation-conscious modules (GCS p2 hot set): `Inflate`, `ZipReader`, `XmlPull` (zero-allocation
-steady state), `DocWalker`, `RunCoalescer`, `MdEmitter` (single growable buffer), `Utf` — all
-allocating through `memory management.h`. The parsed-once models (`StyleModel`, `NumberingModel`,
-`OpcPackage`, `CliOptions`) use the same allocators but are not hot, and so do the three passes above
-the walk: `LinkResolver` allocates one name index and one slug index per document, `MediaExtractor` one
-plan, and `NumAssignMarkers` one counter table sized by the numbering part rather than by the document.
+steady state), `DocWalker`, `RunCoalescer`, `MdEmitter` (one growable output buffer and one line
+buffer, plus one note-order table per document), `Utf` — all allocating through `memory management.h`.
+The parsed-once models (`StyleModel`, `NumberingModel`, `OpcPackage`, `CliOptions`) use the same
+allocators but are not hot, and so do the three passes above the walk: `LinkResolver` allocates one
+relationship index for each part whose relationship ids it resolves, and one note table, one name index
+and one slug index per document, `MediaExtractor` one plan, and `NumAssignMarkers` one counter table
+sized by the numbering part rather than by the document.
 
 Under D6, **`Batch` and `Diag` are the only `MT-safe` modules**. Everything that converts a document
 — `Utf`, `Inflate`, `Crc32`, `ZipReader`, `XmlPull`, `OpcPackage`, `StyleModel`, `NumberingModel`,
@@ -1767,9 +1973,11 @@ still accept only one input; what it must not do is assume there will only ever 
 - A golden fixture is a part tree under `tests/fixtures/<case>/src/` **plus** an `expected.md` beside it,
   and which built `.docx` compares against which case is declared in `make_fixtures.py`'s `GOLDENS`
   table, next to the exit-code table, so a fixture and what it must produce are named in one place. The
-  mapping is many-to-one on purpose: fourteen container fixtures compare against `minimal/expected.md`,
-  which is how a byte comparison came to assert what M4 asserted with a message substring. That is also
-  why one change to the emitter shows up fourteen times over in a golden run, as M6's `**bold**` did.
+  mapping is many-to-one on purpose: fifteen fixtures compare against `minimal/expected.md` — the
+  fourteen container fixtures, through which a byte comparison came to assert what M4 asserted with a
+  message substring, and `unreferenced-bad-notes.docx`, whose unread notes part must cost the document
+  nothing. That is also why one change to the emitter shows up in every one of them in a golden run, as
+  M6's `**bold**` did.
 - **Write an `expected.md` by hand, from the specification, before running the converter at it.** A
   golden generated from the implementation asserts only that the implementation is deterministic. All
   seven of M5's were derived by hand and all seven matched on the first run; when one does not, decide
@@ -2654,11 +2862,107 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     the ragged merge above. Two mutations are *deliberately* left surviving and are recorded under Known
     gaps rather than papered over — the inter-cell gap loop in each table form, `MdEmitPipeRow`'s and
     `MdEmitTableHtml`'s, which no input this build reads can reach.
-- **M10 `[todo]` Fields, notes, tracked changes** — field state machine, footnotes/endnotes, sdt,
-  accept-all revisions. Two things M9 leaves for it by name: a second part's relationships, which is
-  what finally tests that relationship ids are scoped per part (M4's open coverage gap), and a
-  multi-block note body, which is the first content that would really exercise `DocWalker`'s saved
-  paragraph classification -- a table did not, because a table is never inside a paragraph.
+- **M10 `[done]` Fields, notes, tracked changes** — field state machine, footnotes/endnotes,
+  sdt, accept-all revisions. Two things M9 left for it by name: a second part's relationships, which is
+  what tests that relationship ids are scoped per part (M4's coverage gap), and a multi-block note body,
+  which M9 expected to be the first content to exercise `DocWalker`'s saved paragraph classification --
+  a table did not, because a table is never inside a paragraph.
+  DoD: the milestone names no commands of its own, so the global five apply; `tests/fixtures/fields`,
+  `toc`, `footnotes` and `revisions` are the fixture pairs bullet 4 asks for.
+  **Status**: the code landed from Linux on 2026-09-23 as `[done-unverified]`, and the owner verified it
+  on Windows the same day. Both x64 configurations build with **zero errors and zero warnings**;
+  `python tests\make_fixtures.py` builds all **83** fixtures; `python tests\run_container.py` passes all
+  **157** checks against `x64\Release` and all **157** again against `x64\Debug`;
+  `python tests\run_golden.py` passes all **118**; and `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
+  **1518**. Those runs discharge the two global bullets no Linux session can reach: bullet 1, zero
+  warnings at `/W3`, and bullet 4, where `run_golden.py` byte-compares the `fields`, `toc`, `footnotes`
+  and `revisions` pairs against an `expected.md` written by hand from the specification before the
+  converter was run at it. Bullets 2, 3 and 5 are mechanical and were checked on Linux, so the marker is
+  `[done]` with nothing outstanding.
+  **One fix landed after that verification**, the way one did after M7's and M8's. A malformed styles or
+  numbering part was refused with `XmlResultText`'s bare sentence, which names no part, while every other
+  refusal names the part that broke; each model now records the part it loaded, and the sentence goes
+  through `OpcMessageIn` as the walk's does. `bad-styles.docx` and `bad-numbering.docx` pin it, which
+  takes `make_fixtures.py` to **85** fixtures and `run_container.py` to **161** checks; `run_golden.py`
+  stays at **118** and the unit suite at **1518**. All four are the shim's, measured plain and under
+  AddressSanitizer and UndefinedBehaviorSanitizer with no diagnostic, and not on Windows; reverting the
+  fix fails exactly the two new container checks. The marker stays `[done]` on M5's precedent: a
+  verification record is of what was run, and a later bug fix does not un-verify a milestone. The changed
+  `StyleModel` and `NumberingModel` have been through `/W3` and run on Windows.
+  - **The three tallies are the shim's, exactly.** 157, 118 and 1518, the same three numbers in the
+    same order a Linux session measured before any of this reached a Windows machine, and the fixture
+    count with them. That is the **eighth** milestone running where the shim predicted the real MSVC
+    binary rather than only itself -- and it is worth what it costs precisely because it proves nothing
+    about `/W3`, `/sdl`, `/arch:AVX2` or the real `include/` headers, which is what the owner's run
+    covers instead. The Debug run carries its own half of that: `/RTCu` is where an indeterminate read
+    surfaces, and Debug is where `mzero`'s aligned 256-bit path over the two `al32` structures M10 grew
+    -- `IR_DOCUMENT`, which gained the note records, and `MD_EMITTER`, which gained the base and the
+    marker, each pinned by its own `static_assert` -- would fault had the alignment been lost.
+  - **What the milestone is, in one line**: fields run through a state machine and show what they
+    showed, a TOC vanishes, footnotes and endnotes become `[^n]` references and definitions numbered as
+    GitHub numbers them, and accept-all reaches the last two revisions that are not wrappers -- a deleted
+    paragraph mark and a deleted cell, beside the deleted row M9 already dropped. `src/` gained **no new
+    module**, for the second milestone running: `Ir` grew a span kind and a record array, `DocWalker`
+    the field machine, the join and the notes walk, `LinkResolver` per-part resolution and the note
+    labels, `MdEmitter` a base every line start writes, and `Convert` the notes stage.
+  - **The two things M9 left for it by name.** The second part's relationships are loaded, and
+    `tests/fixtures/footnotes` gives `rId5` and `rId2` different meanings in `document.xml.rels` and
+    `footnotes.xml.rels`, so **M4's coverage gap is closed** -- at the golden level; resolving every
+    block against the body's part fails three golden checks. The multi-block note body is there too, but
+    it does **not** exercise the saved paragraph classification, and the Known gaps entry on the saved
+    classification says why: a note is walked after the body rather than at its reference, so no
+    paragraph is open when one is.
+  - **Verified on Linux, mechanically**: the r17 prolog regexes, 3-space indent, no tabs, ASCII only,
+    CRLF and ≤150 columns on all thirty-eight `src/` files and all fifteen `tests/unit/` ones;
+    `clang-format --style=file` a verified no-op on every one of the fifty-three; both
+    `.vcxproj`/`.filters` pairs untouched, because M10 added no source or header file; every changed
+    file's `Last Modified` bumped. The four new fixture trees are LF and ASCII like every other.
+  - **Verified on Linux, behaviourally, against the shim build**: the unit suite passes all **1518**
+    checks, `tests/run_golden.py` all **118** and `tests/run_container.py` all **157**, every one of them
+    **twice** -- plain, and under AddressSanitizer and UndefinedBehaviorSanitizer with leak detection on,
+    with no diagnostic from either. The four goldens' `expected.md` files were written by hand from the
+    specification before the converter was run at them, and all four matched on their first run.
+  - **Cross-checked against an independent implementation**, which is what M3 got from Python's `zlib`,
+    M4 from expat and M5 through M9 from `markdown-it-py`. M10's claim is about what a reader sees, so the
+    oracle generates documents with random complex and simple fields -- links, TOCs and plain ones,
+    nested, split across runs and across paragraphs -- tracked insertions, deletions and deleted marks,
+    hidden runs, hyperlinks, and footnotes and endnotes referencing each other, converts them, renders
+    the Markdown with **cmark-gfm**, GitHub's own renderer, with footnotes on, and compares every
+    paragraph's text, every link's destination, every reference's label *and the number cmark-gfm
+    displays for it*, and every definition's content, against an independent Python model of rule 7,
+    5.11 and row 24. **5,500** documents agree, 500 of them under both sanitizers. The harness is scratch
+    and **the commit does not carry it**.
+  - **What a hostile-input pass found**, which no fixture and no generated document had: a **nested
+    raw-HTML table inside a note** broke the note. The line a nested table's `</table>` leaves the rest
+    of its cell on was written without the table's prefix, and inside a definition the prefix is the four
+    columns that keep a line in it -- so the definition ended there, the rest of the table landed in the
+    body and the note's next paragraph became an indented code block. Every line of a raw-HTML table
+    takes the prefix now, and two `TestMdEmitter` cases pin both shapes. The whole hostile set -- 25
+    shapes, that one among them --
+    20,000 unclosed begins, 5,000 nested links, 20,000 stray ends and separates, 200 KB instructions,
+    10,000 references to one note and 20,000 to distinct ones, self-citing and chained notes, notes in
+    nested tables, 20,000 deleted marks in a row, 500 deleted cells, a missing note relationships part --
+    and 800 mutated archives of the four fixtures ran under both sanitizers with **no diagnostic, no
+    undocumented exit code and none slower than 0.4 seconds**.
+  - **Every rule M10 introduced was mutation-tested**, the way M6 established and every milestone since
+    has repeated. **Sixty-one** mutations over the field machine, the join, the notes walk, the numbering,
+    the IR, the emitter and the pipeline, and **fifty-nine** now fail at least one suite -- thirty-three the unit
+    suite alone, one the golden runner alone (per-part resolution, which no unit suite can build a package
+    for) and the rest two or three of them. They did not all fail at first: eleven survived, and nine of
+    those were rules covered by nothing, each now pinned -- a switch's argument written in front of the
+    target, in both groups of switches that take one; a note's pending join ending with the note; the
+    adopted began-inside-a-TOC moment; a childless paragraph taking the join; a separator's `w:id`
+    referenced; a bookmark after a note's last paragraph; an unreferenced notes part that must not even be
+    validated; and a link an `mc:Choice` left open, undone with it. The two left are the defensive guards
+    recorded under Known gaps. The mutations were applied, and the suites run over them, by a
+    scratch driver, and the two survivors were then checked by hand against six shapes built to reach
+    them and 1,500 generated documents, which is M7's lesson about trusting the tool that checks.
+  - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/W3` and
+    its zero-warnings requirement, `/sdl`, `/RTCu`, `/arch:AVX2`, the real `include/` headers, and
+    `mzero`'s aligned 256-bit path over the two `al32` structures M10 grew. All of it is now covered:
+    both configurations build warning-free and every suite returns what the shim returned. What stays
+    Linux-only is the other half of the pair, AddressSanitizer and UndefinedBehaviorSanitizer, neither
+    of which is switched on in `DOCXtoMD.vcxproj`.
 - **M11 `[todo]` Hostile-input hardening** — bombs, traversal, XXE, producer-variance fixtures
   (Google Docs / LibreOffice / Pandoc exports). **D10 lands here**: the milestone owns the question of what a ZIP
   *entry name* carrying `\`, a leading `/`, `..`, a drive letter or an NTFS stream suffix should do — refuse the

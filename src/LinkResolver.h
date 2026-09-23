@@ -3,13 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-27
- * Last Modified: 2026-08-27
- * Description: Reference resolution: relationship ids into destinations, bookmarks into GFM anchors.
- * To Do: 1) Resolve a reference against the part it was read in once M10 walks a second part, whose
- *           relationship ids are scoped separately from the body's.
- *        2) Synthesise a destination from a HYPERLINK field instruction when M10 runs the field machine.
- *        3) Fold beyond the simple one-to-one case mappings, for the few code points whose lower-case
+ * Last Modified: 2026-09-23
+ * Description: Reference resolution: relationship ids, note labels, and bookmarks into GFM anchors.
+ * To Do: 1) Fold beyond the simple one-to-one case mappings, for the few code points whose lower-case
  *           form is more than one character.
+ *        2) Number a note referenced only from inside another note of the same story, or a footnote
+ *           referenced only from inside an endnote, which the walk does not read today because the
+ *           reference is not seen until the note holding it is.
  * Dependencies: Ir.h, OpcPackage.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -43,11 +43,14 @@ constexpr cui64 LINK_MAX_SLUG_BYTES = LINK_MAX_NAME_BYTES - LINK_MAX_NUMBER_BYTE
 /// Turns every relationship reference the walk recorded into a destination.
 /// @param document   A document DocWalk has filled and RunCoalesce has been over.
 /// @param package    The package the part belongs to.
-/// @param partIndex  The part the references were read in, whose relationships they are scoped to.
+/// @param partIndex  The main document part, whose relationships the body's references are scoped to.
 /// @return true when the pass finished, false when it could not allocate.
 /// @note This is where correctness rule 1 is kept for content. An r:id means nothing on its own: ids are
 ///       scoped per part, so the walk records what it read and the lookup happens where the part is
-///       known. The part's relationships must already have been loaded.
+///       known -- and since M10 a document's blocks come from more than one. A block of the body resolves
+///       against partIndex and a block of a note against the part its IR_NOTE names, so rId3 in
+///       footnotes.xml and rId3 in document.xml are two different relationships, as ISO/IEC 29500-2 says
+///       they are. Every such part's relationships must already have been loaded.
 /// @note What each kind of reference becomes. A hyperlink to an External target becomes that URI, with
 ///       the w:anchor fragment appended when the element carried both. A hyperlink to a part inside the
 ///       package becomes nothing -- Markdown has no way to address one, and the honest degradation is to
@@ -57,6 +60,24 @@ constexpr cui64 LINK_MAX_SLUG_BYTES = LINK_MAX_NAME_BYTES - LINK_MAX_NUMBER_BYTE
 ///       later stage treats as "no link": CONVERSION_REFERENCE 5.4's "dangling refs degrade gracefully",
 ///       applied to references rather than to numbering.
 cbool LinkResolveRefs(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, csi32 partIndex);
+
+/// Gives every note reference the label its note is written under, and mutes the ones that name nothing.
+/// @param document  A document whose notes DocWalkNotes has read.
+/// @return true when the pass finished, false when it could not allocate.
+/// @note Mapping row 24's "renumbered 1..n": one sequence for footnotes and endnotes together, in the
+///       order the references are *read* -- the body first, then each note in the order it was numbered,
+///       so a reference inside a note to one not yet reached takes the next label. That is the order
+///       GitHub numbers a footnote by on the rendered page, so the labels in the .md and the numbers a
+///       reader sees agree. A note referenced twice keeps one label; each reference names it.
+/// @note That interleaves the two stories, which is a divergence from CONVERSION_REFERENCE row 24: it
+///       offers the endnotes after the footnotes, but GitHub renumbers by first reference whatever the
+///       labels say, so any other order puts one number in the .md and another on the page.
+/// @note A reference to a note the document does not hold is muted, which is CONVERSION_REFERENCE 5.4's
+///       degradation applied to a note: "[^n]" with no definition is literal text to every renderer.
+/// @note It runs before LinkResolveAnchors because a heading's slug includes its note labels -- GitHub
+///       builds the id from the heading's rendered text, and a reference renders as its number -- and
+///       before the second RunCoalesce, because a muted reference makes the text either side of it meet.
+cbool LinkResolveNotes(IR_DOCUMENTptrc document);
 
 /// Turns every bookmark into an anchor a link can reach, and every internal link into that anchor.
 /// @param document  A document whose references LinkResolveRefs has already turned into destinations.

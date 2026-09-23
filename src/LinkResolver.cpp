@@ -3,8 +3,8 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-27
- * Last Modified: 2026-08-27
- * Description: The reference lookup, the GFM slugger and the two Unicode tables it is generated from.
+ * Last Modified: 2026-09-23
+ * Description: The reference lookup, note numbering, the GFM slugger and the two Unicode tables behind it.
  * To Do: 1) Reuse the name index between documents once M13 gives one worker several.
  *        2) Widen the fold table to the multi-character mappings, if a heading is ever found needing one.
  *        3) Benchmark an AVX2 scan for the next byte a slug drops before adopting one (bd1/bd2).
@@ -681,6 +681,39 @@ static csi32 LinkRelsFind(LINK_REL_INDEXptrc index, OPC_PACKAGEptrc package, csi
    return -1;
 }
 
+// How many parts' relationship indexes one pass keeps at once. A document's blocks come from three parts
+// at most -- the body, the footnotes and the endnotes -- so four is room to spare, and a part past them
+// is looked up by the scan every index here stands in front of.
+constexpr cui32 LINK_MAX_PARTS = 4u;
+
+// The relationship indexes of every part a pass has met so far, built as each is first needed.
+struct LINK_PARTS {
+   LINK_REL_INDEX index[LINK_MAX_PARTS]; ///< One index per part met
+   si32           part[LINK_MAX_PARTS];  ///< Which part each belongs to
+   ui32           count;                 ///< How many are in use
+   LINK_REL_INDEX none;                  ///< An empty index, which makes a lookup fall back to the scan
+};
+
+typedef LINK_PARTS *const LINK_PARTSptrc;
+
+// The index for one part, built the first time it is asked for.
+static LINK_REL_INDEXptrc LinkPartsFor(LINK_PARTSptrc parts, OPC_PACKAGEptrc package, csi32 part) {
+   for(ui32 at = 0; at < parts->count; ++at) {
+      if(parts->part[at] == part) return parts->index + at;
+   }
+   if(parts->count >= LINK_MAX_PARTS) return &parts->none;
+   parts->part[parts->count] = part;
+   LinkRelsOpen(parts->index + parts->count, package, part);
+   return parts->index + parts->count++;
+}
+
+// Releases every index a pass built, and hands back the verdict the caller brought.
+static cbool LinkPartsClose(LINK_PARTSptrc parts, cbool verdict) {
+   for(ui32 at = 0; at < parts->count; ++at) LinkRelsClose(parts->index + at);
+   parts->count = 0;
+   return verdict;
+}
+
 //-- Reference resolution
 
 // Appends a range to a buffer that is being built, and reports whether it fitted.
@@ -823,7 +856,15 @@ static csi64 LinkHeadingSlug(IR_DOCUMENTptrc document, cIR_BLOCKptr block, LINK_
    for(ui32 index = 0; index < block->spanCount; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
-      if(!span || span->kind != IR_SPAN_TEXT) continue;
+      if(!span) continue;
+      // A note reference is part of a heading's text as the renderer sees it: GitHub builds a heading's id
+      // from its rendered text, and the reference renders as its number. LinkResolveNotes has already
+      // turned the reference into that label, which is why it runs before this pass.
+      if(span->kind == IR_SPAN_NOTE && !(span->flags & IR_SPAN_FLAG_MUTE)) {
+         if(!LinkSlugAppend(IrDest(document, span->destAt), span->destBytes, text, LINK_MAX_SLUG_BYTES, &used, &state)) break;
+         continue;
+      }
+      if(span->kind != IR_SPAN_TEXT) continue;
       if(!LinkSlugAppend(IrText(document, span->textAt), span->textBytes, text, LINK_MAX_SLUG_BYTES, &used, &state)) break;
    }
    *slugBytes = 0;
@@ -879,36 +920,143 @@ static csi64 LinkHeadingSlug(IR_DOCUMENTptrc document, cIR_BLOCKptr block, LINK_
    }
 }
 
+//-- Notes
+
+// Every note of a document and what the numbering pass knows about each.
+struct LINK_NOTES {
+   si32ptr slots;    ///< Open-addressed index over (kind, w:id), holding a note index or -1
+   si32ptr order;    ///< The note each label was given to, in label order
+   ui32ptr first;    ///< The first block of each note's body
+   ui32ptr end;      ///< One past its last
+   ui64    mask;     ///< One less than the index's slot count
+   ui32    numbered; ///< How many labels have been given
+};
+
+typedef LINK_NOTES *const LINK_NOTESptrc;
+
+// Reads a note identifier as a signed decimal, reporting whether it was one. A w:id is an ST_DecimalNumber,
+// and Word gives its separators -1; a reference to one is malformed, but it has to be read to be refused.
+static cbool LinkParseId(cchptr bytes, cui64 length, si32ptrc out) {
+   ui64 at       = 0;
+   si64 value    = 0;
+   bool negative = false;
+
+   if(length && bytes[0] == '-') {
+      negative = true;
+      at       = 1u;
+   }
+   if(at >= length) return false;
+   for(; at < length; ++at) {
+      if(bytes[at] < '0' || bytes[at] > '9') return false;
+      value = value * 10 + si64(bytes[at] - '0');
+      if(value > 0x7FFFFFFF) return false;
+   }
+   *out = si32(negative ? -value : value);
+   return true;
+}
+
+// The slot one note identifier lives in, or the free one it would take. The story is part of the key,
+// because footnote 1 and endnote 1 are two notes -- Word numbers the two stories separately.
+static si32ptr LinkNoteSlot(LINK_NOTESptrc table, cIR_DOCUMENTptr document, cIR_NOTE_KIND kind, csi32 id) {
+   ui64 slot = ((ui64(ui32(id)) * 2u + ui64(kind)) * 0x9E3779B97F4A7C15ull >> 20) & table->mask;
+
+   for(;;) {
+      csi32       held = table->slots[slot];
+      cIR_NOTEptr note = IrNoteAt(document, held);
+
+      if(held < 0 || (note && note->id == id && note->kind == kind)) return table->slots + slot;
+      slot = (slot + 1u) & table->mask;
+   }
+}
+
+// Numbers every note reference of one block, in the order the block holds them.
+//
+// A reference to a note the document holds takes that note's label, giving the note the next label when
+// this is the first reference to reach it; a note referenced twice is one note with one label, which GFM
+// renders as two references to one definition. A reference to a note the document does not hold -- a
+// w:id no note declares, a note of the wrong type, a notes part that is missing -- is muted: it emits
+// nothing, and the text on either side of it meets, which is the degradation CONVERSION_REFERENCE 5.4
+// gives every dangling reference.
+static cbool LinkNumberBlock(IR_DOCUMENTptrc document, LINK_NOTESptrc table, cui32 blockIndex) {
+   cIR_BLOCKptr block = IrBlockAt(document, blockIndex);
+
+   for(ui32 at = 0; block && at < block->spanCount; ++at) {
+      cui32      spanIndex = block->spanAt + at;
+      IR_SPANptr span      = IrSpanMutable(document, spanIndex);
+      si32       id        = 0;
+
+      if(!span || span->kind != IR_SPAN_NOTE || (span->flags & IR_SPAN_FLAG_MUTE)) continue;
+
+      cIR_NOTE_KIND kind  = (span->flags & IR_SPAN_FLAG_END ? IR_NOTE_END : IR_NOTE_FOOT);
+      csi32         owner = (LinkParseId(IrDest(document, span->destAt), span->destBytes, &id) ? *LinkNoteSlot(table, document, kind, id) : -1);
+      IR_NOTEptr    note  = IrNoteMutable(document, owner);
+
+      if(!note) {
+         span->flags |= IR_SPAN_FLAG_MUTE;
+         continue;
+      }
+      if(!note->number) {
+         table->order[table->numbered] = owner;
+         table->numbered += 1u;
+         note->number = table->numbered;
+      }
+
+      char label[LINK_MAX_NUMBER_BYTES];
+      ui32 value  = note->number;
+      ui64 digits = 0;
+      char reversed[LINK_MAX_NUMBER_BYTES];
+
+      while(value) {
+         reversed[digits++] = char('0' + value % 10u);
+         value /= 10u;
+      }
+      for(ui64 index = 0; index < digits; ++index) label[index] = reversed[digits - 1u - index];
+      if(!IrSetDest(document, spanIndex, label, digits)) return false;
+   }
+   return true;
+}
+
+// Releases the numbering pass's table, and hands back the verdict the caller brought.
+static cbool LinkNotesClose(LINK_NOTESptrc table, cbool verdict) {
+   mdealloc(table->slots);
+   return verdict;
+}
+
 //== Entry points
 
 cbool LinkResolveRefs(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, csi32 partIndex) {
-   LINK_REL_INDEX rels;
+   LINK_PARTS parts;
 
-   LinkRelsOpen(&rels, package, partIndex);
-   for(ui32 index = 0; index < IrSpanCount(document); ++index) {
-      cIR_SPANptr span = IrSpanAt(document, index);
+   parts.count = 0;
+   parts.none  = {nullptr, 0};
+   // Block by block rather than span by span, because a relationship id is scoped to the part it was
+   // read in (correctness rule 1) and it is the block that knows which part that was: the body's blocks
+   // came from the main part, and a note's from the notes part its record names.
+   for(ui32 index = 0; index < IrBlockCount(document); ++index) {
+      cIR_BLOCKptr block = IrBlockAt(document, index);
+      cIR_NOTEptr  note  = (block ? IrNoteAt(document, block->note) : nullptr);
+      csi32        part  = (note ? note->part : partIndex);
 
-      if(!span || !(span->flags & IR_SPAN_FLAG_REL)) continue;
-      // No package is the unit suite's case, where a body is walked out of a string literal. There is
-      // nothing to look an id up in, so every reference resolves to nothing -- the same degradation a
-      // dangling one gets, which is what keeps the pipeline's shape the same with and without a package.
-      if(!package || partIndex < 0) {
-         IR_SPANptr blank = IrSpanMutable(document, index);
+      if(!block) continue;
+      for(ui32 at = 0; at < block->spanCount; ++at) {
+         cui32       spanIndex = block->spanAt + at;
+         cIR_SPANptr span      = IrSpanAt(document, spanIndex);
 
-         if(blank) blank->flags = IR_SPAN_FLAG_NONE;
-         if(!IrSetDest(document, index, "", 0)) {
-            LinkRelsClose(&rels);
-            return false;
+         if(!span || !(span->flags & IR_SPAN_FLAG_REL)) continue;
+         // No package is the unit suite's case, where a body is walked out of a string literal. There is
+         // nothing to look an id up in, so every reference resolves to nothing -- the same degradation a
+         // dangling one gets, which is what keeps the pipeline's shape the same with and without one.
+         if(!package || part < 0) {
+            IR_SPANptr blank = IrSpanMutable(document, spanIndex);
+
+            if(blank) blank->flags = IR_SPAN_FLAG_NONE;
+            if(!IrSetDest(document, spanIndex, "", 0)) return LinkPartsClose(&parts, false);
+            continue;
          }
-         continue;
-      }
-      if(!LinkResolveOne(document, package, partIndex, index, &rels)) {
-         LinkRelsClose(&rels);
-         return false;
+         if(!LinkResolveOne(document, package, part, spanIndex, LinkPartsFor(&parts, package, part))) return LinkPartsClose(&parts, false);
       }
    }
-   LinkRelsClose(&rels);
-   return true;
+   return LinkPartsClose(&parts, true);
 }
 
 cbool LinkResolveAnchors(IR_DOCUMENTptrc document) {
@@ -1025,6 +1173,61 @@ cbool LinkResolveAnchors(IR_DOCUMENTptrc document) {
    mdealloc(byName.slots);
    mdealloc(bySlug.slots);
    return true;
+}
+
+cbool LinkResolveNotes(IR_DOCUMENTptrc document) {
+   cui32 notes = IrNoteCount(document);
+   ui64  refs  = 0;
+
+   for(ui32 index = 0; index < IrSpanCount(document); ++index) {
+      if(IrSpanAt(document, index)->kind == IR_SPAN_NOTE) ++refs;
+   }
+   if(!refs) return true;
+
+   // One allocation carved four ways: the note index, the order notes are numbered in, and the block range
+   // each note's body occupies. A document with references and no notes still takes the index, empty,
+   // because every one of its references is then dangling and has to be muted.
+   cui64   slots = LinkIndexSlots(notes);
+   cui64   words = slots + 3u * ui64(notes);
+   si32ptr held  = (si32ptr)amalloc(words * sizeof(si32), 32u);
+
+   if(!held) return false;
+
+   LINK_NOTES table = {held, held + slots, (ui32ptr)(held + slots + notes), (ui32ptr)(held + slots + 2u * ui64(notes)), slots - 1u, 0};
+
+   for(ui64 at = 0; at < slots; ++at) table.slots[at] = -1;
+   for(ui32 at = 0; at < notes; ++at) {
+      IR_NOTEptr note = IrNoteMutable(document, si32(at));
+      si32ptr    slot = LinkNoteSlot(&table, document, note->kind, note->id);
+
+      note->number    = 0;
+      table.first[at] = IrBlockCount(document);
+      table.end[at]   = 0;
+      // The walk reads a note once per identifier, so two records never share one; the first would win
+      // if they did, which is the rule every duplicate in this project goes by.
+      if(*slot < 0) *slot = si32(at);
+   }
+   for(ui32 index = 0; index < IrBlockCount(document); ++index) {
+      csi32 owner = IrBlockAt(document, index)->note;
+
+      if(owner < 0 || ui32(owner) >= notes) continue;
+      if(table.first[owner] > index) table.first[owner] = index;
+      table.end[owner] = index + 1u;
+   }
+   // The body first, in the order it is read, and then each note in the order it was numbered -- so a
+   // reference inside a note to one not yet reached takes the next number, exactly where a reader of the
+   // rendered page meets it.
+   for(ui32 index = 0; index < IrBlockCount(document); ++index) {
+      if(IrBlockAt(document, index)->note < 0 && !LinkNumberBlock(document, &table, index)) return LinkNotesClose(&table, false);
+   }
+   for(ui32 visited = 0; visited < table.numbered; ++visited) {
+      cui32 owner = ui32(table.order[visited]);
+
+      for(ui32 index = table.first[owner]; index < table.end[owner]; ++index) {
+         if(IrBlockAt(document, index)->note == si32(owner) && !LinkNumberBlock(document, &table, index)) return LinkNotesClose(&table, false);
+      }
+   }
+   return LinkNotesClose(&table, true);
 }
 
 cui64 LinkSlug(cchptr text, cui64 byteCount, chptrc dest, cui64 destBytes) {

@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-23
  * Description: styles.xml as a resolved-property cache: basedOn chains, toggle parity and style roles.
  * To Do: 1) Resolve w:asciiTheme through theme1.xml, which today leaves the monospace verdict unspecified.
  *        2) Carry w:numPr from w:docDefaults, which no producer writes and which would need a guard of
@@ -254,6 +254,7 @@ struct al32 STYLE_MODEL {
    si32              defaultParagraph; ///< Index of the default paragraph style, or -1
    XML_RESULT        lastXml;          ///< Which XML rule the part broke, for the message
    OPC_RESULT        lastOpc;          ///< How the package refused the part, for the message
+   si32              part;             ///< The part it was loaded from, which a refusal names; -1 for none
    bool              hasPart;          ///< Whether a styles part was found and read at all
    bool              monoDefault;      ///< The document's own font baseline is monospace (see StyleResolveRun)
 };
@@ -447,5 +448,7 @@ cbool StyleFontIsMonospace(cchptr normalized);
 /// @return A NUL-terminated ASCII sentence with no trailing punctuation, naming the part it is about
 ///         when one is known. It is valid until the next call on the same package.
 /// @note A container or encoding refusal keeps the package's own sentence, which says which rule the
-///       bytes broke rather than only that they could not be read.
+///       bytes broke rather than only that they could not be read. A part that is not well-formed XML
+///       is named too, from the part StyleLoad recorded, because "a part ends in the middle of an
+///       element" does not say which.
 cchptr StyleResultText(OPC_PACKAGEptrc package, cSTYLE_MODELptr model, cSTYLE_RESULT result);

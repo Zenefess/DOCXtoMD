@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-10
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: Numbering part parsing, delegation chasing, override folding and the counter pass.
  * To Do: 1) Share one open-addressed index builder with StyleModel and OpcPackage, which write the
  *           same probe three times over.
@@ -518,10 +518,12 @@ void NumOpen(NUM_MODELptrc model) {
    mzero(model, sizeof(NUM_MODEL));
    model->lastXml = XML_OK;
    model->lastOpc = OPC_OK;
+   model->part    = -1;
 }
 
 cNUM_RESULT NumLoad(NUM_MODELptrc model, OPC_PACKAGEptrc package, csi32 partIndex, cSTYLE_MODELptr styles) {
    if(partIndex < 0) return NUM_OK; // No numbering part: the document declares no lists
+   model->part = partIndex;
 
    cOPC_RESULT loaded = OpcLoadXmlPart(package, partIndex);
 
@@ -817,7 +819,9 @@ cbool NumAssignMarkers(IR_DOCUMENTptrc document, cNUM_MODELptr model) {
 
 cchptr NumResultText(OPC_PACKAGEptrc package, cNUM_MODELptr model, cNUM_RESULT result) {
    if(result == NUM_ERROR_PART && model && model->lastOpc != OPC_OK) return OpcResultText(package, model->lastOpc);
-   if(result == NUM_ERROR_XML && model && model->lastXml != XML_OK) return XmlResultText(model->lastXml);
+   // A sentence about the bytes of a part names the part, as the walk's does: "a part ends in the middle
+   // of an element" does not say which, and the numbering part is found through a relationship, not by name.
+   if(result == NUM_ERROR_XML && model && model->lastXml != XML_OK) return OpcMessageIn(package, XmlResultText(model->lastXml), model->part);
    if(result < 0 || result >= NUM_RESULT_COUNT) return "the numbering part could not be read";
    return NUM_RESULT_TEXT[result];
 }

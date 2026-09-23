@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: The intermediate representation's arena: growth, span appends and empty-block trimming.
  * To Do: 1) Size the first allocation from the part's own byte count, once the walker knows it.
  *        2) Release the arena back to the allocator between documents when M13 reuses a worker.
@@ -65,6 +65,9 @@ static cbool IrRangeHasInk(cIR_DOCUMENTptr document, cui32 first, cui32 last) {
       cIR_SPANptr span = document->spans + index;
 
       if(span->kind == IR_SPAN_IMAGE) return true;
+      // A note reference puts its label on the page, so it is ink -- until LinkResolveNotes mutes one
+      // whose note the document does not hold, after which it emits nothing and is nothing.
+      if(span->kind == IR_SPAN_NOTE && !(span->flags & IR_SPAN_FLAG_MUTE)) return true;
       if(span->kind != IR_SPAN_TEXT) continue;
       for(ui32 at = 0; at < span->textBytes; ++at) {
          if(!IrIsBlank(document->heap[span->textAt + at])) return true;
@@ -132,7 +135,10 @@ csi64 IrStoreDest(IR_DOCUMENTptrc document, cchptr bytes, cui64 byteCount) {
 
 //== Entry points
 
-void IrOpen(IR_DOCUMENTptrc document) { mzero(document, sizeof(IR_DOCUMENT)); }
+void IrOpen(IR_DOCUMENTptrc document) {
+   mzero(document, sizeof(IR_DOCUMENT));
+   document->note = -1;
+}
 
 void IrClose(IR_DOCUMENTptrc document) {
    mdealloc(document->blocks);
@@ -140,6 +146,7 @@ void IrClose(IR_DOCUMENTptrc document) {
    mdealloc(document->tables);
    mdealloc(document->rows);
    mdealloc(document->cells);
+   mdealloc(document->notes);
    mdealloc(document->heap);
    mdealloc(document->dest);
    mdealloc(document->align);
@@ -179,6 +186,7 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
    block->listNumId    = -1;
    block->listNumber   = 0;
    block->tableAt      = -1;
+   block->note         = document->note;
    block->kind         = kind;
    block->headingLevel = headingLevel;
    block->listLevel    = 0;
@@ -351,6 +359,37 @@ void IrEndCell(IR_DOCUMENTptrc document, csi32 cell, cui32 blockAt, cIR_ALIGN al
    owner->blockAt    = blockAt;
    owner->blockCount = (document->blockCount > blockAt ? document->blockCount - blockAt : 0);
    owner->align      = ui8(align);
+}
+
+csi32 IrBeginNote(IR_DOCUMENTptrc document, cIR_NOTE_KIND kind, csi32 id, csi32 part) {
+   if(!IrReserve((ptrptrc)&document->notes, &document->noteCapacity, ui64(document->noteCount) + 1u, sizeof(IR_NOTE))) {
+      document->failed = true;
+      return -1;
+   }
+
+   IR_NOTEptr note = document->notes + document->noteCount;
+
+   note->id       = id;
+   note->part     = part;
+   note->number   = 0;
+   note->kind     = kind;
+   document->note = si32(document->noteCount);
+   ++document->noteCount;
+   return document->note;
+}
+
+void IrEndNote(IR_DOCUMENTptrc document) { document->note = -1; }
+
+cui32 IrNoteCount(cIR_DOCUMENTptr document) { return document->noteCount; }
+
+cIR_NOTEptr IrNoteAt(cIR_DOCUMENTptr document, csi32 index) {
+   if(index < 0 || ui32(index) >= document->noteCount) return nullptr;
+   return document->notes + index;
+}
+
+IR_NOTEptr IrNoteMutable(IR_DOCUMENTptrc document, csi32 index) {
+   if(index < 0 || ui32(index) >= document->noteCount) return nullptr;
+   return document->notes + index;
 }
 
 cIR_TABLEptr IrTableAt(cIR_DOCUMENTptr document, csi32 index) {
@@ -600,9 +639,10 @@ void IrDropEmptyBlocks(IR_DOCUMENTptrc document) {
       // A rule carries no spans by construction, a code paragraph may legitimately be blank, and a list
       // item is a marker whether or not it holds text, so all three are exempt here exactly as they are
       // in IrEndBlock -- the two tests have to agree, or a block that survived being ended would be
-      // thrown away on the second look. NumAssignMarkers runs before this and clears the reference on a
-      // paragraph whose numId resolved to nothing, so only a *real* item is exempt by the time this
-      // asks; an empty paragraph carrying a dangling one is dropped like any other.
+      // thrown away on the second look. Only a *real* item is exempt by the time this asks: the walk
+      // records a list reference only for a w:numId the numbering part resolves, and NumAssignMarkers
+      // clears any other before this runs, so an empty paragraph whose w:numId named nothing is dropped
+      // like any other.
       cbool exempt = (block->kind == IR_BLOCK_RULE || block->kind == IR_BLOCK_CODE || block->listNumId >= 0);
 
       if(!exempt && !IrRangeHasContent(document, block->spanAt, block->spanAt + block->spanCount)) continue;

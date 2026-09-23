@@ -3,11 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
- * Description: Unit tests for the body walk: wrappers, run content, and the formatting bits on a span.
- * To Do: 1) Drive the field state machine's traces once M10 replaces today's skip-it-whole handling.
+ * Last Modified: 2026-09-23
+ * Description: Unit tests for the walk: wrappers, runs, fields, revisions, notes and the formatting bits on a span.
+ * To Do: 1) Drive a note's own relationships, which needs a package: rId scoping per part is proved by
+ *           tests/fixtures/footnotes rather than here.
  *        2) Drive a table whose cells hold pictures and links, which needs a package to resolve them.
- * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, StyleModel.h, typedefs.h
+ * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, LinkResolver.h, StyleModel.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -19,6 +20,7 @@
 #include "Check.h"
 #include "DocWalker.h"
 #include "Ir.h"
+#include "LinkResolver.h"
 #include "StyleModel.h"
 
 //-- Helpers
@@ -80,6 +82,47 @@ static constexpr cchptr WALK_TAIL = "</w:body></w:document>";
 #define WALK_CELL_F1      "<w:tc><w:p><w:r><w:t>F1</w:t></w:r></w:p></w:tc>"
 #define WALK_CELL_F2      "<w:tc><w:p><w:r><w:t>F2</w:t></w:r></w:p></w:tc>"
 #define WALK_ROW_FF       "<w:tr>" WALK_CELL_F1 WALK_CELL_F2 "</w:tr>"
+
+// The pieces M10's field cases are built from: a complex field's three w:fldChar runs, an instruction
+// run, a text run, and a paragraph whose mark a tracked change deleted. Then the wrappers that leave each
+// case showing only the property it is about -- a paragraph, a paragraph of one run, a list item's
+// properties, an mc:AlternateContent, a hyperlink to a bookmark, a w:fldSimple, a content control's
+// gallery, a table of one row or one cell, and a cell a tracked change deleted.
+#define WALK_BEGIN         "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+#define WALK_SEPARATE      "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+#define WALK_END           "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+#define WALK_CODE(c)       "<w:r><w:instrText xml:space=\"preserve\">" c "</w:instrText></w:r>"
+#define WALK_RUN(t)        "<w:r><w:t xml:space=\"preserve\">" t "</w:t></w:r>"
+#define WALK_FIELD(c)      WALK_BEGIN WALK_CODE(c) WALK_SEPARATE
+#define WALK_HIDE(e)       "<w:r><w:rPr><w:webHidden/></w:rPr>" e "</w:r>"
+#define WALK_STRUCK        "<w:pPr><w:rPr><w:del w:id=\"1\" w:author=\"a\"/></w:rPr></w:pPr>"
+#define WALK_P(b)          "<w:p>" b "</w:p>"
+#define WALK_TEXT(t)       WALK_P(WALK_RUN(t))
+#define WALK_ITEM          "<w:pPr><w:numPr><w:numId w:val=\"4\"/></w:numPr></w:pPr>"
+#define WALK_OUTLINE       "<w:outlineLvl w:val=\"0\"/>"
+#define WALK_DEL_MARK      "<w:rPr><w:del w:id=\"1\"/></w:rPr>"
+#define WALK_ALT(c, f)     "<mc:AlternateContent><mc:Choice Requires=\"x\">" c "</mc:Choice><mc:Fallback>" f "</mc:Fallback></mc:AlternateContent>"
+#define WALK_ANCHOR(b)     "<w:hyperlink w:anchor=\"bm\">" b "</w:hyperlink>"
+#define WALK_SIMPLE(i, b)  "<w:fldSimple w:instr=\"" i "\">" b "</w:fldSimple>"
+#define WALK_GALLERY(g, b) WALK_SDT_PR(g) "<w:sdtContent>" b "</w:sdtContent></w:sdt>"
+#define WALK_SDT_PR(g)     "<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val=\"" g "\"/></w:docPartObj></w:sdtPr>"
+#define WALK_ONE_ROW(c)    "<w:tbl><w:tr>" c "</w:tr></w:tbl>"
+#define WALK_TABLE_1(b)    WALK_ONE_ROW("<w:tc>" b "</w:tc>")
+#define WALK_CELL_GONE     "<w:tc><w:tcPr><w:cellDel w:id=\"2\"/></w:tcPr>" WALK_TEXT("gone") "</w:tc>"
+
+// The two notes parts' root elements, and one note of each story.
+#define WALK_W             "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
+#define WALK_FOOT(i, b)    "<w:footnote w:id=\"" i "\">" b "</w:footnote>"
+#define WALK_ENDN(i, b)    "<w:endnote w:id=\"" i "\">" b "</w:endnote>"
+#define WALK_FREF(i)       "<w:r><w:footnoteReference w:id=\"" i "\"/></w:r>"
+#define WALK_EREF(i)       "<w:r><w:endnoteReference w:id=\"" i "\"/></w:r>"
+#define WALK_OWN_REF       "<w:r><w:footnoteRef/></w:r>"
+#define WALK_NOTE(t, i, b) "<w:footnote w:type=\"" t "\" w:id=\"" i "\">" b "</w:footnote>"
+#define WALK_SEPARATOR     WALK_NOTE("separator", "-1", "<w:p><w:r><w:separator/></w:r></w:p>")
+#define WALK_CONTINUE      WALK_NOTE("continuationSeparator", "0", "<w:p><w:r><w:continuationSeparator/></w:r></w:p>")
+
+static constexpr cchptr WALK_FOOT_HEAD = "<w:footnotes " WALK_W ">";
+static constexpr cchptr WALK_END_HEAD  = "<w:endnotes " WALK_W ">";
 
 static constexpr cchptr WALK_NUMS = "<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
                                     "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\">"
@@ -145,8 +188,9 @@ static cui64 WalkList(cIR_BLOCKptr block, chptrc dest) {
 // ordinary paragraph, which is a plausible trace rather than an obviously wrong one -- exactly the
 // failure CLAUDE.md warns of in saying the two are independent copies that must both be edited.
 static_assert(ui32(IR_BLOCK_KIND_COUNT) == 6u, "TestDocWalker: the trace renderer must spell every block kind; add the new one here.");
+static_assert(ui32(IR_SPAN_KIND_COUNT) == 7u, "TestDocWalker: the trace renderer must spell every span kind; add the new one here.");
 
-// The trace notation the three renderers below share, so a case is one string comparison rather than
+// The trace notation the renderers below share, so a case is one string comparison rather than
 // ten assertions. A heading is H<level>{...} and a paragraph is P{...}; inside
 // a block, [text] is a text span, | is a hard break, and the letters before a bracket are its
 // formatting: b bold, i italic, s strike, ^ superscript, v subscript and c code. The other block
@@ -155,6 +199,25 @@ static_assert(ui32(IR_BLOCK_KIND_COUNT) == 6u, "TestDocWalker: the trace rendere
 // image, and N(name) for a bookmark anchor; a muted anchor -- one nothing links to -- is N-(name).
 // M8's list membership stands in front of the block letter: [<level>#<numId>] is the reference the
 // walk read, and [<level>=<marker>] is what NumAssignMarkers made of it.
+// M10's note references are F(id) for a footnote and E(id) for an endnote, the id being the w:id
+// the walk read or the label LinkResolveNotes gave it, and F-(id) or E-(id) once that pass has muted
+// one; a block a note holds is prefixed f<w:id>: or e<w:id>:.
+
+// Writes which note a block belongs to, as f<w:id>: for a footnote and e<w:id>: for an endnote, in front
+// of everything else the block renders as. A block of the body writes nothing.
+static void WalkNote(cIR_DOCUMENTptr document, cIR_BLOCKptr block, chptrc dest, cui64 destBytes, ui64ptrc used) {
+   cIR_NOTEptr note = IrNoteAt(document, block->note);
+   char        head[16];
+   ui64        at = 0;
+
+   if(!note) return;
+   head[at++] = (note->kind == IR_NOTE_END ? 'e' : 'f');
+   if(note->id < 0) head[at++] = '-';
+   at += WalkNumber(head + at, ui32(note->id < 0 ? -note->id : note->id));
+   head[at++] = ':';
+   head[at]   = 0;
+   WalkAppend(dest, destBytes, used, head);
+}
 
 // Renders one range of blocks, which is the whole document at the top level and one cell's content
 // inside a table. A table's own blocks are the blocks of its cells, so the range renderer and the
@@ -232,6 +295,7 @@ static void WalkRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc des
 
       if(!block) continue;
       if(block->kind == IR_BLOCK_TABLE) {
+         WalkNote(document, block, dest, destBytes, used);
          WalkTable(document, block, dest, destBytes, used);
 
          cIR_TABLEptr table = IrTableAt(document, block->tableAt);
@@ -241,6 +305,8 @@ static void WalkRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc des
       }
 
       char head[24];
+
+      WalkNote(document, block, dest, destBytes, used);
 
       ui64 at = WalkList(block, head);
 
@@ -264,6 +330,15 @@ static void WalkRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc des
          }
          if(span->kind == IR_SPAN_LINK_END) {
             WalkAppend(dest, destBytes, used, "L)");
+            continue;
+         }
+         if(span->kind == IR_SPAN_NOTE) {
+            WalkAppend(dest, destBytes, used, (span->flags & IR_SPAN_FLAG_END ? "E" : "F"));
+            if(span->flags & IR_SPAN_FLAG_MUTE) WalkAppend(dest, destBytes, used, "-");
+            WalkAppend(dest, destBytes, used, "(");
+            for(ui32 byte = 0; byte < span->destBytes && *used + 1u < destBytes; ++byte) dest[(*used)++] = IrDest(document, span->destAt)[byte];
+            dest[*used] = 0;
+            WalkAppend(dest, destBytes, used, ")");
             continue;
          }
          if(span->kind == IR_SPAN_LINK_START || span->kind == IR_SPAN_IMAGE || span->kind == IR_SPAN_ANCHOR) {
@@ -377,6 +452,84 @@ static cWALK_RESULT WalkedTo(cchptr part) {
    NumClose(&numbering);
    StyleClose(&styles);
    return status.result;
+}
+
+// Walks a body and then the notes its references name, and compares the trace with a literal. Either
+// notes part may be null, which is a document without one. With labelled set the notes are numbered as
+// well, which is the half of M10 that LinkResolveNotes owns.
+static cbool NotedAs(cchptr body, cchptr footnotes, cchptr endnotes, cbool labelled, cchptr wanted) {
+   char        part[8192];
+   char        trace[2048];
+   ui64        used = 0;
+   STYLE_MODEL styles;
+   NUM_MODEL   numbering;
+   IR_DOCUMENT document;
+   ui64        numberUsed = 0;
+   bool        ok         = true;
+
+   part[0] = 0;
+   WalkAppend(part, sizeof(part), &used, WALK_HEAD);
+   WalkAppend(part, sizeof(part), &used, body);
+   WalkAppend(part, sizeof(part), &used, WALK_TAIL);
+   StyleOpen(&styles);
+   NumOpen(&numbering);
+   IrOpen(&document);
+   while(WALK_NUMS[numberUsed]) ++numberUsed;
+   ok = NumLoadBytes(&numbering, (cui8ptr)WALK_NUMS, numberUsed, nullptr) == NUM_OK;
+   ok = ok && DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, used).result == WALK_OK;
+
+   cchptr heads[2]  = {WALK_FOOT_HEAD, WALK_END_HEAD};
+   cchptr tails[2]  = {"</w:footnotes>", "</w:endnotes>"};
+   cchptr bodies[2] = {footnotes, endnotes};
+
+   for(ui32 story = 0; ok && story < 2u; ++story) {
+      if(!bodies[story]) continue;
+      used    = 0;
+      part[0] = 0;
+      WalkAppend(part, sizeof(part), &used, heads[story]);
+      WalkAppend(part, sizeof(part), &used, bodies[story]);
+      WalkAppend(part, sizeof(part), &used, tails[story]);
+
+      cIR_NOTE_KIND kind = (story ? IR_NOTE_END : IR_NOTE_FOOT);
+
+      ok = DocWalkNotesBytes(&document, &styles, &numbering, (cui8ptr)part, used, kind, -1).result == WALK_OK;
+   }
+   if(ok && labelled) ok = LinkResolveNotes(&document);
+   if(ok) WalkTrace(&document, trace, sizeof(trace));
+   IrClose(&document);
+   NumClose(&numbering);
+   StyleClose(&styles);
+   if(!ok) return false;
+
+   ui64 index = 0;
+
+   while(trace[index] && trace[index] == wanted[index]) ++index;
+   return trace[index] == wanted[index];
+}
+
+// Walks a notes part after a body that references footnote 1, and reports only why it stopped.
+static cWALK_RESULT NotesWalkedTo(cchptr notes, cIR_NOTE_KIND kind) {
+   STYLE_MODEL styles;
+   NUM_MODEL   numbering;
+   IR_DOCUMENT document;
+   char        part[2048];
+   ui64        used = 0;
+
+   part[0] = 0;
+   WalkAppend(part, sizeof(part), &used, WALK_HEAD);
+   WalkAppend(part, sizeof(part), &used, "<w:p>" WALK_FREF("1") "</w:p>");
+   WalkAppend(part, sizeof(part), &used, WALK_TAIL);
+   StyleOpen(&styles);
+   NumOpen(&numbering);
+   IrOpen(&document);
+
+   WALK_RESULT result = DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, used).result;
+
+   if(result == WALK_OK) result = DocWalkNotesBytes(&document, &styles, &numbering, (cui8ptr)notes, WalkLength(notes), kind, -1).result;
+   IrClose(&document);
+   NumClose(&numbering);
+   StyleClose(&styles);
+   return result;
 }
 
 //== The suite
@@ -507,13 +660,17 @@ void TestDocWalker(void) {
    CHECK(TracedAs(nullptr, "<w:p><w:fldSimple w:instr=\" PAGE \"><w:r><w:t>7</w:t></w:r></w:fldSimple></w:p>", "P{[7]}"));
 
    CheckGroup("DocWalker: field instructions never reach the output");
+   // A TOC is the one field whose result goes too (correctness rule 7), so what is left of this
+   // paragraph is nothing at all -- which before M10 was the result, and the instruction never.
    CHECK(TracedAs(nullptr,
                   "<w:p><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
                   "<w:r><w:instrText> TOC \\o </w:instrText></w:r>"
                   "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
                   "<w:r><w:t>result</w:t></w:r>"
                   "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
-                  "P{[result]}"));
+                  ""));
+   // An instruction outside any field is still an instruction, and never text.
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>a</w:t><w:instrText> PAGE </w:instrText></w:r></w:p>", "P{[a]}"));
 
    CheckGroup("DocWalker: mc:AlternateContent takes the fallback");
    CHECK(TracedAs(nullptr,
@@ -815,8 +972,8 @@ void TestDocWalker(void) {
 
    CheckGroup("DocWalker: the result sentences track their enumeration");
 
-   WALK_STATUS root = {WALK_ERROR_ROOT, XML_OK, OPC_OK};
-   WALK_STATUS none = {WALK_OK, XML_OK, OPC_OK};
+   WALK_STATUS root = {WALK_ERROR_ROOT, XML_OK, OPC_OK, -1};
+   WALK_STATUS none = {WALK_OK, XML_OK, OPC_OK, -1};
    ui64        at   = 0;
    cchptr      said = DocWalkResultText(nullptr, root);
    cchptr      want = "the main document part\'s root element is not w:document";
@@ -1176,4 +1333,285 @@ void TestDocWalker(void) {
                   "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>"
                   "<w:p><w:r><w:t>b</w:t></w:r></w:p>",
                   "P{[a]}R{}P{[b]}"));
+
+   // M10's fields, in the trace notation above: a field's result is ordinary spans, and a link it
+   // becomes is the same L( and L) a w:hyperlink is.
+   CheckGroup("DocWalker: a field shows its result and never its instruction");
+   CHECK(TracedAs(nullptr, WALK_P(WALK_RUN("page ") WALK_FIELD(" PAGE ") WALK_RUN("7") WALK_END), "P{[page ][7]}"));
+   // No separate means no cached result, and a field with none shows nothing (CONVERSION_REFERENCE 2.7).
+   CHECK(TracedAs(nullptr, WALK_P(WALK_RUN("a") WALK_BEGIN WALK_CODE(" DATE ") WALK_END WALK_RUN("b")), "P{[a][b]}"));
+   // SEQ, PAGEREF and a REF with no \h are the text they were showing -- a PAGEREF even with one.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" SEQ Figure \\* ARABIC ") WALK_RUN("3") WALK_END), "P{[3]}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" PAGEREF bm \\h ") WALK_RUN("4") WALK_END), "P{[4]}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" REF bm ") WALK_RUN("Intro") WALK_END), "P{[Intro]}"));
+   {
+      // A field nested inside another's instruction is part of the instruction, result and all: an IF
+      // shows the branch it chose, and the MERGEFIELD it tested shows nowhere.
+      cchptr tested = WALK_BEGIN WALK_CODE(" IF ") WALK_FIELD(" MERGEFIELD x ") WALK_RUN("value") WALK_END;
+      cchptr chosen = WALK_CODE(" = 1 \"yes\" \"no\" ") WALK_SEPARATE WALK_RUN("no") WALK_END;
+
+      char field[1024];
+      ui64 used = 0;
+
+      field[0] = 0;
+      WalkAppend(field, sizeof(field), &used, "<w:p>");
+      WalkAppend(field, sizeof(field), &used, tested);
+      WalkAppend(field, sizeof(field), &used, chosen);
+      WalkAppend(field, sizeof(field), &used, "</w:p>");
+      CHECK(TracedAs(nullptr, field, "P{[no]}"));
+   }
+   // An end, a separate or an instruction with no field open is malformed, and is ignored rather than
+   // closing something that was never opened.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_RUN("a") WALK_END WALK_SEPARATE WALK_RUN("b")), "P{[a][b]}"));
+
+   CheckGroup("DocWalker: a HYPERLINK or REF \\h field is a link around its result");
+   CHECK(TracedAs(nullptr, WALK_P(WALK_RUN("a ") WALK_FIELD(" HYPERLINK \"http://x/\" ") WALK_RUN("b") WALK_END), "P{[a ]L(http://x/)[b]L)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" HYPERLINK \\l \"bm\" ") WALK_RUN("there") WALK_END), "P{L(#bm)[there]L)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" HYPERLINK \"http://x/\" \\l \"f\" \\o \"a tip\" ") WALK_RUN("t") WALK_END), "P{L(http://x/#f)[t]L)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" REF bm \\h ") WALK_RUN("Intro") WALK_END), "P{L(#bm)[Intro]L)}"));
+   // A switch's argument is read with its switch wherever the switch stands, so one written in front of
+   // the target is never taken for it: HYPERLINK's tooltip and frame, and the three every field has.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" HYPERLINK \\o \"tip\" \\t \"_blank\" \"u\" ") WALK_RUN("a") WALK_END), "P{L(u)[a]L)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" REF \\* MERGEFORMAT \\# 0 \\@ x bm \\h ") WALK_RUN("a") WALK_END), "P{L(#bm)[a]L)}"));
+   // Word splits an instruction over as many runs as it likes, writes its keyword in either case, and
+   // may glue a switch to its argument; a quoted argument escapes a quote and a backslash.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_BEGIN WALK_CODE(" HYPER") WALK_CODE("LINK \"y\"") WALK_SEPARATE WALK_RUN("y") WALK_END), "P{L(y)[y]L)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" hyperlink \\l\"bm\" ") WALK_RUN("z") WALK_END), "P{L(#bm)[z]L)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" HYPERLINK \"C:\\\\d\\\\a \\\"b\\\"\" ") WALK_RUN("f") WALK_END), "P{L(C:\\d\\a \"b\")[f]L)}"));
+   // A link across a hard break is one pair; across a paragraph it is closed at the end of the first
+   // block and opened again at the start of the next, because Markdown cannot spell one that spans them.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" HYPERLINK \"u\" ") WALK_RUN("a") "<w:r><w:br/></w:r>" WALK_RUN("b") WALK_END), "P{L(u)[a]|[b]L)}"));
+   {
+      cchptr first  = WALK_P(WALK_RUN("x ") WALK_FIELD(" HYPERLINK \"u\" ") WALK_RUN("a"));
+      cchptr second = WALK_P(WALK_RUN("b") WALK_END WALK_RUN(" y"));
+
+      char spread[1024];
+      ui64 used = 0;
+
+      spread[0] = 0;
+      WalkAppend(spread, sizeof(spread), &used, first);
+      WalkAppend(spread, sizeof(spread), &used, second);
+      CHECK(TracedAs(nullptr, spread, "P{[x ]L(u)[a]L)}P{L(u)[b]L)[ y]}"));
+   }
+   // Links do not nest: a field inside a w:hyperlink keeps its text, and a w:hyperlink inside a field
+   // link is a container and nothing more. The outer link is the one a reader was given either way.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_ANCHOR(WALK_FIELD(" HYPERLINK \"u\" ") WALK_RUN("a") WALK_END)), "P{L(#bm)[a]L)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FIELD(" HYPERLINK \"u\" ") WALK_RUN("a") WALK_ANCHOR(WALK_RUN("b")) WALK_END), "P{L(u)[a][b]L)}"));
+   // w:fldSimple is the same machine in one element: its instruction is an attribute and its children
+   // are the result, and a field left open inside it is closed with it.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_SIMPLE(" HYPERLINK &quot;http://s/&quot; ", WALK_RUN("s"))), "P{L(http://s/)[s]L)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_SIMPLE(" TOC \\o ", WALK_RUN("gone")) WALK_RUN("kept")), "P{[kept]}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_SIMPLE(" QUOTE ", WALK_BEGIN WALK_CODE(" TOC ")) WALK_RUN("after")), "P{[after]}"));
+
+   CheckGroup("DocWalker: a TOC vanishes, result and all");
+   {
+      // Every paragraph that begins inside the field and comes to nothing is gone whole -- the list
+      // marker, the blank line of code and the border of an entry that carried one included.
+      cchptr bookmark = "<w:bookmarkStart w:id=\"9\" w:name=\"inside\"/>";
+      cchptr opening  = "<w:p>" WALK_RUN("Contents") WALK_FIELD(" TOC \\o \"1-3\" \\h ") "<w:hyperlink w:anchor=\"_Toc1\">" WALK_RUN("Intro");
+      cchptr numbered = "</w:hyperlink></w:p>" WALK_P(WALK_ITEM WALK_RUN("Numbered entry"));
+      cchptr blank    = "<w:p><w:pPr><w:pStyle w:val=\"SC\"/></w:pPr></w:p>";
+      cchptr bordered = "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>";
+      cchptr tabled   = WALK_TABLE_1(WALK_TEXT("tabled entry"));
+      cchptr closing  = WALK_P(WALK_END) WALK_TEXT("after");
+
+      cchptr pieces[] = {opening, bookmark, numbered, blank, bordered, tabled, closing};
+      char   entries[2048];
+      ui64   used = 0;
+
+      entries[0] = 0;
+      for(ui64 at = 0; at < sizeof(pieces) / sizeof(pieces[0]); ++at) WalkAppend(entries, sizeof(entries), &used, pieces[at]);
+      CHECK(TracedAs(STYLE_CODE, entries, "P{[Contents]}P{[after]}"));
+   }
+   {
+      // Word sets w:webHidden on every run of the PAGEREF in each TOC entry, w:fldChar and all. A
+      // field's structure is read whatever hides its runs, or the begin would be dropped, its result
+      // shown, and the end would close some other field.
+      cchptr hidden = WALK_HIDE("<w:fldChar w:fldCharType=\"begin\"/>") WALK_HIDE("<w:instrText> TOC </w:instrText>");
+      cchptr shown  = WALK_HIDE("<w:fldChar w:fldCharType=\"separate\"/>") WALK_RUN("shown if misread") WALK_END;
+      char   field[1024];
+      ui64   used = 0;
+
+      field[0] = 0;
+      WalkAppend(field, sizeof(field), &used, "<w:p>" WALK_RUN("a"));
+      WalkAppend(field, sizeof(field), &used, hidden);
+      WalkAppend(field, sizeof(field), &used, shown);
+      WalkAppend(field, sizeof(field), &used, WALK_RUN("b") "</w:p>");
+      CHECK(TracedAs(nullptr, field, "P{[a][b]}"));
+   }
+   // A content control whose gallery says it is a table of contents is skipped the same way; any other
+   // gallery is ordinary content.
+   CHECK(TracedAs(nullptr, WALK_GALLERY("Table of Contents", WALK_TEXT("Contents")) WALK_TEXT("after"), "P{[after]}"));
+   CHECK(TracedAs(nullptr, WALK_GALLERY("Bibliographies", WALK_TEXT("Sources")), "P{[Sources]}"));
+
+   CheckGroup("DocWalker: the field stack's own bounds");
+   {
+      // Eight fields deep is tracked; a ninth is only counted, so what it holds is dropped rather than
+      // guessed at -- and every end still closes something, so the text after the last one returns.
+      char nested[4096];
+      char deeper[4096];
+      ui64 used = 0;
+      ui64 more = 0;
+
+      nested[0] = 0;
+      deeper[0] = 0;
+      WalkAppend(nested, sizeof(nested), &used, "<w:p>");
+      WalkAppend(deeper, sizeof(deeper), &more, "<w:p>");
+      for(ui32 level = 0; level < 9u; ++level) {
+         if(level < 8u) WalkAppend(nested, sizeof(nested), &used, WALK_FIELD(" QUOTE "));
+         WalkAppend(deeper, sizeof(deeper), &more, WALK_FIELD(" QUOTE "));
+      }
+      WalkAppend(nested, sizeof(nested), &used, WALK_RUN("deep"));
+      WalkAppend(deeper, sizeof(deeper), &more, WALK_RUN("deep"));
+      for(ui32 level = 0; level < 9u; ++level) {
+         if(level < 8u) WalkAppend(nested, sizeof(nested), &used, WALK_END);
+         WalkAppend(deeper, sizeof(deeper), &more, WALK_END);
+      }
+      WalkAppend(nested, sizeof(nested), &used, WALK_RUN("after") "</w:p>");
+      WalkAppend(deeper, sizeof(deeper), &more, WALK_RUN("after") "</w:p>");
+      CHECK(TracedAs(nullptr, nested, "P{[deep][after]}"));
+      CHECK(TracedAs(nullptr, deeper, "P{[after]}"));
+   }
+   {
+      // An instruction that outgrows its buffer is one this walk cannot read to its end, so its result
+      // stays the text it is: a truncated URL is never linked.
+      char long_[8192];
+      ui64 used = 0;
+
+      long_[0] = 0;
+      WalkAppend(long_, sizeof(long_), &used, "<w:p>" WALK_BEGIN WALK_CODE(" HYPERLINK \"http://x/"));
+      for(ui32 at = 0; at < 70u; ++at) WalkAppend(long_, sizeof(long_), &used, WALK_CODE("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+      WalkAppend(long_, sizeof(long_), &used, WALK_CODE("\" ") WALK_SEPARATE WALK_RUN("text") WALK_END "</w:p>");
+      CHECK(TracedAs(nullptr, long_, "P{[text]}"));
+   }
+   // A field begun inside an mc:Choice that an mc:Fallback replaces is undone with the rest of it:
+   // left open, the TOC below would swallow everything after the element.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_ALT(WALK_FIELD(" TOC "), WALK_RUN("fallback")) WALK_RUN("after")), "P{[fallback][after]}"));
+   // And a link the discarded branch left open is closed with it: a w:hyperlink after the element is a
+   // link of its own again, rather than a container inside a link that no longer exists.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_ALT(WALK_FIELD(" HYPERLINK \"u\" "), WALK_RUN("f")) WALK_ANCHOR(WALK_RUN("b"))), "P{[f]L(#bm)[b]L)}"));
+
+   CheckGroup("DocWalker: a deleted paragraph mark runs one paragraph on into the next");
+   // Accept-all, CONVERSION_REFERENCE 5.11: the text runs on into the next paragraph, whose mark -- and
+   // so whose style -- is the one that survived.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_STRUCK WALK_RUN("one ")) WALK_TEXT("two"), "P{[one ][two]}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_STRUCK WALK_RUN("one ")) WALK_P("<w:pPr>" WALK_OUTLINE "</w:pPr>" WALK_RUN("two")), "H1{[one ][two]}"));
+   CHECK(TracedAs(nullptr, WALK_P("<w:pPr>" WALK_OUTLINE WALK_DEL_MARK "</w:pPr>" WALK_RUN("one ")) WALK_TEXT("two"), "P{[one ][two]}"));
+   CHECK(TracedAs(nullptr, WALK_P("<w:pPr><w:rPr><w:moveFrom w:id=\"1\"/></w:rPr></w:pPr>" WALK_RUN("a")) WALK_TEXT("b"), "P{[a][b]}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_STRUCK WALK_RUN("a")) WALK_P(WALK_STRUCK WALK_RUN("b")) WALK_TEXT("c"), "P{[a][b][c]}"));
+   // A paragraph with no content lends nothing, and one with no children takes what was waiting.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_STRUCK) WALK_TEXT("b"), "P{[b]}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_STRUCK WALK_RUN("a")) WALK_P(WALK_ITEM), "[0#4]P{[a]}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_STRUCK WALK_RUN("a")) WALK_P("<w:pPr>" WALK_OUTLINE "</w:pPr>") WALK_TEXT("b"), "H1{[a]}P{[b]}"));
+   {
+      // A paragraph a deleted mark ran on into began when the first of the two did. One that began inside
+      // a TOC and came to nothing is gone whole -- here the border of the paragraph whose mark survived,
+      // which would otherwise be read as a horizontal rule the document never drew.
+      cchptr opened = WALK_P(WALK_FIELD(" TOC ") WALK_RUN("entry")) WALK_P(WALK_STRUCK WALK_RUN("tail") WALK_END);
+      cchptr ruled  = "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>";
+
+      char joined[1024];
+      ui64 used = 0;
+
+      joined[0] = 0;
+      WalkAppend(joined, sizeof(joined), &used, opened);
+      WalkAppend(joined, sizeof(joined), &used, ruled);
+      WalkAppend(joined, sizeof(joined), &used, WALK_TEXT("after"));
+      CHECK(TracedAs(nullptr, joined, "P{[after]}"));
+   }
+   // Where no paragraph turns up to take it -- a table, the end of a cell, the end of the body -- the
+   // paragraph ends as it was written. Word will not delete those marks, so this is a producer's doing.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_STRUCK WALK_RUN("a")) "<w:tbl>" WALK_ROW_A "</w:tbl>", "P{[a]}T1-{(P{[a]})}"));
+   CHECK(TracedAs(nullptr, WALK_ONE_ROW("<w:tc>" WALK_P(WALK_STRUCK WALK_RUN("x")) "</w:tc>" WALK_CELL_A), "T2--{(P{[x]})(P{[a]})}"));
+   CHECK(TracedAs(nullptr, WALK_TEXT("b") WALK_P(WALK_STRUCK WALK_RUN("a")), "P{[b]}P{[a]}"));
+   // An inserted mark is simply a mark.
+   CHECK(TracedAs(nullptr, WALK_P("<w:pPr><w:rPr><w:ins w:id=\"1\"/></w:rPr></w:pPr>" WALK_RUN("a")) WALK_TEXT("b"), "P{[a]}P{[b]}"));
+   // A deleted mark inside a discarded mc:Choice must not leave a join pointing at a block the rewind
+   // has already thrown away.
+   CHECK(TracedAs(nullptr, WALK_ALT(WALK_P(WALK_STRUCK WALK_RUN("choice")), WALK_TEXT("fallback")) WALK_TEXT("after"), "P{[fallback]}P{[after]}"));
+   // A cell a tracked change deleted is dropped with its content, as a deleted row already was.
+   CHECK(TracedAs(nullptr, WALK_ONE_ROW(WALK_CELL_A WALK_CELL_GONE WALK_CELL_F1), "T2--{(P{[a]})(P{[F1]})}"));
+
+   CheckGroup("DocWalker: a note reference is a marker carrying its w:id");
+   CHECK(TracedAs(nullptr, WALK_P(WALK_RUN("a") WALK_FREF("2") WALK_EREF("1")), "P{[a]F(2)E(1)}"));
+   // A paragraph holding nothing but a reference holds something a reader sees.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_FREF("3")), "P{F(3)}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_RUN("a") "<w:r><w:rPr><w:vanish/></w:rPr><w:footnoteReference w:id=\"2\"/></w:r>"), "P{[a]}"));
+   CHECK(TracedAs(nullptr, WALK_P(WALK_RUN("a") "<w:r><w:footnoteReference/></w:r>"), "P{[a]}"));
+   // The marker a note's own body opens with is replaced by its "[^n]:" label, so it is nothing here.
+   CHECK(TracedAs(nullptr, WALK_P(WALK_OWN_REF WALK_RUN("a")), "P{[a]}"));
+
+   CheckGroup("DocWalker: the notes a body references are read after it");
+   {
+      cchptr body = WALK_P(WALK_RUN("a") WALK_FREF("2"));
+      cchptr foot = WALK_SEPARATOR WALK_CONTINUE WALK_FOOT("2", WALK_P(WALK_OWN_REF WALK_RUN(" note"))) WALK_FOOT("5", WALK_TEXT("unreferenced"));
+
+      CHECK(NotedAs(body, foot, nullptr, false, "P{[a]F(2)}f2:P{[ note]}"));
+      CHECK(NotedAs(body, foot, nullptr, true, "P{[a]F(1)}f2:P{[ note]}"));
+   }
+   {
+      // One sequence for both stories, in the order the references are read; a note referenced twice
+      // has one label, and a reference to a note the part does not hold is muted.
+      cchptr body = WALK_P(WALK_EREF("7") WALK_RUN("x") WALK_FREF("2") WALK_FREF("9") WALK_EREF("7"));
+      cchptr foot = WALK_FOOT("2", WALK_TEXT("foot"));
+      cchptr endn = WALK_ENDN("7", WALK_TEXT("end"));
+
+      CHECK(NotedAs(body, foot, endn, true, "P{E(1)[x]F(2)F-(9)E(1)}f2:P{[foot]}e7:P{[end]}"));
+   }
+   {
+      // The type decides what is machinery, not the identifier; a second note of one identifier is not
+      // read, which is the first-wins rule every duplicate in this project goes by.
+      cchptr body = WALK_P(WALK_FREF("0") WALK_FREF("3"));
+      cchptr foot = WALK_NOTE("normal", "0", WALK_TEXT("zero")) WALK_FOOT("3", WALK_TEXT("first")) WALK_FOOT("3", WALK_TEXT("second"));
+
+      CHECK(NotedAs(body, foot, nullptr, false, "P{F(0)F(3)}f0:P{[zero]}f3:P{[first]}"));
+      // So a reference to a separator's identifier names machinery rather than a note, and is muted.
+      CHECK(NotedAs(WALK_P(WALK_FREF("0") WALK_FREF("-1")), WALK_SEPARATOR WALK_CONTINUE, nullptr, true, "P{F-(0)F-(-1)}"));
+   }
+   {
+      // A note's body is block content: several paragraphs, a list and a table.
+      cchptr body = WALK_P(WALK_FREF("2"));
+      cchptr foot = WALK_FOOT("2", WALK_TEXT("one") WALK_P(WALK_ITEM WALK_RUN("item")) WALK_TABLE_1(WALK_TEXT("cell")));
+
+      CHECK(NotedAs(body, foot, nullptr, false, "P{F(2)}f2:P{[one]}f2:[0#4]P{[item]}f2:T1-{(f2:P{[cell]})}"));
+   }
+   {
+      // A note is a story of its own: a deleted mark waiting at its end ends there, a bookmark after its
+      // last paragraph lands nowhere, and a field it left open does not swallow the next note.
+      cchptr body = WALK_P(WALK_FREF("2") WALK_FREF("3"));
+      cchptr foot = WALK_FOOT("2", WALK_P(WALK_STRUCK WALK_RUN("a")) "<w:bookmarkStart w:id=\"1\" w:name=\"bm\"/>") WALK_FOOT("3", WALK_TEXT("b"));
+
+      CHECK(NotedAs(body, foot, nullptr, false, "P{F(2)F(3)}f2:P{[a]}f3:P{[b]}"));
+   }
+   {
+      cchptr body = WALK_P(WALK_FREF("3") WALK_FREF("4"));
+      cchptr foot = WALK_FOOT("3", WALK_P(WALK_FIELD(" TOC "))) WALK_FOOT("4", WALK_TEXT("visible"));
+
+      CHECK(NotedAs(body, foot, nullptr, false, "P{F(3)F(4)}f4:P{[visible]}"));
+   }
+   {
+      // An endnote referenced from a footnote is read, because the footnotes are read first; a footnote
+      // referenced only from another footnote is not, and its reference dangles.
+      cchptr body = WALK_P(WALK_FREF("2"));
+      cchptr foot = WALK_FOOT("2", WALK_P(WALK_RUN("x") WALK_EREF("4") WALK_FREF("3"))) WALK_FOOT("3", WALK_TEXT("unread"));
+      cchptr endn = WALK_ENDN("4", WALK_TEXT("y"));
+
+      CHECK(NotedAs(body, foot, endn, true, "P{F(1)}f2:P{[x]E(2)F-(3)}e4:P{[y]}"));
+   }
+
+   CheckGroup("DocWalker: a notes part is refused only when it is needed");
+   CHECK(NotesWalkedTo("<w:footnotes " WALK_W ">" WALK_FOOT("1", "<w:p/>") "</w:footnotes>", IR_NOTE_FOOT) == WALK_OK);
+   CHECK(NotesWalkedTo("<w:endnotes " WALK_W ">" WALK_FOOT("1", "<w:p/>") "</w:endnotes>", IR_NOTE_FOOT) == WALK_ERROR_NOTES_ROOT);
+   CHECK(NotesWalkedTo("<w:footnotes " WALK_W "><w:footnote w:id=\"1\"><w:p>", IR_NOTE_FOOT) == WALK_ERROR_XML);
+   // A story nothing references is not read at all, so bytes that are not even XML are no refusal.
+   CHECK(NotesWalkedTo("not xml at all", IR_NOTE_END) == WALK_OK);
+   {
+      WALK_STATUS wrong = {WALK_ERROR_NOTES_ROOT, XML_OK, OPC_OK, -1};
+      ui64        at    = 0;
+      cchptr      said  = DocWalkResultText(nullptr, wrong);
+      cchptr      want  = "a notes part's root element does not match its relationship";
+
+      while(said[at] && said[at] == want[at]) ++at;
+      CHECK(said[at] == want[at]);
+   }
 }

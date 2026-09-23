@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: Unit tests for the arena, the blank-line discipline, delimiters and every block kind.
  * To Do: 1) Drive a fence inside a list item that also holds text, which needs the code paragraph and
  *           the text to be one item, and so waits for a block that can hold children.
@@ -91,6 +91,29 @@ static constexpr cchptr NUMS = NUM_A NUM_B NUM_C NUM_D NUM_E NUM_F NUM_G NUM_H N
 #define CODE_LINE(l, id, txt) CODE_ON(l, id) "<w:r><w:t>" txt "</w:t></w:r></w:p>"
 #define PARA(text)            "<w:p><w:r><w:t>" text "</w:t></w:r></w:p>"
 
+// M10's pieces: a text run, a note reference of each story, one note of each, a note paragraph opening
+// with the w:footnoteRef marker every Word note opens with, a quotation, a hard break and a complex
+// field's w:fldChar runs. Then the wrappers that leave each case showing only what it is about -- a
+// paragraph, a heading's and a quotation's properties, a horizontal rule, and a paragraph linking to
+// the bookmark bm.
+#define RUN(t)     "<w:r><w:t xml:space=\"preserve\">" t "</w:t></w:r>"
+#define FREF(i)    "<w:r><w:footnoteReference w:id=\"" i "\"/></w:r>"
+#define EREF(i)    "<w:r><w:endnoteReference w:id=\"" i "\"/></w:r>"
+#define FOOT(i, b) "<w:footnote w:id=\"" i "\">" b "</w:footnote>"
+#define ENDN(i, b) "<w:endnote w:id=\"" i "\">" b "</w:endnote>"
+#define NOTE_P(t)  "<w:p><w:r><w:footnoteRef/></w:r>" RUN(" " t) "</w:p>"
+#define QUOTED(t)  PARA_OF(IN_QUOTE RUN(t))
+#define BR         "<w:r><w:br/></w:r>"
+#define FLD_BEGIN  "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+#define FLD_SEP    "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+#define FLD(c)     FLD_BEGIN "<w:r><w:instrText>" c "</w:instrText></w:r>" FLD_SEP
+#define FLD_END    "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+#define PARA_OF(b) "<w:p>" b "</w:p>"
+#define IN_H1      "<w:pPr><w:pStyle w:val=\"H1\"/></w:pPr>"
+#define IN_QUOTE   "<w:pPr><w:pStyle w:val=\"Q\"/></w:pPr>"
+#define RULE_P     "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>"
+#define TO_BM      "<w:p><w:hyperlink w:anchor=\"bm\">" RUN("go") "</w:hyperlink></w:p>"
+
 // A heading style, for the cases that have to show a slug the renderer will generate for itself.
 static constexpr cchptr STYLE_H1 = "<w:style w:type=\"paragraph\" w:styleId=\"H1\"><w:name w:val=\"heading 1\"/></w:style>";
 
@@ -124,9 +147,40 @@ static cbool EmitText(IR_DOCUMENTptrc document, cchptr text) {
    return IrAppendText(document, text, EmitLength(text));
 }
 
-// Converts one body, with an optional styles part and an optional numbering part in front of it,
-// straight through to Markdown.
-static cbool ConvertsUnder(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cHARD_BREAK hardBreak, cTABLE_MODE tables) {
+// The notes parts a case supplies, and the policies it runs under. A null notes body is a document
+// without that part.
+struct EMIT_CASE {
+   cchptr     footnotes; ///< The children of w:footnotes, or null
+   cchptr     endnotes;  ///< The children of w:endnotes, or null
+   HARD_BREAK hardBreak; ///< How a hard break is spelled
+   TABLE_MODE tables;    ///< What a merged table is written as
+};
+
+typedef const EMIT_CASE *const cEMIT_CASEptrc;
+
+// Walks one notes part, wrapped in its root element, into a document the body has already been walked into.
+static cbool EmitNotes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, cchptr notes, cIR_NOTE_KIND kind) {
+   char   part[4096];
+   ui64   used = 0;
+   cchptr root = (kind == IR_NOTE_END ? "endnotes" : "footnotes");
+
+   if(!notes) return true;
+
+   cchptr pieces[5] = {"<w:", root, " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">", notes, "</w:"};
+
+   for(ui32 index = 0; index < 5u; ++index) {
+      cui64 length = EmitLength(pieces[index]);
+
+      for(ui64 at = 0; at < length && used + 1u < sizeof(part); ++at) part[used++] = pieces[index][at];
+   }
+   for(ui64 at = 0; root[at] && used + 2u < sizeof(part); ++at) part[used++] = root[at];
+   part[used++] = '>';
+   return DocWalkNotesBytes(document, styles, numbering, (cui8ptr)part, used, kind, -1).result == WALK_OK;
+}
+
+// Converts one body, with an optional styles part, an optional numbering part and optional notes parts
+// in front of it, straight through to Markdown.
+static cbool ConvertsFull(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cEMIT_CASEptrc policy) {
    char part[4096];
    ui64 used = 0;
 
@@ -183,21 +237,24 @@ static cbool ConvertsUnder(cchptr styleBody, cchptr numberBody, cchptr body, cch
       }
    }
    IrOpen(&document);
-   MdOpen(&emitter, hardBreak, tables);
+   MdOpen(&emitter, policy->hardBreak, policy->tables);
 
    cWALK_STATUS status  = DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, used);
    bool         matched = false;
 
-   // Every pass Convert.cpp runs between the walk and the emitter runs here too, in the same order:
-   // the emitter's contract since M6 is that every formatted span it is handed is already merged and
-   // already trimmed, and since M7 that every link it is handed has a destination and every block it
-   // is handed produces a byte. Testing it against a document no pass had been over would test a
-   // shape the program never produces. There is no package here, so a relationship resolves to
-   // nothing and only a w:anchor link reaches the emitter with a destination -- which is the half
-   // that needs no archive to be worth testing.
-   bool ready = status.result == WALK_OK && RunCoalesce(&document);
+   // Every pass Convert.cpp runs between the walk and the emitter, except MediaPlan, runs here too, in
+   // the same order: the emitter's contract since M6 is that every formatted span it is handed is
+   // already merged and already trimmed, and since M7 that every link it is handed has a destination
+   // and every block it is handed produces a byte. Testing it against a document no pass had been over
+   // would test a shape the program never produces. There is no package here, so a relationship
+   // resolves to nothing and only a w:anchor link reaches the emitter with a destination -- which is
+   // the half that needs no archive to be worth testing.
+   bool ready = status.result == WALK_OK && EmitNotes(&document, &styles, &numbering, policy->footnotes, IR_NOTE_FOOT);
 
+   if(ready) ready = EmitNotes(&document, &styles, &numbering, policy->endnotes, IR_NOTE_END);
+   if(ready) ready = RunCoalesce(&document);
    if(ready) ready = LinkResolveRefs(&document, nullptr, -1);
+   if(ready) ready = LinkResolveNotes(&document);
    if(ready) ready = LinkResolveAnchors(&document);
    if(ready) ready = RunCoalesce(&document); // Again, because muting makes spans adjacent -- see Convert.cpp
    if(ready) ready = NumAssignMarkers(&document, &numbering);
@@ -212,8 +269,50 @@ static cbool ConvertsUnder(cchptr styleBody, cchptr numberBody, cchptr body, cch
    return matched;
 }
 
-// Converts one body with no styles part, under a chosen hard-break policy.
-// The same under the default table policy, which is every case but the ones that name --tables.
+// Converts one body with no notes parts, under chosen policies.
+static cbool ConvertsUnder(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cHARD_BREAK hardBreak, cTABLE_MODE tables) {
+   EMIT_CASE policy = {nullptr, nullptr, hardBreak, tables};
+
+   return ConvertsFull(styleBody, numberBody, body, wanted, &policy);
+}
+
+// Converts one body and its footnotes and endnotes, under the default policies, against the numbering
+// part the list cases use and a styles part holding the quote, code and heading styles.
+static cbool Noted(cchptr body, cchptr footnotes, cchptr endnotes, cchptr wanted) {
+   EMIT_CASE policy = {footnotes, endnotes, HARD_BREAK_BACKSLASH, TABLE_MODE_GFM};
+   char      style[512];
+   ui64      used = 0;
+
+   cchptr pieces[3] = {STYLE_QUOTE, STYLE_CODE, STYLE_H1};
+
+   for(ui32 index = 0; index < 3u; ++index) {
+      cui64 length = EmitLength(pieces[index]);
+
+      for(ui64 at = 0; at < length && used + 1u < sizeof(style); ++at) style[used++] = pieces[index][at];
+   }
+   style[used] = 0;
+   return ConvertsFull(style, NUMS, body, wanted, &policy);
+}
+
+// Converts a body of one paragraph citing footnote 2, whose content is the literal given. The cases about
+// what a note may hold differ in nothing else, so this is what keeps each of them to one line.
+static cbool Cited(cchptr note, cchptr wanted) {
+   char notes[2048];
+   ui64 used = 0;
+
+   cchptr pieces[3] = {"<w:footnote w:id=\"2\">", note, "</w:footnote>"};
+
+   for(ui32 index = 0; index < 3u; ++index) {
+      cui64 length = EmitLength(pieces[index]);
+
+      for(ui64 at = 0; at < length && used + 1u < sizeof(notes); ++at) notes[used++] = pieces[index][at];
+   }
+   notes[used] = 0;
+   return Noted(PARA_OF(FREF("2")), notes, nullptr, wanted);
+}
+
+// Converts one body against optional styles and numbering parts, under a chosen hard-break policy and
+// the default table policy, which is every case but the ones that name --tables.
 static cbool ConvertsWith(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cHARD_BREAK hardBreak) {
    return ConvertsUnder(styleBody, numberBody, body, wanted, hardBreak, TABLE_MODE_GFM);
 }
@@ -225,6 +324,7 @@ static cbool Merged(cchptr body, cchptr wanted) {
    return ConvertsUnder(nullptr, nullptr, body, wanted, HARD_BREAK_BACKSLASH, html);
 }
 
+// Converts one body with no styles or numbering part, under a chosen hard-break policy.
 static cbool ConvertsTo(cchptr body, cchptr wanted, cHARD_BREAK hardBreak) { return ConvertsWith(nullptr, nullptr, body, wanted, hardBreak); }
 
 // Converts one body with the default hard-break policy, which is what all but one case wants.
@@ -417,7 +517,7 @@ void TestMdEmitter(void) {
    // The nesting is fixed outermost first: the HTML wrapper, then the strike, then the emphasis.
    CHECK(Converts("<w:p><w:r><w:rPr><w:b/><w:i/><w:strike/></w:rPr><w:t>a</w:t></w:r></w:p>", "<del>***a***</del>\n"));
    CHECK(Converts("<w:p><w:r><w:rPr><w:b/><w:strike/>" SUPER "</w:rPr><w:t>a</w:t></w:r></w:p>", "<sup><del>**a**</del></sup>\n"));
-   // Underline, highlight and colour have no Markdown equivalent and are dropped (rows 8 and 9).
+   // Underline and highlight have no Markdown equivalent and are dropped (rows 8 and 9).
    CHECK(Converts("<w:p><w:r><w:rPr><w:u w:val=\"single\"/><w:highlight w:val=\"yellow\"/></w:rPr><w:t>a</w:t></w:r></w:p>", "a\n"));
    // Inside a raw-HTML wrapper the text still needs its two entities, which no other context adds.
    CHECK(Converts("<w:p><w:r><w:rPr>" SUB "</w:rPr><w:t>a &amp; &lt;b&gt;</w:t></w:r></w:p>", "<sub>a &amp; &lt;b></sub>\n"));
@@ -979,4 +1079,84 @@ void TestMdEmitter(void) {
       CHECK(Merged(square, "<table>\n<tr><th colspan=\"2\">head</th></tr>\n"
                            "<tr><td colspan=\"2\" rowspan=\"2\">merged</td></tr>\n<tr></tr>\n</table>\n"));
    }
+
+   CheckGroup("MdEmitter: a note reference and its definition");
+   CHECK(Noted(PARA_OF(RUN("a") FREF("2") RUN("b")), FOOT("2", NOTE_P("Note.")), nullptr, "a[^1]b\n\n[^1]: Note.\n"));
+   // A parenthesis after a reference would make the pair a link and lose the reference; a colon after
+   // one that opens a line would make the line a definition of its own. Mid-line a colon is harmless.
+   CHECK(Noted(PARA_OF(RUN("a") FREF("2") RUN("(see)")), FOOT("2", NOTE_P("N.")), nullptr, "a[^1]\\(see)\n\n[^1]: N.\n"));
+   CHECK(Noted(PARA_OF(FREF("2") RUN(": b")), FOOT("2", NOTE_P("N.")), nullptr, "[^1]\\: b\n\n[^1]: N.\n"));
+   CHECK(Noted(PARA_OF(RUN("a") FREF("2") RUN(": b")), FOOT("2", NOTE_P("N.")), nullptr, "a[^1]: b\n\n[^1]: N.\n"));
+   CHECK(Noted(PARA_OF(RUN("a") BR FREF("2") RUN(": b")), FOOT("2", NOTE_P("N.")), nullptr, "a\\\n[^1]\\: b\n\n[^1]: N.\n"));
+   {
+      // One sequence for both stories, in the order the references are read, and the definitions in the
+      // order of their labels; a reference to a note the document does not hold emits nothing at all.
+      cchptr body = PARA_OF(EREF("7") RUN(" x ") FREF("2") RUN(" y") FREF("9") RUN("z"));
+
+      CHECK(Noted(body, FOOT("2", PARA("foot")), ENDN("7", PARA("end")), "[^1] x [^2] yz\n\n[^1]: end\n\n[^2]: foot\n"));
+   }
+   // A note that came to nothing is an empty definition, which is still a definition to GFM; leaving
+   // it out would turn the reference into the literal text "[^1]".
+   CHECK(Cited(PARA_OF("<w:r><w:footnoteRef/></w:r>"), "[^1]\n\n[^1]:\n"));
+
+   CheckGroup("MdEmitter: a note holds whatever the body can");
+   // Every line of a definition after its first is indented four columns, which is what keeps a second
+   // paragraph, a list, a fence, a table, a quotation and a heading inside it.
+   CHECK(Cited(NOTE_P("One.") PARA("Two."), "[^1]\n\n[^1]: One.\n\n    Two.\n"));
+   CHECK(Cited(PARA_OF(RUN("one") BR RUN("two")), "[^1]\n\n[^1]: one\\\n    two\n"));
+   CHECK(Cited(NOTE_P("Intro.") ITEM("0", "1", "one") ITEM("0", "1", "two"), "[^1]\n\n[^1]: Intro.\n\n    - one\n    - two\n"));
+   CHECK(Cited(ITEM("0", "1", "one") ITEM("0", "1", "two"), "[^1]\n\n[^1]: - one\n    - two\n"));
+   CHECK(Cited(ITEM("0", "4", "nine") ITEM("1", "4", "deep"), "[^1]\n\n[^1]: 9. nine\n       - deep\n"));
+   CHECK(Cited(NOTE_P("Text.") PARA_OF(IN_CODE RUN("code")), "[^1]\n\n[^1]: Text.\n\n    ```\n    code\n    ```\n"));
+   CHECK(Cited("<w:tbl>" ROW2("a", "b") "</w:tbl>", "[^1]\n\n[^1]: | a | b |\n    | --- | --- |\n"));
+   CHECK(Cited(QUOTED("q") QUOTED("r"), "[^1]\n\n[^1]: > q\n    >\n    > r\n"));
+   CHECK(Cited(PARA_OF(IN_H1 RUN("H")) PARA("text"), "[^1]\n\n[^1]: # H\n\n    text\n"));
+   CHECK(Cited(PARA("x") RULE_P, "[^1]\n\n[^1]: x\n\n    ---\n"));
+   {
+      // A raw-HTML table keeps every line inside the definition, the line a nested table's close leaves
+      // the rest of its cell on included: at column zero that line would end the definition, and the
+      // rest of the note would land in the body.
+      cchptr after = "<w:tbl>" CELLS(PARA("a") "<w:tbl>" ROW1("in") "</w:tbl>" PARA("b"));
+      cchptr last  = "<w:tbl>" CELLS(PARA("a") "<w:tbl>" ROW1("in") "</w:tbl><w:p/>");
+      cchptr wantA = "[^1]\n\n[^1]: <table>\n    <tr><th>a<table>\n    <tr><th>in</th></tr>\n    </table>\n"
+                     "    b</th></tr>\n    </table>\n";
+      cchptr wantL = "[^1]\n\n[^1]: <table>\n    <tr><th>a<table>\n    <tr><th>in</th></tr>\n    </table>\n"
+                     "    </th></tr>\n    </table>\n";
+
+      CHECK(Cited(after, wantA));
+      CHECK(Cited(last, wantL));
+   }
+   // The blank line before the definitions is a plain one even where both sides are quotations: a bare
+   // ">" there would carry the body's blockquote into the note.
+   CHECK(Noted(QUOTED("q") PARA_OF(IN_QUOTE FREF("2")), FOOT("2", QUOTED("r")), nullptr, "> q\n>\n> [^1]\n\n[^1]: > r\n"));
+
+   CheckGroup("MdEmitter: where a note reference stands");
+   {
+      // A heading's id is built from its rendered text, and a reference renders as its number, so a link
+      // to a bookmark in the heading has to reach "#h1" and not "#h".
+      cchptr body = PARA_OF(IN_H1 "<w:bookmarkStart w:id=\"1\" w:name=\"bm\"/>" RUN("H") FREF("2")) TO_BM;
+
+      CHECK(Noted(body, FOOT("2", PARA("N.")), nullptr, "# H[^1]\n\n[go](#h1)\n\n[^1]: N.\n"));
+   }
+   {
+      cchptr cell = "<w:tbl>" CELLS(PARA_OF(RUN("a") FREF("2") RUN("(x)")));
+
+      CHECK(Noted(cell, FOOT("2", PARA("N.")), nullptr, "| a[^1]\\(x) |\n| --- |\n\n[^1]: N.\n"));
+   }
+   {
+      // Inside a raw-HTML table GFM parses no Markdown, so the reference is the number a reader saw.
+      cchptr nested = "<w:tbl>" CELLS(PARA_OF(RUN("a") FREF("2")) "<w:tbl>" ROW1("in") "</w:tbl><w:p/>");
+      cchptr wanted = "<table>\n<tr><th>a<sup>1</sup><table>\n<tr><th>in</th></tr>\n</table>\n</th></tr>\n</table>\n\n[^1]: N.\n";
+
+      CHECK(Noted(nested, FOOT("2", PARA("N.")), nullptr, wanted));
+   }
+   // A fence writes its text and nothing else, so a reference inside one is not written -- and the note
+   // is still defined, because its number was given when the reference was read.
+   CHECK(Noted(PARA_OF(IN_CODE RUN("code") FREF("2")), FOOT("2", PARA("N.")), nullptr, "```\ncode\n```\n\n[^1]: N.\n"));
+
+   CheckGroup("MdEmitter: fields and revisions reach the page as what they showed");
+   CHECK(Converts(PARA_OF(RUN("see ") FLD(" HYPERLINK \"http://x/\" ") RUN("here") FLD_END RUN(".")), "see [here](http://x/).\n"));
+   CHECK(Converts(PARA_OF(FLD(" HYPERLINK \"u\" ") RUN("a")) PARA_OF(RUN("b") FLD_END RUN(" y")), "[a](u)\n\n[b](u) y\n"));
+   CHECK(Converts(PARA("before") PARA_OF(FLD(" TOC \\o ") RUN("entry")) PARA_OF(RUN("entry") FLD_END) PARA("after"), "before\n\nafter\n"));
+   CHECK(Converts(PARA_OF("<w:pPr><w:rPr><w:del w:id=\"1\"/></w:rPr></w:pPr>" RUN("one ")) PARA("two"), "one two\n"));
 }

@@ -3,14 +3,15 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-10
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-23
  * Description: numbering.xml as resolved per-numId levels, and the counter pass that turns them into markers.
  * To Do: 1) Read w:lvl/w:pStyle so a paragraph whose style a level names can take that level's ilvl.
  *        2) Keep w:lvlText once a policy wants a literal roman or letter marker rather than a decimal.
  *        3) Carry w:numPr from w:docDefaults, which no producer writes and which needs its own guard.
- *        4) Decide at M10 whether a footnote's lists share the body's counters. NumAssignMarkers keys
- *           one counter table on the abstract definition and walks the blocks in document order, so a
- *           second part's items would continue the body's sequence unless a milestone rules otherwise.
+ *        4) Give a note's lists counters of their own if Word is found numbering them apart from the
+ *           body's: NumAssignMarkers keys one counter table on the abstract definition and walks the
+ *           blocks in reading order, the body's and then each note's, so a note's items continue the
+ *           sequence of a body list over the same definition.
  * Dependencies: Ir.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -148,6 +149,7 @@ struct al32 NUM_MODEL {
    ui32            counterRows;      ///< Counter rows one document needs: one per abstract, one per orphan
    XML_RESULT      lastXml;          ///< Which XML rule the part broke, for the message
    OPC_RESULT      lastOpc;          ///< How the package refused the part, for the message
+   si32            part;             ///< The part it was loaded from, which a refusal names; -1 for none
    bool            hasPart;          ///< Whether a numbering part was found and read at all
 };
 
@@ -264,5 +266,7 @@ cbool NumAssignMarkers(IR_DOCUMENTptrc document, cNUM_MODELptr model);
 /// @return A NUL-terminated ASCII sentence with no trailing punctuation, naming the part it is about
 ///         when one is known. It is valid until the next call on the same package.
 /// @note A container or encoding refusal keeps the package's own sentence, which says which rule the
-///       bytes broke rather than only that they could not be read.
+///       bytes broke rather than only that they could not be read. A part that is not well-formed XML
+///       is named too, from the part NumLoad recorded, because "a part ends in the middle of an
+///       element" does not say which.
 cchptr NumResultText(OPC_PACKAGEptrc package, cNUM_MODELptr model, cNUM_RESULT result);

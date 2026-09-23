@@ -10,6 +10,8 @@
  *        2) Size the buffer from the part's byte count rather than growing from a fixed first block.
  *        3) Show a cell's nested list structure, which the pipe form flattens because GFM has no
  *           spelling for indentation inside a cell.
+ *        4) Reach a note's definition from a reference inside a raw-HTML table, which GitHub drops
+ *           today because no Markdown reference reaches it.
  * Dependencies: BuildGuards.h, CliOptions.h, Ir.h, MdEmitter.h, MdEscape.h, Utf.h, typedefs.h,
  *               memory management.h, windows.h
  * ISA: Scalar
@@ -144,6 +146,20 @@ static cbool MdAppendRun(MD_EMITTERptrc emitter, cchar byte, cui64 count) {
       if(!MdAppendByte(emitter, byte)) return false;
    }
    return true;
+}
+
+// Writes what stands in front of every line before the line's own prefix: nothing in the body, and in a
+// footnote definition its "[^n]: " on the first line and its four columns of indentation on every other.
+// Every line start in this module comes through here, which is what lets every block kind be written
+// inside a definition without one of them learning that notes exist.
+static cbool MdWriteBase(MD_EMITTERptrc emitter) {
+   if(emitter->markerUsed) {
+      cui64 used = emitter->markerUsed;
+
+      emitter->markerUsed = 0;
+      return MdAppend(emitter, emitter->marker, used);
+   }
+   return MdAppend(emitter, emitter->base, emitter->baseUsed);
 }
 
 //-- The line being assembled
@@ -576,6 +592,14 @@ static cbool MdCloseLink(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, MD_LI
 // sit at a heading; its name has already been sanitised to the bytes an attribute and a fragment can
 // both carry, so there is nothing left here to escape.
 static cbool MdWriteMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_SPANptr span, MD_LINKptrc link, cbool dollars, cbool pipes) {
+   // A note reference is its label between "[^" and "]", which LinkResolveNotes has made a run of digits:
+   // there is nothing in it to escape, and nothing an exclamation mark in front of it could turn into an
+   // image, because "![^1]" is not an image marker to GFM.
+   if(span->kind == IR_SPAN_NOTE) {
+      if(!MdLineText(emitter, "[^")) return false;
+      if(!MdLineAppend(emitter, IrDest(document, span->destAt), span->destBytes)) return false;
+      return MdLineText(emitter, "]");
+   }
    if(span->kind == IR_SPAN_LINK_START) {
       if(!MdCloseLink(emitter, document, link, pipes)) return false;
       // An exclamation mark immediately in front of a link's '[' makes the pair an *image* marker, so
@@ -606,6 +630,31 @@ static cbool MdWriteMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR
    if(!MdLineText(emitter, "](")) return false;
    if(!MdLineEscaped(emitter, IrDest(document, span->destAt), span->destBytes, MD_CONTEXT_LINK_DEST, false, pipes)) return false;
    return MdLineText(emitter, ")");
+}
+
+//-- Note references
+
+// No note reference was just written, or the text after one is already settled.
+constexpr cui64 MD_NO_NOTE = ~0ull;
+
+// Escapes the one byte that would change what a note reference just written is.
+//
+// Two bytes can, and cmark-gfm settles both. An opening parenthesis straight after "[^1]" makes the pair
+// an inline link whose text is "^1", and the reference is gone; and a colon straight after one that opens
+// a line makes "[^1]: text" a footnote *definition*, which swallows the line and every lazy continuation
+// of it. The first is a hazard wherever the reference stands, the second only at the head of a line, and
+// neither is escaped by MdEscape: a parenthesis and a colon are only dangerous next to a bracket this
+// module writes itself, which is knowledge a run does not have -- the same reasoning pitfall 7 gives the
+// exclamation mark in front of a link.
+// @param at    Where the text after the reference begins in the line buffer.
+// @param lead  Whether the reference opened the line.
+static cbool MdGuardNote(MD_EMITTERptrc emitter, cui64 at, cbool lead) {
+   if(at == MD_NO_NOTE || at >= emitter->lineUsed) return true;
+
+   cchar next = emitter->line[at];
+
+   if(next == '(' || (lead && next == ':')) return MdLineInsert(emitter, at, '\\');
+   return true;
 }
 
 //-- Line groups
@@ -643,7 +692,9 @@ static cbool MdDollarPair(cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 fr
 // Whether a span writes nothing at all, so that a lookahead must read straight past it.
 //
 // A muted span is one LinkResolve settled: a link with no destination or no content, an anchor
-// nothing points at. An empty text span is a run that carried properties and no text.
+// nothing points at, a note reference naming no note the document holds. An empty text span is a run
+// whose text came to nothing, which RunCoalesce drops, or a picture MediaPlan turned into an empty alt
+// text, which reaches the emitter because MediaPlan runs after RunCoalesce.
 static cbool MdSpanIsSilent(cIR_SPANptr span) {
    if(span->flags & IR_SPAN_FLAG_MUTE) return true;
    return span->kind == IR_SPAN_TEXT && !span->textBytes;
@@ -700,14 +751,22 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
       link->contentAt = emitter->lineUsed;
       started         = true;
    }
+   ui64 noteEnd  = MD_NO_NOTE; // Where the text after a note reference just written would begin
+   bool noteLead = false;      // Whether that reference opened the line
+
    for(ui32 index = from; index < to; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
 
       if(!span || MdSpanIsSilent(span)) continue;
       if(span->kind != IR_SPAN_TEXT) {
          if(span->kind == IR_SPAN_BREAK) continue;
+
+         cui64 markAt = emitter->lineUsed;
+
          if(!MdWriteMarker(emitter, document, span, link, dollars, false)) return false;
-         started = true;
+         noteEnd  = (span->kind == IR_SPAN_NOTE ? emitter->lineUsed : MD_NO_NOTE);
+         noteLead = (markAt == 0);
+         started  = true;
          continue;
       }
 
@@ -723,6 +782,8 @@ static cbool MdAssembleLine(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cI
       cui32    nextFmt = MdFormatAhead(document, block, index + 1u, to);
 
       if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt, link->open, false)) return false;
+      if(!MdGuardNote(emitter, noteEnd, noteLead)) return false;
+      noteEnd = MD_NO_NOTE;
       started = true;
    }
    // The line ends, so anything still open has to be closed on it. The trailing padding goes after
@@ -745,6 +806,8 @@ static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document,
    bool    started = false;
    bool    pending = false;
 
+   ui64 noteEnd = MD_NO_NOTE; // Where the text after a note reference just written would begin
+
    emitter->lineUsed = 0;
    for(ui32 index = 0; index < block->spanCount; ++index) {
       cIR_SPANptr span = IrSpanAt(document, block->spanAt + index);
@@ -763,6 +826,7 @@ static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document,
             pending = false;
          }
          if(!MdWriteMarker(emitter, document, span, &link, dollars, false)) return false;
+         noteEnd = (span->kind == IR_SPAN_NOTE ? emitter->lineUsed : MD_NO_NOTE);
          started = true;
          continue;
       }
@@ -788,6 +852,9 @@ static cbool MdAssembleHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document,
       cui32    nextFmt = MdFormatAhead(document, block, index + 1u, block->spanCount);
 
       if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, span->fmt, dollars, ahead, nextFmt, link.open, false)) return false;
+      // A heading's content is inline and never a line of its own, so only the parenthesis is a hazard.
+      if(!MdGuardNote(emitter, noteEnd, false)) return false;
+      noteEnd = MD_NO_NOTE;
       started = true;
    }
    if(!MdCloseLink(emitter, document, &link, false)) return false;
@@ -875,11 +942,12 @@ static void MdPrefixIndent(MD_PREFIXptrc prefix, cui32 columns) {
    for(ui32 index = 0; index < columns; ++index) MdPrefixSame(prefix, " ", 1u);
 }
 
-// Writes the prefix in force in front of one line.
+// Writes the prefix in force in front of one line, behind whatever a footnote definition puts there.
 static cbool MdWritePrefix(MD_EMITTERptrc emitter, cMD_PREFIXptrc prefix, cbool first) {
    cchptr bytes = (first ? prefix->first : prefix->cont);
    cui64  used  = (first ? prefix->firstUsed : prefix->contUsed);
 
+   if(!MdWriteBase(emitter)) return false;
    return (used ? MdAppend(emitter, bytes, used) : true);
 }
 
@@ -890,6 +958,7 @@ static cbool MdWriteBareMarker(MD_EMITTERptrc emitter, cMD_PREFIXptrc prefix) {
    ui64 used = prefix->firstUsed;
 
    while(used && MdIsPad(prefix->first[used - 1u])) --used;
+   if(!MdWriteBase(emitter)) return false;
    return (used ? MdAppend(emitter, prefix->first, used) : true);
 }
 
@@ -946,6 +1015,7 @@ static cbool MdEmitHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR
    ui32 level = (block->headingLevel ? block->headingLevel : 1u);
 
    if(level > MD_MAX_HEADING) level = MD_MAX_HEADING;
+   if(!MdWriteBase(emitter)) return false;
    if(!MdAppendRun(emitter, '#', level)) return false;
    if(!MdAppendByte(emitter, ' ')) return false;
 
@@ -969,7 +1039,7 @@ static cbool MdEmitHeading(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR
 // Emits one horizontal rule. The blank lines mapping row 25 asks for on either side are the block
 // separator's own doing, which is what keeps a rule from being read as a setext underline for the
 // paragraph above it.
-static cbool MdEmitRule(MD_EMITTERptrc emitter) { return MdAppendText(emitter, "---\n"); }
+static cbool MdEmitRule(MD_EMITTERptrc emitter) { return MdWriteBase(emitter) && MdAppendText(emitter, "---\n"); }
 
 //-- Fenced code blocks
 
@@ -1224,6 +1294,7 @@ static cbool MdEmitList(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32 
       // 17's HTML comment. It carries the level's own indentation, which is what keeps a restart inside
       // a nested list inside the item holding it, and it needs no blank line on either side.
       if(shaped && (block->listFlags & IR_LIST_FIRST)) {
+         if(!MdWriteBase(emitter)) return false;
          if(!MdAppendRun(emitter, ' ', markerColumn)) return false;
          if(!MdAppendText(emitter, MD_LIST_SPLIT)) return false;
          if(!MdAppendByte(emitter, '\n')) return false;
@@ -1297,7 +1368,8 @@ static cbool MdCellBlock(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_B
    MD_LINK link    = {0, 0, 0, false};
    cbool   code    = (block->kind == IR_BLOCK_CODE);
    bool    started = false;
-   bool    pending = false; // A break seen but not yet written, in case nothing follows it
+   bool    pending = false;      // A break seen but not yet written, in case nothing follows it
+   ui64    noteEnd = MD_NO_NOTE; // Where the text after a note reference just written would begin
 
    // A marked item keeps its marker as literal text. Losing "3." from a cell loses the document's own
    // count, and there is nowhere else in a pipe table to put it; a marker-less continuation has none.
@@ -1324,6 +1396,7 @@ static cbool MdCellBlock(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_B
          if(pending && !MdLineText(emitter, MD_CELL_BREAK)) return false;
          pending = false;
          if(!MdWriteMarker(emitter, document, span, &link, dollars, true)) return false;
+         noteEnd = (span->kind == IR_SPAN_NOTE ? emitter->lineUsed : MD_NO_NOTE);
          started = true;
          continue;
       }
@@ -1344,6 +1417,9 @@ static cbool MdCellBlock(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_B
       cui32    nextFmt = MdFormatAhead(document, block, index + 1u, block->spanCount);
 
       if(!MdWriteSpan(emitter, bytes + start, span->textBytes - start, fmt, dollars, ahead, nextFmt, link.open, true)) return false;
+      // A cell's content is inline and never a line of its own, so only the parenthesis is a hazard.
+      if(!MdGuardNote(emitter, noteEnd, false)) return false;
+      noteEnd = MD_NO_NOTE;
       started = true;
    }
    if(!MdCloseLink(emitter, document, &link, true)) return false;
@@ -1620,7 +1696,16 @@ static cbool MdHtmlSpan(MD_EMITTERptrc emitter, cchptr bytes, cui64 byteCount, c
 
 // Writes one of M7's marker spans in the fallback's spelling: an anchor and a link are both an <a>, an
 // image an <img>, and a link's two halves are the element's own two halves.
+// A note reference is the one marker with no spelling a raw-HTML block can parse: GFM reads "[^n]" as a
+// reference only where it parses Markdown, and it parses none inside an HTML block. So it is written as
+// the superscript number a reader would have seen -- and GitHub drops a definition no Markdown reference
+// reaches, which CLAUDE.md records as a known limit rather than leaving to be found.
 static cbool MdHtmlMarker(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_SPANptr span) {
+   if(span->kind == IR_SPAN_NOTE) {
+      if(!MdAppendText(emitter, "<sup>")) return false;
+      if(!MdAppend(emitter, IrDest(document, span->destAt), span->destBytes)) return false;
+      return MdAppendText(emitter, "</sup>");
+   }
    if(span->kind == IR_SPAN_LINK_START) {
       if(!MdAppendText(emitter, "<a href=\"")) return false;
       if(!MdAppendEscaped(emitter, IrDest(document, span->destAt), span->destBytes, MD_CONTEXT_HTML_BLOCK, false)) return false;
@@ -1686,12 +1771,15 @@ static cbool MdHtmlBlock(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_B
    return true;
 }
 
-static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix);
+static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix, cbool inLine);
 
 // Writes one cell's content between its own tags: its blocks joined by "<br>", and a nested table as a
-// <table> of its own, which is the whole reason this form exists.
+// <table> of its own, which is the whole reason this form exists. A nested table ends on a line of its
+// own, so whatever the cell holds after it starts a new line -- and every line of a table takes the
+// table's prefix, or inside a note's definition the line would end the definition.
 static cbool MdHtmlCell(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_CELLptr cell, cMD_PREFIXptrc prefix) {
-   bool started = false;
+   bool started   = false;
+   bool lineStart = false;
 
    if(cell->flags & IR_CELL_VMERGED) return true;
    for(ui32 index = 0; index < cell->blockCount; ++index) {
@@ -1702,12 +1790,15 @@ static cbool MdHtmlCell(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_CE
          cIR_TABLEptr nested = IrTableAt(document, block->tableAt);
 
          if(!nested) continue;
-         if(!MdEmitTableHtml(emitter, document, nested, prefix)) return false;
-         index   = (nested->blockEnd > cell->blockAt + index ? nested->blockEnd - cell->blockAt - 1u : index);
-         started = false; // A table is not a line a "<br>" continues
+         if(!MdEmitTableHtml(emitter, document, nested, prefix, true)) return false;
+         index     = (nested->blockEnd > cell->blockAt + index ? nested->blockEnd - cell->blockAt - 1u : index);
+         started   = false; // A table is not a line a "<br>" continues
+         lineStart = true;
          continue;
       }
       if(!MdCellBlockHasContent(document, block)) continue;
+      if(lineStart && !MdWritePrefix(emitter, prefix, false)) return false;
+      lineStart = false;
       if(started && !MdAppendText(emitter, MD_CELL_BREAK)) return false;
       if(!MdHtmlBlock(emitter, document, block)) return false;
       started = true;
@@ -1729,13 +1820,15 @@ static cbool MdEmitHtmlPad(MD_EMITTERptrc emitter, cchptr open, cchptr close) { 
 // intervening row spans across the column the merge was opened in -- is an ordinary empty cell rather
 // than nothing at all. Dropped, it would leave the row a column short, which is a silently narrower
 // table: the one failure CONVERSION_REFERENCE row 19 names by saying a row must never lose a column.
-static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix) {
+// A nested table opens on its cell's own line, so its first line takes no prefix: one written there
+// would land in the middle of the row, after the "<td>" it stands in.
+static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix, cbool inLine) {
    ui32 held[IR_MAX_COLUMNS];
    ui32 index  = table->firstRow;
    bool header = true;
 
    for(ui32 column = 0; column < IR_MAX_COLUMNS; ++column) held[column] = 0;
-   if(!MdWritePrefix(emitter, prefix, false)) return false;
+   if(!inLine && !MdWritePrefix(emitter, prefix, false)) return false;
    if(!MdAppendText(emitter, "<table>\n")) return false;
    while(index != IR_NO_INDEX) {
       cIR_ROWptr row    = IrRowAt(document, index);
@@ -1791,6 +1884,9 @@ static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, c
 
          if(!MdHtmlCell(emitter, document, cell, prefix)) return false;
          emitter->used = MdTrimBreakEnd(emitter->out, emitter->used, contentAt);
+         // A cell whose last content was a nested table closes on a line of its own, which takes the
+         // prefix every other line of the table does.
+         if(emitter->used > contentAt && emitter->out[emitter->used - 1u] == '\n' && !MdWritePrefix(emitter, prefix, false)) return false;
          if(!MdAppendText(emitter, close)) return false;
          for(ui32 span = 0; span < cell->span && column < IR_MAX_COLUMNS; ++span, ++column) held[column] = rows;
          at = cell->nextCell;
@@ -1814,7 +1910,7 @@ static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, c
 
 // Emits one table, in whichever of its two forms its own shape and --tables call for.
 static cbool MdEmitTable(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cIR_TABLEptr table, cMD_PREFIXptrc prefix) {
-   if(MdTableAsHtml(emitter, table)) return MdEmitTableHtml(emitter, document, table, prefix);
+   if(MdTableAsHtml(emitter, table)) return MdEmitTableHtml(emitter, document, table, prefix, false);
    return MdEmitTablePipes(emitter, document, table, prefix);
 }
 
@@ -1832,7 +1928,7 @@ static cbool MdSeparate(MD_EMITTERptrc emitter, cIR_BLOCKptr previous, cIR_BLOCK
    cbool listed = (previous && (previous->listFlags & IR_LIST_ITEM)) || (next && (next->listFlags & IR_LIST_ITEM));
 
    if(!listed && previous && next && previous->kind == IR_BLOCK_QUOTE && next->kind == IR_BLOCK_QUOTE) {
-      if(!MdAppendText(emitter, MD_QUOTE_JOIN)) return false;
+      if(!MdWriteBase(emitter) || !MdAppendText(emitter, MD_QUOTE_JOIN)) return false;
    }
    return MdAppendByte(emitter, '\n');
 }
@@ -1854,11 +1950,18 @@ void MdClose(MD_EMITTERptrc emitter) {
    MdOpen(emitter, hardBreak, tables);
 }
 
-cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
-   cui32        blocks   = IrBlockCount(document);
-   ui32         index    = 0;
+// Emits one range of blocks, which is the body, or the body of one note.
+//
+// Everything below is the same for both, and that is the point of a footnote definition being written
+// through the base the emitter carries rather than through a prefix of its own: a note may hold a list, a
+// fence, a table or a heading, and each is written exactly as it would be in the body.
+// @param wroteAny  Whether anything stands before the range, which the first block's separator reads; it
+//                  is updated to say whether anything does after it.
+static cbool MdEmitRange(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, cui32 from, cui32 to, boolptrc wroteAny) {
+   cui32        blocks   = to;
+   ui32         index    = from;
    cIR_BLOCKptr previous = nullptr;
-   bool         wrote    = (emitter->used != 0);
+   bool         wrote    = *wroteAny;
    MD_LIST      list;
    MD_PREFIX    prefix;
 
@@ -1905,8 +2008,8 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
          }
          while(to > from && !MdItemHasContent(document, IrBlockAt(document, to - 1u))) --to;
          if(from < to) {
-            if(wrote && !MdSeparate(emitter, previous, IrBlockAt(document, from))) return MD_ERROR_MEMORY;
-            if(!MdEmitList(emitter, document, from, to, &list, &prefix)) return MD_ERROR_MEMORY;
+            if(wrote && !MdSeparate(emitter, previous, IrBlockAt(document, from))) return false;
+            if(!MdEmitList(emitter, document, from, to, &list, &prefix)) return false;
             previous = IrBlockAt(document, to - 1u);
             wrote    = true;
          }
@@ -1921,8 +2024,8 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
 
          MdPrefixClear(&prefix);
          if(table && table->firstRow != IR_NO_INDEX) {
-            if(wrote && !MdSeparate(emitter, previous, block)) return MD_ERROR_MEMORY;
-            if(!MdEmitTable(emitter, document, table, &prefix)) return MD_ERROR_MEMORY;
+            if(wrote && !MdSeparate(emitter, previous, block)) return false;
+            if(!MdEmitTable(emitter, document, table, &prefix)) return false;
             previous = block;
             wrote    = true;
          }
@@ -1951,8 +2054,8 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
          while(to > from && !MdBlockHasContent(document, IrBlockAt(document, to - 1u))) --to;
          if(from < to) {
             MdPrefixClear(&prefix);
-            if(wrote && !MdSeparate(emitter, previous, IrBlockAt(document, from))) return MD_ERROR_MEMORY;
-            if(!MdEmitFence(emitter, document, from, to, &prefix)) return MD_ERROR_MEMORY;
+            if(wrote && !MdSeparate(emitter, previous, IrBlockAt(document, from))) return false;
+            if(!MdEmitFence(emitter, document, from, to, &prefix)) return false;
             previous = IrBlockAt(document, from);
             wrote    = true;
          }
@@ -1964,19 +2067,123 @@ cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
       // come to nothing here -- IrEndBlock drops one that holds no printable byte -- so the separator
       // can be written before the block rather than unwound again afterwards.
       MdPrefixClear(&prefix);
-      if(wrote && !MdSeparate(emitter, previous, block)) return MD_ERROR_MEMORY;
+      if(wrote && !MdSeparate(emitter, previous, block)) return false;
       if(block->kind == IR_BLOCK_HEADING) {
-         if(!MdEmitHeading(emitter, document, block)) return MD_ERROR_MEMORY;
+         if(!MdEmitHeading(emitter, document, block)) return false;
       } else if(block->kind == IR_BLOCK_RULE) {
-         if(!MdEmitRule(emitter)) return MD_ERROR_MEMORY;
+         if(!MdEmitRule(emitter)) return false;
       } else {
          if(block->kind == IR_BLOCK_QUOTE) MdPrefixSame(&prefix, MD_QUOTE_PREFIX, 2u);
-         if(!MdEmitLines(emitter, document, block, &prefix)) return MD_ERROR_MEMORY;
+         if(!MdEmitLines(emitter, document, block, &prefix)) return false;
       }
       previous = block;
       wrote    = true;
       ++index;
    }
+   *wroteAny = wrote;
+   return !emitter->failed;
+}
+
+// Writes one note's label marker into the emitter, where the next line start will write it.
+static void MdOpenNote(MD_EMITTERptrc emitter, cui32 number) {
+   char digits[12];
+   ui64 count = 0;
+   ui32 value = number;
+   ui64 used  = 0;
+
+   do {
+      digits[count++] = char('0' + value % 10u);
+      value /= 10u;
+   } while(value && count < sizeof(digits));
+   emitter->marker[used++] = '[';
+   emitter->marker[used++] = '^';
+   while(count) emitter->marker[used++] = digits[--count];
+   emitter->marker[used++] = ']';
+   emitter->marker[used++] = ':';
+   emitter->marker[used++] = ' ';
+   emitter->markerUsed     = used;
+   for(ui64 at = 0; at < MD_NOTE_INDENT; ++at) emitter->base[at] = ' ';
+   emitter->baseUsed = MD_NOTE_INDENT;
+}
+
+// Emits every note something references, in label order, after the body.
+//
+// A note's blocks sit after the body's in the order the notes parts were read, and a label is the order
+// its first reference was read in, so the two orders need not agree: the blocks of each note are found by
+// the index they carry and emitted where the label puts them. A note whose blocks all came to nothing is
+// "[^n]:" alone, which GFM reads as an empty definition -- leaving it out would turn every reference to it
+// into the literal text "[^n]".
+static cbool MdEmitNotes(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, boolptrc wrote) {
+   cui32 notes   = IrNoteCount(document);
+   ui32  highest = 0;
+
+   for(ui32 at = 0; at < notes; ++at) {
+      cIR_NOTEptr note = IrNoteAt(document, si32(at));
+
+      if(note->number > highest) highest = note->number;
+   }
+   if(!highest) return true;
+
+   ui32ptr table = (ui32ptr)amalloc((ui64(highest) + 2u * ui64(notes)) * sizeof(ui32), 32u);
+
+   if(!table) {
+      emitter->failed = true;
+      return false;
+   }
+
+   ui32ptr order = table;
+   ui32ptr first = table + highest;
+   ui32ptr end   = first + notes;
+
+   for(ui32 at = 0; at < highest; ++at) order[at] = notes;
+   for(ui32 at = 0; at < notes; ++at) {
+      cIR_NOTEptr note = IrNoteAt(document, si32(at));
+
+      first[at] = IrBlockCount(document);
+      end[at]   = 0;
+      if(note->number) order[note->number - 1u] = at;
+   }
+   for(ui32 index = 0; index < IrBlockCount(document); ++index) {
+      csi32 owner = IrBlockAt(document, index)->note;
+
+      if(owner < 0 || ui32(owner) >= notes) continue;
+      if(first[owner] > index) first[owner] = index;
+      end[owner] = index + 1u;
+   }
+
+   bool ok = true;
+
+   for(ui32 label = 0; ok && label < highest; ++label) {
+      cui32 owner = order[label];
+      bool  inner = false;
+
+      if(owner >= notes) continue;
+      if(*wrote && !MdAppendByte(emitter, '\n')) ok = false;
+      MdOpenNote(emitter, label + 1u);
+      if(ok && first[owner] < end[owner]) ok = MdEmitRange(emitter, document, first[owner], end[owner], &inner);
+      // Nothing claimed the marker, so the note put nothing on the page: its definition is the marker
+      // alone, without the space that would otherwise be trailing whitespace.
+      if(ok && emitter->markerUsed) {
+         ok = MdAppend(emitter, emitter->marker, emitter->markerUsed - 1u) && MdAppendByte(emitter, '\n');
+      }
+      emitter->markerUsed = 0;
+      emitter->baseUsed   = 0;
+      *wrote              = true;
+   }
+   mdealloc(table);
+   return ok;
+}
+
+cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document) {
+   cui32 blocks = IrBlockCount(document);
+   ui32  body   = 0;
+   bool  wrote  = (emitter->used != 0);
+
+   // The body is every block before the first that belongs to a note: DocWalkNotes appends a note's
+   // blocks after the body's, so the two never interleave.
+   while(body < blocks && IrBlockAt(document, body)->note < 0) ++body;
+   if(!MdEmitRange(emitter, document, 0, body, &wrote)) return MD_ERROR_MEMORY;
+   if(!MdEmitNotes(emitter, document, &wrote)) return MD_ERROR_MEMORY;
    return (emitter->failed ? MD_ERROR_MEMORY : MD_OK);
 }
 

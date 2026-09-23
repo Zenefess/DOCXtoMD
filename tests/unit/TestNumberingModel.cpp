@@ -3,10 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-10
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: Unit tests for the numbering part: indirection, overrides, delegation and the counters.
- * To Do: 1) Drive a second part's counters once M10 walks footnotes, which is where the question of
- *           whether they share one table becomes answerable rather than merely stated.
+ * To Do: 1) Drive a note's items over the same abstract definition as the body's, built through
+ *           IrBeginNote: the counters run across the stories in reading order, so they continue the
+ *           body's sequence, and no case here pins that.
  *        2) Drive a w:lvlOverride carrying a full w:lvl replacement *and* a w:startOverride at once,
  *           which Word writes for a hybrid list and which no case below separates from either alone.
  * Dependencies: BuildGuards.h, Check.h, Ir.h, NumberingModel.h, StyleModel.h, typedefs.h

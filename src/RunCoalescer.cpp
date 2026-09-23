@@ -3,12 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-09-09
+ * Last Modified: 2026-09-23
  * Description: The merge pass, the whitespace classes it hoists, and the span array it rebuilds.
  * To Do: 1) Reuse the replacement span array between documents once M13 gives a worker several.
  *        2) Fold a zero-width space into the hoisted set if a producer is found putting one in a run.
- *        3) Stop merging across a field-result boundary when M10 introduces one, the way M7's link
- *           markers already stop one crossing a hyperlink's brackets.
  * Dependencies: BuildGuards.h, Ir.h, RunCoalescer.h, typedefs.h, memory management.h, windows.h
  * ISA: Scalar
  * Thread-safety: Reentrant
