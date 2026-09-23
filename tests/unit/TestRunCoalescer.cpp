@@ -3,14 +3,13 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-26
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: Unit tests for adjacent-run merging, whitespace hoisting and the order of the two.
- * To Do: 1) Add the field-result barrier when M10 stops a merge crossing one; M7's link barrier is
- *           driven below, and an anchor's transparency to a merge beside it.
- *        2) Drive a document straight from IrAddSpan once a case needs a shape no body part produces.
- *        3) Drive a merge that crosses a table cell's own edge, which no body part can produce either:
+ * To Do: 1) Drive a document straight from IrAddSpan once a case needs a shape no body part produces.
+ *        2) Drive a merge that crosses a table cell's own edge, which no body part can produce either:
  *           a cell's blocks are blocks, so the pass sees a boundary it can never be asked to cross.
- * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, RunCoalescer.h, StyleModel.h, typedefs.h
+ * Dependencies: BuildGuards.h, Check.h, DocWalker.h, Ir.h, LinkResolver.h, RunCoalescer.h, StyleModel.h,
+ *               typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -22,6 +21,7 @@
 #include "Check.h"
 #include "DocWalker.h"
 #include "Ir.h"
+#include "LinkResolver.h"
 #include "RunCoalescer.h"
 #include "StyleModel.h"
 
@@ -114,6 +114,7 @@ static cui64 CoalesceList(cIR_BLOCKptr block, chptrc dest) {
 // ordinary paragraph, which is a plausible trace rather than an obviously wrong one -- exactly the
 // failure CLAUDE.md warns of in saying the two are independent copies that must both be edited.
 static_assert(ui32(IR_BLOCK_KIND_COUNT) == 6u, "TestRunCoalescer: the trace renderer must spell every block kind; add the new one here.");
+static_assert(ui32(IR_SPAN_KIND_COUNT) == 7u, "TestRunCoalescer: the trace renderer must spell every span kind; add the new one here.");
 
 // The trace notation the three renderers below share, which is TestDocWalker's and two letters
 // wider: c is a code span and the block letters are P, H<level>, Q, C and R. M7's span
@@ -125,6 +126,22 @@ static_assert(ui32(IR_BLOCK_KIND_COUNT) == 6u, "TestRunCoalescer: the trace rend
 // inside a table. A table's own blocks are the blocks of its cells, so the range renderer and the
 // table renderer call each other -- and the range renderer skips past a table's whole block range,
 // or every cell's content would be rendered twice: once in the table and once at the top level.
+// Writes which note a block belongs to, as f<w:id>: for a footnote and e<w:id>: for an endnote, in front
+// of everything else the block renders as. A block of the body writes nothing.
+static void CoalesceNote(cIR_DOCUMENTptr document, cIR_BLOCKptr block, chptrc dest, cui64 destBytes, ui64ptrc used) {
+   cIR_NOTEptr note = IrNoteAt(document, block->note);
+   char        head[16];
+   ui64        at = 0;
+
+   if(!note) return;
+   head[at++] = (note->kind == IR_NOTE_END ? 'e' : 'f');
+   if(note->id < 0) head[at++] = '-';
+   at += CoalesceNumber(head + at, ui32(note->id < 0 ? -note->id : note->id));
+   head[at++] = ':';
+   head[at]   = 0;
+   CoalesceAppend(dest, destBytes, used, head);
+}
+
 static void CoalesceRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc dest, cui64 destBytes, ui64ptrc used);
 
 // Renders one table: T, its column count, one character per column of alignment (- l c r), then m for
@@ -197,6 +214,7 @@ static void CoalesceRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc
 
       if(!block) continue;
       if(block->kind == IR_BLOCK_TABLE) {
+         CoalesceNote(document, block, dest, destBytes, used);
          CoalesceTable(document, block, dest, destBytes, used);
 
          cIR_TABLEptr table = IrTableAt(document, block->tableAt);
@@ -206,6 +224,8 @@ static void CoalesceRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc
       }
 
       char head[24];
+      CoalesceNote(document, block, dest, destBytes, used);
+
       ui64 at = CoalesceList(block, head);
 
       if(block->kind == IR_BLOCK_HEADING) {
@@ -228,6 +248,15 @@ static void CoalesceRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc
          }
          if(one->kind == IR_SPAN_LINK_END) {
             CoalesceAppend(dest, destBytes, used, "L)");
+            continue;
+         }
+         if(one->kind == IR_SPAN_NOTE) {
+            CoalesceAppend(dest, destBytes, used, (one->flags & IR_SPAN_FLAG_END ? "E" : "F"));
+            if(one->flags & IR_SPAN_FLAG_MUTE) CoalesceAppend(dest, destBytes, used, "-");
+            CoalesceAppend(dest, destBytes, used, "(");
+            for(ui32 byte = 0; byte < one->destBytes && *used + 1u < destBytes; ++byte) dest[(*used)++] = IrDest(document, one->destAt)[byte];
+            dest[*used] = 0;
+            CoalesceAppend(dest, destBytes, used, ")");
             continue;
          }
          if(one->kind == IR_SPAN_LINK_START || one->kind == IR_SPAN_IMAGE || one->kind == IR_SPAN_ANCHOR) {
@@ -266,8 +295,10 @@ static void CoalesceTrace(cIR_DOCUMENTptr document, chptrc dest, cui64 destBytes
    CoalesceRange(document, 0, IrBlockCount(document), dest, destBytes, &used);
 }
 
-// Walks one body, coalesces it, and compares the trace with a literal.
-static cbool CoalescesAs(cchptr styleBody, cchptr body, cchptr wanted) {
+// Walks one body, coalesces it, and compares the trace with a literal. With resolved set the note
+// references are then labelled -- there are no notes, so every one of them is muted -- and the body is
+// coalesced a second time, which is the order Convert.cpp runs the two passes in.
+static cbool CoalescesWith(cchptr styleBody, cchptr body, cchptr wanted, cbool resolved) {
    char part[8192];
    char trace[2048];
    ui64 used = 0;
@@ -308,7 +339,10 @@ static cbool CoalescesAs(cchptr styleBody, cchptr body, cchptr wanted) {
 
    cWALK_STATUS status = DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, used);
 
-   if(status.result != WALK_OK || !RunCoalesce(&document)) {
+   bool ready = status.result == WALK_OK && RunCoalesce(&document);
+
+   if(ready && resolved) ready = LinkResolveNotes(&document) && RunCoalesce(&document);
+   if(!ready) {
       IrClose(&document);
       NumClose(&numbering);
       StyleClose(&styles);
@@ -324,6 +358,9 @@ static cbool CoalescesAs(cchptr styleBody, cchptr body, cchptr wanted) {
    while(trace[index] && trace[index] == wanted[index]) ++index;
    return trace[index] == wanted[index];
 }
+
+// Walks one body with an optional styles part, and compares the coalesced trace with a literal.
+static cbool CoalescesAs(cchptr styleBody, cchptr body, cchptr wanted) { return CoalescesWith(styleBody, body, wanted, false); }
 
 // The same with no styles part, which is what most cases want.
 static cbool Coalesces(cchptr body, cchptr wanted) { return CoalescesAs(nullptr, body, wanted); }
@@ -396,6 +433,30 @@ void TestRunCoalescer(void) {
    CHECK(Coalesces("<w:p><w:hyperlink r:id=\"rId5\"><w:r><w:rPr><w:b/></w:rPr>"
                    "<w:t xml:space=\"preserve\">a </w:t></w:r><w:r><w:t>b</w:t></w:r></w:hyperlink></w:p>",
                    "P{L(rId5)b[a][ b]L)}"));
+
+   // A field needs no barrier of its own. A plain field's cached result is ordinary text, which Word
+   // splits from the text around it as readily as it splits any run; a HYPERLINK field's result is
+   // bounded by the same link markers a w:hyperlink's is.
+   CHECK(Coalesces("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">page </w:t></w:r>"
+                   "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r>"
+                   "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>7</w:t></w:r>"
+                   "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
+                   "P{b[page 7]}"));
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+                   "<w:r><w:instrText> HYPERLINK \"u\" </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+                   "<w:r><w:t>b</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r><w:r><w:t>c</w:t></w:r></w:p>",
+                   "P{[a]L(u)[b]L)[c]}"));
+
+   // M10's note reference is a marker like a link's brackets: the text either side of one is not
+   // adjacent in the output, so it stops a merge -- until LinkResolveNotes mutes one whose note the
+   // document does not hold, after which it emits nothing and the two sides meet.
+   CHECK(Coalesces("<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>a</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r>"
+                   "<w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r></w:p>",
+                   "P{b[a]F(1)b[b]}"));
+   CHECK(CoalescesWith(nullptr,
+                       "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>a</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r>"
+                       "<w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r></w:p>",
+                       "P{b[ab]F-(1)}", true));
 
    CheckGroup("RunCoalescer: hoisting whitespace out of a formatted span");
    // CONVERSION_REFERENCE 5.3: "**bold **text" does not parse, so the space moves outside the span.

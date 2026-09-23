@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t xml:space="preserve">Notes</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">The body cites a claim.</w:t></w:r><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="2"/></w:r><w:r><w:t xml:space="preserve"> It links </w:t></w:r><w:hyperlink r:id="rId5"><w:r><w:t xml:space="preserve">the body target</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> and cites again.</w:t></w:r><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="3"/></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">An endnote comes next</w:t></w:r><w:r><w:rPr><w:rStyle w:val="EndnoteReference"/></w:rPr><w:endnoteReference w:id="1"/></w:r><w:r><w:t xml:space="preserve">, then the first footnote again</w:t></w:r><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="2"/></w:r><w:r><w:t xml:space="preserve">.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">A dangling reference disappears: before,</w:t></w:r><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="99"/></w:r><w:r><w:t xml:space="preserve"> after.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">A reference hard against a parenthesis</w:t></w:r><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="5"/></w:r><w:r><w:t xml:space="preserve">(like this).</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="6"/></w:r><w:r><w:t xml:space="preserve">: a reference opening its line.</w:t></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>

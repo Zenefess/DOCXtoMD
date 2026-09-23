@@ -5,8 +5,7 @@
  * Created: 2026-08-26
  * Last Modified: 2026-09-23
  * Description: The coalescing pass: adjacent runs merged on equal formatting, whitespace hoisted out.
- * To Do: 1) Stop merging across a field-result boundary when M10 introduces one.
- *        2) Benchmark an AVX2 scan for the first and last non-space byte of a span before adopting one.
+ * To Do: 1) Benchmark an AVX2 scan for the first and last non-space byte of a span before adopting one.
  * Dependencies: Ir.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -53,7 +52,10 @@
 ///       markers are spans, so the two text spans on either side of one are not adjacent in the output.
 ///       An **anchor** is the exception and is transparent: it emits an element of its own between the
 ///       two runs without putting anything between their text, and Word writes a bookmark in the middle
-///       of a word often enough that stopping there would emit "**Hel****lo**".
+///       of a word often enough that stopping there would emit "**Hel****lo**". M10's fields needed no
+///       rule either: a plain field's cached result is ordinary text and merges like any run beside it,
+///       and a HYPERLINK field's result is bounded by the same link markers a w:hyperlink's is. A note
+///       reference is a marker like a link's brackets, and stops a merge until it is muted.
 /// @note A **muted** span is transparent too, and it is why this pass is run twice. A muted span emits
 ///       nothing at all, so the text on either side of one *is* adjacent in the output -- but muting is
 ///       LinkResolve's, and LinkResolve runs after this pass has already refused the merge on the

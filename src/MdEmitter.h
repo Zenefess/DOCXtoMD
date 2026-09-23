@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-23
  * Description: The Markdown emitter: one growable UTF-8 buffer, line assembly and the delimiter rules.
  * To Do: 1) Size the buffer from the part's byte count rather than growing from a fixed first block.
  *        2) Emit an image's wp:extent size as an HTML img element where a document depends on it (row 23).
@@ -37,18 +37,34 @@ typedef const MD_RESULT cMD_RESULT;
 
 //== Emitter
 
+/// The widest note label marker: "[^", ten digits, "]: " and a terminator, with room to spare.
+constexpr cui64 MD_MAX_NOTE_MARKER = 24u;
+
+/// The indentation a footnote definition's continuation lines take. GFM reads a definition as a container
+/// whose content is indented four columns, whatever the width of the "[^n]: " that opens it.
+constexpr cui64 MD_NOTE_INDENT = 4u;
+
 /// One document's Markdown, and the policy that shaped it. A worker owns one of these and never shares
 /// it (D6), so nothing here takes a lock.
+/// @note base and marker are what every line start writes before its own prefix, and they exist for one
+///       reason: a footnote definition is a container, like a list item, and every block kind has to be
+///       writable inside one. The marker is the definition's "[^n]: " and is written once, on the first
+///       line; the base is its four columns of indentation, written on every line after. Both are empty
+///       while the body is written.
 struct al32 MD_EMITTER {
-   chptr      out;          ///< The UTF-8 output, unterminated
-   chptr      line;         ///< The line being assembled, already escaped and unterminated
-   ui64       capacity;     ///< Bytes allocated at out
-   ui64       lineCapacity; ///< Bytes allocated at line
-   ui64       used;         ///< Bytes written to out
-   ui64       lineUsed;     ///< Bytes of line in use
-   HARD_BREAK hardBreak;    ///< How a w:br of type textWrapping is spelled
-   TABLE_MODE tables;       ///< What a table carrying a merge is written as
-   bool       failed;       ///< Whether a growth failed; sticky once set
+   chptr      out;                        ///< The UTF-8 output, unterminated
+   chptr      line;                       ///< The line being assembled, already escaped and unterminated
+   ui64       capacity;                   ///< Bytes allocated at out
+   ui64       lineCapacity;               ///< Bytes allocated at line
+   ui64       used;                       ///< Bytes written to out
+   ui64       lineUsed;                   ///< Bytes of line in use
+   ui64       baseUsed;                   ///< Bytes of base in force
+   ui64       markerUsed;                 ///< Bytes of marker still to be written, 0 once it has been
+   char       base[MD_NOTE_INDENT];       ///< What every line of a note after its first begins with
+   char       marker[MD_MAX_NOTE_MARKER]; ///< What the first line of a note begins with
+   HARD_BREAK hardBreak;                  ///< How a w:br of type textWrapping is spelled
+   TABLE_MODE tables;                     ///< What a table carrying a merge is written as
+   bool       failed;                     ///< Whether a growth failed; sticky once set
 };
 
 // Zeroed with mzero, which dispatches on SIZE: a size that is a multiple of 32 takes a path of aligned
@@ -157,6 +173,15 @@ void MdClose(MD_EMITTERptrc emitter);
 /// @note The delimiter row is what makes a pipe table a table at all: GFM reads one only where the
 ///       delimiter row has exactly as many cells as the header, so the width every row is padded to is
 ///       the wider of what w:tblGrid declares and what the widest row's cells actually reach.
+/// @note What M10's notes emit. A reference is "[^n]", where n is the label LinkResolveNotes gave its
+///       note, and the definitions follow the body in label order, each "[^n]: " and its first line with
+///       every later line of it indented four columns -- a definition is a container like a list item,
+///       so a note may hold anything the body may, a list, a fence, a table or a heading included. A
+///       note that came to nothing is "[^n]:" alone, which GFM reads as an empty definition rather than
+///       leaving the reference as literal text. Two bytes after a reference are escaped because they
+///       would otherwise change what it is: an opening parenthesis makes "[^n](x)" a link, and a colon
+///       where the reference opens a line makes "[^n]: x" a definition of its own. Inside a raw-HTML
+///       table a reference is "<sup>n</sup>", because GFM parses no Markdown there at all.
 cMD_RESULT MdEmitDocument(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document);
 
 /// The emitted bytes.

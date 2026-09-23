@@ -701,13 +701,15 @@ def build_all(verbose=True, writing=True):
                             ("image2.jpg", "word/media/photo.jpeg"),
                             ("image3.gif", "word/media/logo.gif"),
                             ("image4.dat", "word/media/odd.dat"),
-                            ("image5.jpg", "word/media/mystery.png")]}
+                            ("image5.jpg", "word/media/mystery.png")],
+                 "footnotes": [("image1.png", "word/media/pic.png")]}
 
     for case in ["headings", "toggles", "textflow", "nostyles", "wrappers", "dollars",
                  "fragments", "hoisting", "inline", "code", "quotes", "rules", "monodefault",
                  "monostyle", "links", "images", "anchors",
                  "lists", "listcounters", "listbroken", "liststyles",
-                 "tables", "tablemerges", "tablenested", "tablecells"]:
+                 "tables", "tablemerges", "tablenested", "tablecells",
+                 "fields", "toc", "footnotes", "revisions"]:
         tree = read_part_tree(case)
         write(case + ".docx", build_zip([make_entry(name, raw) for name, raw in tree]))
         expect(case + ".docx", 0, ["wrote", case + ".md"], "the %s golden fixture" % case)
@@ -715,6 +717,41 @@ def build_all(verbose=True, writing=True):
         if case in extracted:
             parts = dict(tree)
             media(case + ".docx", [(leaf, parts[part]) for leaf, part in extracted[case]])
+
+    # -- a notes part is read only when the body references one of its notes, and then it is read like
+    # the main part: a malformed one refuses the document and the sentence names the part that broke.
+    # The relationships a note's references are scoped to are a part of their own, and refuse the same
+    # way; they are loaded only once a note has been read, which is why these are built on the footnotes
+    # golden rather than on the minimal document.
+    noted = read_part_tree("footnotes")
+
+    unclosed_notes = swap(noted, [("word/footnotes.xml", b"</w:footnotes>", b"")])
+    write("bad-footnotes.docx", build_zip([make_entry(name, raw) for name, raw in unclosed_notes]))
+    expect("bad-footnotes.docx", 3, ["ends in the middle of an element", "word/footnotes.xml"],
+           "a referenced footnotes part whose root never closes", sound=True)
+
+    not_notes = swap(noted, [("word/endnotes.xml", b"<w:endnotes ", b"<w:footnotes "),
+                             ("word/endnotes.xml", b"</w:endnotes>", b"</w:footnotes>")])
+    write("bad-notes-root.docx", build_zip([make_entry(name, raw) for name, raw in not_notes]))
+    expect("bad-notes-root.docx", 3, ["does not match its relationship", "word/endnotes.xml"],
+           "the endnotes relationship names a part whose root is w:footnotes", sound=True)
+
+    bad_note_rels = swap(noted, [("word/_rels/footnotes.xml.rels", b"</Relationships>", b"")])
+    write("bad-footnote-rels.docx", build_zip([make_entry(name, raw) for name, raw in bad_note_rels]))
+    expect("bad-footnote-rels.docx", 3, ["ends in the middle of an element", "footnotes.xml.rels"],
+           "the footnotes part's own relationships part never closes its root element", sound=True)
+
+    # The other direction: a notes part nothing references is never read, so a malformed one costs the
+    # document nothing -- and it has to produce exactly the bytes the minimal document produces. It is not
+    # even validated: the byte 0xFF fails the UTF-8 check that runs before the tokenizer is reached.
+    unread_rel = (b'  <Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                  b'relationships/footnotes" Target="footnotes.xml"/>\n</Relationships>')
+    unread = swap(read_part_tree("minimal"), [("word/_rels/document.xml.rels", b"</Relationships>", unread_rel)])
+    unread.append(("word/footnotes.xml", b"<?xml version=\"1.0\"?>\n<w:footnotes>\xff<w:footnote>\n"))
+    write("unreferenced-bad-notes.docx", build_zip([make_entry(name, raw) for name, raw in unread]))
+    expect("unreferenced-bad-notes.docx", 0, ["wrote", "unreferenced-bad-notes.md"],
+           "a malformed footnotes part the body references no note of, which is never read")
+    golden("unreferenced-bad-notes.docx", "minimal")
 
     # A media part is binary, and every byte of it has to survive the round trip -- a NUL in the
     # middle in particular, which a writer that thought it was handling text would stop at. The tree

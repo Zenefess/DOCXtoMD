@@ -5,15 +5,11 @@
  * Created: 2026-08-25
  * Last Modified: 2026-09-23
  * Description: The intermediate representation: blocks, spans and the arena the walker builds them in.
- * To Do: 1) Add the note-reference span kind at M10. M8 deliberately added no block kind for a list:
- *           an item's *kind* is what its content is -- a paragraph, a quotation, a line of code -- and
- *           its list membership is a separate question, so it is carried in fields beside the kind
- *           rather than by a value of it.
- *        2) Record the source paragraph index on a block, so a diagnostic can point at the original.
- *        3) Record the part a reference span came from, once M10 walks a second part whose relationship
- *           ids are scoped separately from the body's.
- *        4) Carry a cell's own w:tcBorders and w:shd, which the HTML fallback could render and the
+ * To Do: 1) Record the source paragraph index on a block, so a diagnostic can point at the original.
+ *        2) Carry a cell's own w:tcBorders and w:shd, which the HTML fallback could render and the
  *           pipe form could not.
+ *        3) Carry a comment's range and body as a note of a third kind, if --comments=footnotes is ever
+ *           wanted; the note records below are the shape it would take.
  * Dependencies: typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -64,6 +60,10 @@ typedef const IR_BLOCK_KIND cIR_BLOCK_KIND;
 ///       over. A link is a start and an end with its content between them, so the content coalesces
 ///       normally while the markers stop a merge crossing the brackets -- which is CONVERSION_REFERENCE
 ///       5.1's "coalesce runs *within* the hyperlink" without a rule of its own.
+/// @note M10's note reference is a marker of the same sort. It carries the reference as written -- the
+///       w:id, with IR_SPAN_FLAG_END saying which story -- until LinkResolveNotes rewrites it into the label
+///       the emitter writes between "[^" and "]". Text on either side of one is not adjacent in the
+///       output, so it stops a merge the way a link's brackets do.
 enum IR_SPAN_KIND : ui8 {
    IR_SPAN_TEXT = 0,   ///< A run of text with one set of formatting
    IR_SPAN_BREAK,      ///< A hard line break inside the block
@@ -71,6 +71,7 @@ enum IR_SPAN_KIND : ui8 {
    IR_SPAN_LINK_END,   ///< Closes the link the nearest IR_SPAN_LINK_START opened
    IR_SPAN_IMAGE,      ///< An image: its alt text is the span's text, its source the span's dest
    IR_SPAN_ANCHOR,     ///< A bookmark: a name a link may target, carried as the span's text
+   IR_SPAN_NOTE,       ///< A footnote or endnote reference: the note's w:id, then its label, as the dest
    IR_SPAN_KIND_COUNT  ///< Number of values above; not a kind
 };
 
@@ -87,6 +88,7 @@ constexpr cui8 IR_SPAN_FLAG_NONE = 0x00u;
 constexpr cui8 IR_SPAN_FLAG_REL  = 0x01u; ///< The destination is a relationship id, not yet resolved
 constexpr cui8 IR_SPAN_FLAG_PART = 0x02u; ///< The destination is a package part name, not yet extracted
 constexpr cui8 IR_SPAN_FLAG_MUTE = 0x04u; ///< The span emits nothing: an anchor nothing links to
+constexpr cui8 IR_SPAN_FLAG_END  = 0x08u; ///< A note reference names an endnote rather than a footnote
 
 //== List flags
 
@@ -204,6 +206,37 @@ typedef const IR_ROW   *cIR_ROWptr;
 typedef IR_CELL        *IR_CELLptr;
 typedef const IR_CELL  *cIR_CELLptr;
 
+//== Notes
+
+/// Which of WordprocessingML's two note stories a note was read from. Markdown has one kind of note and
+/// the emitter writes both the same way; the kind survives because a reference names its note by kind
+/// and w:id together, and the same w:id is routinely both a footnote and an endnote.
+enum IR_NOTE_KIND : ui8 {
+   IR_NOTE_FOOT = 0,  ///< A w:footnote, read from the part the footnotes relationship names
+   IR_NOTE_END,       ///< A w:endnote, read from the part the endnotes relationship names
+   IR_NOTE_KIND_COUNT ///< Number of values above; not a kind
+};
+
+/// Constant form of IR_NOTE_KIND, spelled per GCS r2.
+typedef const IR_NOTE_KIND cIR_NOTE_KIND;
+
+/// One footnote or endnote whose body the walk read. Its blocks are ordinary blocks in the one flat array,
+/// after every block of the body, and each carries the note's index -- which is what leaves every pass
+/// between the walk and the emitter reading one array, exactly as a table's cells do.
+/// @note Only a note something references is ever read, so a record here always has a reference that
+///       names it. The number is what LinkResolveNotes assigns in reading order, and it is the label the
+///       emitter writes; 0 means the pass has not run, or that every reference to the note was muted.
+struct IR_NOTE {
+   si32         id;     ///< The note's w:id, as the part declared it
+   si32         part;   ///< The part it was read from, which its relationship ids are scoped to; -1 for none
+   ui32         number; ///< Its label in the output, from 1, once LinkResolveNotes has run; 0 until then
+   IR_NOTE_KIND kind;   ///< Which story it belongs to
+};
+
+/// Constant and pointer forms of IR_NOTE, spelled per GCS r2/t2.
+typedef IR_NOTE       *IR_NOTEptr;
+typedef const IR_NOTE *cIR_NOTEptr;
+
 /// One block. Its spans are a contiguous range, because a block is built to completion before the next
 /// one starts and nothing ever inserts into the middle of one.
 /// @note The four list fields are written in two stages, exactly as a link's destination is. The walk
@@ -216,6 +249,7 @@ struct IR_BLOCK {
    si32          listNumId;    ///< The w:numId the walk read, or -1 when the paragraph is not an item
    ui32          listNumber;   ///< What an ordered item's marker counts; 0 for every other block
    si32          tableAt;      ///< Which table an IR_BLOCK_TABLE block is, or -1 for every other block
+   si32          note;         ///< Which note the block belongs to, or -1 for a block of the body
    IR_BLOCK_KIND kind;         ///< What the block is
    ui8           headingLevel; ///< 1 to 6 for a heading, 0 otherwise
    ui8           listLevel;    ///< The w:ilvl an item was written at, 0 to 8; 0 for every other block
@@ -279,6 +313,7 @@ struct al32 IR_DOCUMENT {
    IR_TABLEptr tables;        ///< Every table, in the order the walk reached them
    IR_ROWptr   rows;          ///< Every row of every table; a table's own rows are chained by nextRow
    IR_CELLptr  cells;         ///< Every cell of every row; a row's own cells are chained by nextCell
+   IR_NOTEptr  notes;         ///< Every note whose body was read, in the order the walk read them
    chptr       heap;          ///< Every byte of paragraph text, addressed by offset
    chptr       dest;          ///< Every byte of every destination and anchor name, addressed by offset
    ui8ptr      align;         ///< Every column alignment, grouped by table and addressed by offset
@@ -287,6 +322,7 @@ struct al32 IR_DOCUMENT {
    ui64        tableCapacity; ///< Records allocated at tables
    ui64        rowCapacity;   ///< Records allocated at rows
    ui64        cellCapacity;  ///< Records allocated at cells
+   ui64        noteCapacity;  ///< Records allocated at notes
    ui64        heapCapacity;  ///< Bytes allocated at heap
    ui64        heapUsed;      ///< Bytes of heap in use
    ui64        destCapacity;  ///< Bytes allocated at dest
@@ -298,6 +334,8 @@ struct al32 IR_DOCUMENT {
    ui32        tableCount;    ///< Tables in tables
    ui32        rowCount;      ///< Rows in rows
    ui32        cellCount;     ///< Cells in cells
+   ui32        noteCount;     ///< Notes in notes
+   si32        note;          ///< The note every block begun now belongs to, or -1 while the body is read
    bool        failed;        ///< Whether any append ran out of memory; sticky once set
 };
 
@@ -460,6 +498,35 @@ cIR_CELLptr IrCellAt(cIR_DOCUMENTptr document, cui32 index);
 ///       mc:Fallback replaced never speaks for a column the document does not have.
 cIR_ALIGN IrAlignOf(cIR_DOCUMENTptr document, cIR_TABLEptr table, cui32 column);
 
+/// Starts one note, so that every block begun until IrEndNote belongs to it.
+/// @param document  A prepared document.
+/// @param kind      Which story the note was read from.
+/// @param id        Its w:id.
+/// @param part      The part it was read from, which its references resolve against; -1 when there is none.
+/// @return Which note it is, or -1 when the document could not grow.
+/// @note A note is not a block. Its blocks are ordinary blocks appended after the body's, each stamped
+///       with the note's index, so every pass above the walk keeps reading one flat array -- which is the
+///       same bargain a table's cells strike, and for the same reason. The emitter is the only reader
+///       that groups them, because it is the only one that writes a note somewhere other than where the
+///       walk put it.
+csi32 IrBeginNote(IR_DOCUMENTptrc document, cIR_NOTE_KIND kind, csi32 id, csi32 part);
+
+/// Ends the note IrBeginNote started, so that the blocks begun after it belong to the body again.
+/// @param document  A prepared document.
+void IrEndNote(IR_DOCUMENTptrc document);
+
+/// How many notes the document holds.
+/// @return The count, or 0 for a document that was never opened.
+cui32 IrNoteCount(cIR_DOCUMENTptr document);
+
+/// One note by index.
+/// @return The note, or null for an index outside the document.
+cIR_NOTEptr IrNoteAt(cIR_DOCUMENTptr document, csi32 index);
+
+/// One note by index, for the pass that numbers it.
+/// @return The note, or null for an index outside the document.
+IR_NOTEptr IrNoteMutable(IR_DOCUMENTptrc document, csi32 index);
+
 /// Records the list reference a paragraph's w:numPr carried, on the block being built.
 /// @param document  A prepared document.
 /// @param mark      What IrBeginBlock returned for the block; a mark whose block is -1 does nothing.
@@ -556,7 +623,8 @@ cui32 IrSpanCount(cIR_DOCUMENTptr document);
 /// @param document  A prepared document.
 /// @param first     The first span of the range.
 /// @param last      One past its last span; a value beyond the document is clamped.
-/// @return true when the range holds an image, or text that is not all ASCII whitespace.
+/// @return true when the range holds an image, a note reference nothing has muted, or text that is not
+///         all ASCII whitespace.
 /// @note An anchor does not count, which is the one place this and the emptiness test IrEndBlock
 ///       applies come apart. The walker asks this to decide mapping row 25's horizontal rule, which
 ///       is about a paragraph that came to nothing -- and a paragraph holding one bookmark did,

@@ -3,13 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-23
  * Description: The per-file conversion pipeline and the output-path derivation D7b's operand grammar needs.
- * To Do: 1) Load footnotes and endnotes here as M10 gives them models to go into.
- *        2) Hand this whole function to a worker when M13 adds the bounded pool (D6/D7a).
- *        3) Say so when -o named an existing directory and one input made it a file name, which today
+ * To Do: 1) Hand this whole function to a worker when M13 adds the bounded pool (D6/D7a).
+ *        2) Say so when -o named an existing directory and one input made it a file name, which today
  *           reports only that the file could not be created.
- *        4) Pre-flight a --media-dir shared by several inputs, the way ConvertTargetTaken pre-flights
+ *        3) Pre-flight a --media-dir shared by several inputs, the way ConvertTargetTaken pre-flights
  *           a shared output name; the architecture note gives both to Batch at M13.
  * Dependencies: CliOptions.h, Diag.h, typedefs.h
  * ISA: Scalar
@@ -52,15 +51,20 @@ typedef const CONVERT_TARGET cCONVERT_TARGET;
 /// @return EXIT_ALL_CONVERTED, or the per-file verdict: 2 when the input cannot be opened, 3 when it is
 ///         not a usable DOCX, 4 when the output cannot be written, 5 for this program's own failures.
 ///         Every failure has already been reported.
-/// @note This is the whole pipeline for one document: container, package, styles, walk, emit, write. At
-///       M13 it is what one worker runs, which is why it takes no shared state and returns a verdict
-///       rather than setting one.
+/// @note This is the whole pipeline for one document: container, package, styles, numbering, walk,
+///       notes, resolve, emit, write. At M13 it is what one worker runs, which is why it takes no shared
+///       state and returns a verdict rather than setting one.
+/// @note The footnotes are walked after the body and the endnotes after the footnotes, and only the
+///       notes something already walked references are read: an endnote cited from a footnote is found,
+///       and a malformed notes part nothing cites costs the document nothing.
 /// @note The order of the passes between the walk and the emitter is the one order that works, and
-///       M8 added one more to it. References resolve against the part they were read in; anchors
-///       resolve once every reference is a destination; the media plan turns a part name into a path
-///       and can turn a picture back into its alt text; the counter pass turns a list reference into
-///       a marker and clears the ones that named nothing; and dropping the emptied blocks comes last,
-///       because it is what restores the invariant the emitter rests on.
+///       M8 and M10 each added to it. References resolve against the part they were read in -- a
+///       note's against its own; note references take their labels in the order they are read; anchors
+///       resolve once every reference is a destination; the coalescer runs a second time, because
+///       muting a link or a reference makes two spans adjacent that were not; the media plan turns a
+///       part name into a path and can turn a picture back into its alt text; the counter pass turns a
+///       list reference into a marker and clears the ones that named nothing; and dropping the emptied
+///       blocks comes last, because it is what restores the invariant the emitter rests on.
 cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath);
 
 /// Whether converting one input would destroy something the rest of the run still needs.

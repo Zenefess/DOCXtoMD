@@ -3,8 +3,8 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-22
- * Description: One document end to end: container, package, styles, walk, resolve, emit and write.
+ * Last Modified: 2026-09-23
+ * Description: One document end to end: container, package, styles, walk, notes, resolve, emit and write.
  * To Do: 1) Report the offset UtfValidate found, which the package records and nothing prints yet.
  *        2) Write through a temporary file and rename over the target, once a partial write costs more.
  *        3) Derive a media directory that is relative to the document rather than to the working
@@ -239,11 +239,16 @@ static cEXIT_CODE ConvertWriteFile(cwchptr path, cchptr bytes, cui64 byteCount) 
 
 //-- Pipeline
 
-// The part index of the styles part, found through the main part's own relationships rather than by
-// name (correctness rule 1). A document with no styles part is legal, and so is one whose styles
-// relationship points outside the package; both come back as -1 and the model stays empty.
-static csi32 ConvertStylesPart(OPC_PACKAGEptrc package, csi32 mainPart) {
-   csi32 relation = OpcFindRelByKind(package, mainPart, OPC_REL_STYLES);
+// The part index of one part the main part relates to -- its styles, its numbering, its footnotes or its
+// endnotes -- found through the main part's own relationships rather than by name (correctness rule 1).
+// A document without one is legal, and so is one whose relationship points outside the package; both come
+// back as -1, and the model or the notes it would have held stay empty.
+//
+// OPC_REL_VIEW's pointers are into the package heap and stay valid only until the next OpcLoadRels grows
+// it, so every one of these has to be looked up before any further relationships are loaded -- which is
+// why ConvertPackage finds all four at once, straight after the main part's own.
+static csi32 ConvertRelatedPart(OPC_PACKAGEptrc package, csi32 mainPart, cOPC_REL_KIND kind) {
+   csi32 relation = OpcFindRelByKind(package, mainPart, kind);
 
    if(relation < 0) return -1;
 
@@ -253,24 +258,31 @@ static csi32 ConvertStylesPart(OPC_PACKAGEptrc package, csi32 mainPart) {
    return OpcFindPart(package, record.part);
 }
 
-// The part index of the numbering part, found through the main part's own relationships rather than by
-// name (correctness rule 1). A document with no lists carries no numbering part, and one whose
-// numbering relationship points outside the package is the same case; both come back as -1 and the
-// model stays empty, which makes every w:numPr in the body a dangling reference and so not a list.
-//
-// OPC_REL_VIEW's pointers are into the package heap and stay valid only until the next OpcLoadRels
-// grows it, so OpcFindPart has to be called before any further relationships are loaded. The main
-// part's are loaded once above and nothing else loads any before the walk -- which is worth saying out
-// loud, because M10 adds a second OpcLoadRels to this function for the footnote part.
-static csi32 ConvertNumberingPart(OPC_PACKAGEptrc package, csi32 mainPart) {
-   csi32 relation = OpcFindRelByKind(package, mainPart, OPC_REL_NUMBERING);
+// Reads the notes of one story into the document, and the relationships their references are scoped to.
+// A notes part is read only when the body references one of its notes, so a refusal here is always about
+// a part the conversion needed.
+static cEXIT_CODE ConvertNotes(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, // What is read
+                               csi32 partIndex, cIR_NOTE_KIND kind, cwchptr inputPath) {                                           // From where
+   cui32        before = IrNoteCount(document);
+   cWALK_STATUS walked = DocWalkNotes(document, package, styles, numbering, partIndex, kind);
 
-   if(relation < 0) return -1;
+   if(walked.result != WALK_OK) {
+      DiagErrorText(DocWalkResultText(package, walked), inputPath);
+      if(walked.result == WALK_ERROR_PART) return OpcExitCode(package, walked.opc);
+      return (walked.result == WALK_ERROR_MEMORY ? EXIT_INTERNAL : EXIT_NOT_DOCX);
+   }
+   // A note's own relationships are loaded only once one of its notes was read: rId3 in footnotes.xml is
+   // not rId3 in document.xml, and LinkResolveRefs resolves each block against the part it came from. A
+   // malformed relationships part is a refusal here exactly as the main part's is.
+   if(IrNoteCount(document) == before) return EXIT_ALL_CONVERTED;
 
-   cOPC_REL_VIEW record = OpcRel(package, relation);
+   cOPC_RESULT related = OpcLoadRels(package, partIndex);
 
-   if(record.external || !record.part || !record.part[0]) return -1;
-   return OpcFindPart(package, record.part);
+   if(related != OPC_OK) {
+      DiagErrorText(OpcResultText(package, related), inputPath);
+      return OpcExitCode(package, related);
+   }
+   return EXIT_ALL_CONVERTED;
 }
 
 // Turns one opened package into Markdown, and plans the media that goes beside it. The package, the
@@ -290,7 +302,10 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
    }
 
    STYLE_MODEL styles;
-   csi32       stylesPart = ConvertStylesPart(package, mainPart);
+   csi32       stylesPart    = ConvertRelatedPart(package, mainPart, OPC_REL_STYLES);
+   csi32       numberingPart = ConvertRelatedPart(package, mainPart, OPC_REL_NUMBERING);
+   csi32       footnotesPart = ConvertRelatedPart(package, mainPart, OPC_REL_FOOTNOTES);
+   csi32       endnotesPart  = ConvertRelatedPart(package, mainPart, OPC_REL_ENDNOTES);
 
    StyleOpen(&styles);
 
@@ -312,7 +327,6 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
    // numbering *style* -- and it keeps no pointer into the style model, so the two lifetimes stay
    // independent and StyleClose can stay where it is.
    NUM_MODEL numbering;
-   csi32     numberingPart = ConvertNumberingPart(package, mainPart);
 
    NumOpen(&numbering);
 
@@ -335,13 +349,27 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
 
    cWALK_STATUS walked = DocWalk(&document, package, &styles, &numbering, mainPart);
 
-   StyleClose(&styles);
    if(walked.result != WALK_OK) {
       DiagErrorText(DocWalkResultText(package, walked), inputPath);
+      StyleClose(&styles);
       IrClose(&document);
       NumClose(&numbering);
       if(walked.result == WALK_ERROR_PART) return OpcExitCode(package, walked.opc);
       return (walked.result == WALK_ERROR_MEMORY ? EXIT_INTERNAL : EXIT_NOT_DOCX);
+   }
+
+   // M10's notes, after the body because only a note the body references is read, and footnotes before
+   // endnotes because that is the order the two stories are read in -- which is what lets an endnote
+   // referenced from a footnote be found at all. Both are walked with the same style and numbering models
+   // as the body: a note's paragraphs name the same styles and the same lists.
+   EXIT_CODE noted = ConvertNotes(&document, package, &styles, &numbering, footnotesPart, IR_NOTE_FOOT, inputPath);
+
+   if(noted == EXIT_ALL_CONVERTED) noted = ConvertNotes(&document, package, &styles, &numbering, endnotesPart, IR_NOTE_END, inputPath);
+   StyleClose(&styles);
+   if(noted != EXIT_ALL_CONVERTED) {
+      IrClose(&document);
+      NumClose(&numbering);
+      return noted;
    }
 
    // Merging adjacent runs and hoisting whitespace out of the formatted ones stands between the walk and
@@ -349,16 +377,20 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
    // is measured against, and the emitter must be able to assume a delimiter is safe around every
    // formatted span it is handed rather than testing each one.
    //
-   // Then the four M7 passes, in the one order that works. References resolve against the part they
-   // were read in; anchors resolve once every reference is a destination, because a heading's slug is
-   // numbered over the whole document; the media plan turns a part name into a path and can turn a
-   // picture back into its alt text; and dropping the emptied blocks last is what restores the
-   // invariant the emitter rests on, that every block it is handed produces at least one byte.
+   // Then the reference passes, in the one order that works. References resolve against the part they
+   // were read in -- the body's against the main part, a note's against its own; note references take
+   // their labels next, in the order they are read, because a heading's slug includes the labels in it;
+   // anchors resolve once every reference is a destination, because a heading's slug is numbered over
+   // the whole document; the media plan turns a part name into a path and can turn a picture back into
+   // its alt text; and dropping the emptied blocks last is what restores the invariant the emitter rests
+   // on, that every block it is handed produces at least one byte.
    bool ready = RunCoalesce(&document);
 
    if(ready) ready = LinkResolveRefs(&document, package, mainPart);
+   if(ready) ready = LinkResolveNotes(&document);
    if(ready) ready = LinkResolveAnchors(&document);
-   // Coalesced a second time, because muting is what makes two spans adjacent that were not. A link's
+   // Coalesced a second time, because muting is what makes two spans adjacent that were not -- a link
+   // whose destination came to nothing, and since M10 a note reference whose note does not exist. A link's
    // brackets are a barrier a merge may not cross, and rightly so while they exist -- but the pass that
    // mutes a link whose destination came to nothing runs after the merge decision was taken, and a muted
    // span emits nothing. Left as it stood, a bold run either side of one emitted "**A****B**", which is
