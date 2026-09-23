@@ -741,6 +741,20 @@ def build_all(verbose=True, writing=True):
     expect("bad-footnote-rels.docx", 3, ["ends in the middle of an element", "footnotes.xml.rels"],
            "the footnotes part's own relationships part never closes its root element", sound=True)
 
+    # -- a styles or numbering part that is present and malformed refuses the document too, and its
+    # sentence names the part the relationship found. The styles case is built on the relocated tree,
+    # whose styles part is shared/theme-styles.xml reached through a ../ target, so a name read off the
+    # package rather than assumed is the only way the substring can match.
+    bad_styles = swap(read_part_tree("relocated"), [("shared/theme-styles.xml", b"</w:styles>", b"")])
+    write("bad-styles.docx", build_zip([make_entry(name, raw) for name, raw in bad_styles]))
+    expect("bad-styles.docx", 3, ["ends in the middle of an element", "shared/theme-styles.xml"],
+           "a styles part whose root never closes, named by the part its relationship resolves to", sound=True)
+
+    bad_numbering = swap(read_part_tree("lists"), [("word/numbering.xml", b"</w:numbering>", b"")])
+    write("bad-numbering.docx", build_zip([make_entry(name, raw) for name, raw in bad_numbering]))
+    expect("bad-numbering.docx", 3, ["ends in the middle of an element", "word/numbering.xml"],
+           "a numbering part whose root never closes", sound=True)
+
     # The other direction: a notes part nothing references is never read, so a malformed one costs the
     # document nothing -- and it has to produce exactly the bytes the minimal document produces. It is not
     # even validated: the byte 0xFF fails the UTF-8 check that runs before the tokenizer is reached.

@@ -639,9 +639,10 @@ void IrDropEmptyBlocks(IR_DOCUMENTptrc document) {
       // A rule carries no spans by construction, a code paragraph may legitimately be blank, and a list
       // item is a marker whether or not it holds text, so all three are exempt here exactly as they are
       // in IrEndBlock -- the two tests have to agree, or a block that survived being ended would be
-      // thrown away on the second look. NumAssignMarkers runs before this and clears the reference on a
-      // paragraph whose numId resolved to nothing, so only a *real* item is exempt by the time this
-      // asks; an empty paragraph carrying a dangling one is dropped like any other.
+      // thrown away on the second look. Only a *real* item is exempt by the time this asks: the walk
+      // records a list reference only for a w:numId the numbering part resolves, and NumAssignMarkers
+      // clears any other before this runs, so an empty paragraph whose w:numId named nothing is dropped
+      // like any other.
       cbool exempt = (block->kind == IR_BLOCK_RULE || block->kind == IR_BLOCK_CODE || block->listNumId >= 0);
 
       if(!exempt && !IrRangeHasContent(document, block->spanAt, block->spanAt + block->spanCount)) continue;

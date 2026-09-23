@@ -398,10 +398,11 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
    if(ready) ready = RunCoalesce(&document);
    if(ready) ready = MediaPlan(media, &document, package, mediaPrefix, emitImages);
    // M8's counter pass turns each list reference the walk recorded into the marker the emitter writes,
-   // and it runs *before* the empty blocks go: a paragraph whose w:numId named no list at all is not an
-   // item, and clearing its reference here is what lets the drop below treat it as the empty paragraph
-   // it turned out to be. A real item is kept whether or not it holds text, because a marker on a line
-   // of its own is what the document showed.
+   // and it runs *before* the empty blocks go, because the drop spares every block that still carries a
+   // reference: a real item is kept whether or not it holds text, since a marker on a line of its own is
+   // what the document showed. The walk records a reference only for a w:numId the numbering part
+   // resolves, so a paragraph whose w:numId named no list arrives here as the ordinary paragraph it is;
+   // the pass clears one that names nothing anyway, for a caller that records references itself.
    if(ready) ready = NumAssignMarkers(&document, &numbering);
    if(ready) IrDropEmptyBlocks(&document);
 

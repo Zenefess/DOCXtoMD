@@ -856,9 +856,8 @@ below.
     exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
   - **What the binary does at M10**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
-    input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and, except
-    where the styles or numbering part is not well-formed XML, which part broke it**, an output that
-    cannot be written exits 4, and a sound package is **converted** and
+    input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and which
+    part broke it**, an output that cannot be written exits 4, and a sound package is **converted** and
     exits **0**, having written `<stem>.md` beside its input and said so in a note. `--stdout` writes
     the document to standard output instead, through `DiagWriteOutBytes`, which goes to the handle
     rather than the CRT stream so that Windows cannot turn the emitter's LF endings into CRLF. A run
@@ -872,10 +871,11 @@ below.
     arrived with M9 either. **M10 adds no option, no exit code and no note**, but it reads two more
     parts, and a footnotes or endnotes part a document needs -- one that something already walked
     references a note of, or the relationships part of one a note was read from -- refuses the document
-    with exit 3 exactly as a malformed body does. The walk's sentence for a part that is not well-formed
-    XML now **names the part**, because a walk reads more than one -- a malformed body says
-    `..., in word/document.xml` -- and so does its sentence for a notes part whose root is not the story
-    its relationship names. A notes part nothing references is never read, so it
+    with exit 3 exactly as a malformed body does. The sentence for a part that is not well-formed XML
+    **names the part**, because a conversion reads more than one -- a malformed body says
+    `..., in word/document.xml`, and a malformed styles or numbering part names itself the same way --
+    and so does the walk's sentence for a notes part whose root is not the story its relationship names.
+    A notes part nothing references is never read, so it
     can refuse nothing.
   - **What M10 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
     escaping that keeps all of it from being re-read as markup; bold, italic,
@@ -1213,9 +1213,8 @@ The solution builds **two** exes since M4. The main project overrides no output 
 Since M2 the binary has a real command line, since M3 it reads the container, since M4 it resolves the
 package and since M5 it **converts**: `--help` and
 `--version` exit 0, a usage error exits 1, an unopenable input exits 2, an input that is not a usable
-DOCX exits 3 and is told which rule it broke and, except where the styles or numbering part is not
-well-formed XML, which part broke it, an output that cannot be written exits 4, a sound package is
-converted and exits 0, and a run that both converted and failed exits 6.
+DOCX exits 3 and is told which rule it broke and which part broke it, an output that cannot be written
+exits 4, a sound package is converted and exits 0, and a run that both converted and failed exits 6.
 The fixtures and their expected verdicts are checked by
 
 ```bat
@@ -1226,13 +1225,15 @@ python tests\run_container.py --exe x64\Debug\DOCXtoMD.exe      :: or any other 
 tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite; prints a tally, returns 0 or 1
 ```
 
-`run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough.
-At M10 they return **157**, **118** and **1518** checks, over the **83** fixtures `make_fixtures.py`
-builds. All four were confirmed on Windows on 2026-09-23. The three check counts are the interesting
-ones: they are what the shim measures on Linux, and at every milestone since M3 they have been exactly
-what the real MSVC binary then returned. The fixture count is not evidence of that -- `make_fixtures.py`
-is the same Python on both platforms -- and is recorded only so a run that builds a different number is
-noticed.
+`run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough. At
+M10 they return **157**, **118** and **1518** checks, over the **83** fixtures `make_fixtures.py`
+builds, and all four were confirmed on Windows on 2026-09-23. Two fixtures landed after that run,
+`bad-styles.docx` and `bad-numbering.docx`, so the tables now declare **161** container checks over
+**85** fixtures -- numbers no Windows run has confirmed yet; the golden and unit counts do not change.
+The three check counts are the interesting ones: they are what the shim measures on Linux, and at every
+milestone since M3 they have been exactly what the real MSVC binary then returned. The fixture count is
+not evidence of that -- `make_fixtures.py` is the same Python on both platforms -- and is recorded only
+so a run that builds a different number is noticed.
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -2878,6 +2879,15 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   and `revisions` pairs against an `expected.md` written by hand from the specification before the
   converter was run at it. Bullets 2, 3 and 5 are mechanical and were checked on Linux, so the marker is
   `[done]` with nothing outstanding.
+  **One fix landed after that verification**, the way one did after M7's and M8's. A malformed styles or
+  numbering part was refused with `XmlResultText`'s bare sentence, which names no part, while every other
+  refusal names the part that broke; each model now records the part it loaded, and the sentence goes
+  through `OpcMessageIn` as the walk's does. `bad-styles.docx` and `bad-numbering.docx` pin it, which takes
+  `make_fixtures.py` to **85** fixtures and `run_container.py` to **161** checks; `run_golden.py` stays at
+  **118** and the unit suite at **1518**. The marker stays `[done]` on M5's precedent: a verification
+  record is of what was run, and a later bug fix does not un-verify a milestone. The changed
+  `StyleModel` and `NumberingModel` have not been through `/W3` or run on Windows, and the next Windows
+  run closes that.
   - **The three tallies are the shim's, exactly.** 157, 118 and 1518, the same three numbers in the
     same order a Linux session measured before any of this reached a Windows machine, and the fixture
     count with them. That is the **eighth** milestone running where the shim predicted the real MSVC

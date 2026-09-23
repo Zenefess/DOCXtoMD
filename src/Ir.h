@@ -673,10 +673,11 @@ IR_SPANptr IrSpanMutable(IR_DOCUMENTptrc document, cui32 index);
 ///       restores the invariant in one place rather than making the emitter carry a case for a block
 ///       that emits nothing.
 /// @note The exemptions are IrEndBlock's, and the two tests have to agree or a block that survived
-///       being ended would be thrown away on the second look. A list item is exempt only while its
-///       reference still stands: NumAssignMarkers runs before this and clears the reference on a
-///       paragraph whose numId resolved to nothing, so an empty one of those is dropped like any other
-///       empty paragraph while an empty *item* keeps its marker.
+///       being ended would be thrown away on the second look. A list item is exempt only while it carries
+///       a reference, and only a real item does by the time this runs: the walk records a reference only
+///       for a w:numId the numbering part resolves, and NumAssignMarkers clears any other before this, so
+///       an empty paragraph whose w:numId named nothing is dropped like any other while an empty *item*
+///       keeps its marker.
 /// @note Blocks keep their order and their spans; only the records move down over the dropped ones. The
 ///       arena is not compacted, for the same reason IrSetDest does not compact it.
 /// @note Nothing inside a table is ever dropped, and that is what makes the table records survive the

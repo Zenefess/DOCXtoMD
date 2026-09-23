@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-23
  * Description: Style part parsing, basedOn folding, role and font detection, and toggle-XOR resolution.
  * To Do: 1) Fold w:link so a character style can be reached from the paragraph style it pairs with.
  *        2) Match a font family ending in "mono" as monospace, once a corpus says the fixed table misses.
@@ -776,10 +776,12 @@ void StyleOpen(STYLE_MODELptrc model) {
    model->defaultParagraph      = -1;
    model->lastXml               = XML_OK;
    model->lastOpc               = OPC_OK;
+   model->part                  = -1;
 }
 
 cSTYLE_RESULT StyleLoad(STYLE_MODELptrc model, OPC_PACKAGEptrc package, csi32 partIndex) {
    if(partIndex < 0) return STYLE_OK; // No styles part: every property takes its specification default
+   model->part = partIndex;
 
    cOPC_RESULT loaded = OpcLoadXmlPart(package, partIndex);
 
@@ -1029,7 +1031,9 @@ cSTYLE_RUN_PROPS StyleResolveRun(cSTYLE_MODELptr model, csi32 paragraphStyle, cS
 
 cchptr StyleResultText(OPC_PACKAGEptrc package, cSTYLE_MODELptr model, cSTYLE_RESULT result) {
    if(result == STYLE_ERROR_PART && model && model->lastOpc != OPC_OK) return OpcResultText(package, model->lastOpc);
-   if(result == STYLE_ERROR_XML && model && model->lastXml != XML_OK) return XmlResultText(model->lastXml);
+   // A sentence about the bytes of a part names the part, as the walk's does: "a part ends in the middle
+   // of an element" does not say which, and the styles part is found through a relationship, not by name.
+   if(result == STYLE_ERROR_XML && model && model->lastXml != XML_OK) return OpcMessageIn(package, XmlResultText(model->lastXml), model->part);
    if(result < 0 || result >= STYLE_RESULT_COUNT) return "the style part could not be read";
    return STYLE_RESULT_TEXT[result];
 }

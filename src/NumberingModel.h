@@ -149,6 +149,7 @@ struct al32 NUM_MODEL {
    ui32            counterRows;      ///< Counter rows one document needs: one per abstract, one per orphan
    XML_RESULT      lastXml;          ///< Which XML rule the part broke, for the message
    OPC_RESULT      lastOpc;          ///< How the package refused the part, for the message
+   si32            part;             ///< The part it was loaded from, which a refusal names; -1 for none
    bool            hasPart;          ///< Whether a numbering part was found and read at all
 };
 
@@ -265,5 +266,7 @@ cbool NumAssignMarkers(IR_DOCUMENTptrc document, cNUM_MODELptr model);
 /// @return A NUL-terminated ASCII sentence with no trailing punctuation, naming the part it is about
 ///         when one is known. It is valid until the next call on the same package.
 /// @note A container or encoding refusal keeps the package's own sentence, which says which rule the
-///       bytes broke rather than only that they could not be read.
+///       bytes broke rather than only that they could not be read. A part that is not well-formed XML
+///       is named too, from the part NumLoad recorded, because "a part ends in the middle of an
+///       element" does not say which.
 cchptr NumResultText(OPC_PACKAGEptrc package, cNUM_MODELptr model, cNUM_RESULT result);

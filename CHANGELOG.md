@@ -604,6 +604,18 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- A **malformed styles or numbering part was refused without naming it.** `StyleResultText` and
+  `NumResultText` returned `XmlResultText`'s bare sentence -- "not a valid DOCX; a part ends in the middle
+  of an element" -- while every other refusal names the part that broke, and both parts are found through
+  a relationship rather than by name, so a reader cannot assume which one it was. Each model now records
+  the part `StyleLoad` or `NumLoad` read, and the sentence goes through `OpcMessageIn` as the walk's does.
+  Pinned by `bad-styles.docx`, built on the relocated tree so that only a name read off the package can
+  match `shared/theme-styles.xml`, and `bad-numbering.docx`.
+- Comments that gave `NumAssignMarkers` a job the walk does. `Convert.cpp`, `Ir.cpp` and `Ir.h` said that
+  the pass clearing a dangling list reference is what lets `IrDropEmptyBlocks` treat the paragraph as
+  empty. Since M8's review the walk records a reference only for a `w:numId` the numbering part resolves,
+  so no dangling one reaches the pass in the program, and its clearing is a guard for a caller that
+  records references itself. Comments only.
 - A **nested raw-HTML table inside a note** broke the note. The line a nested table's `</table>` leaves
   the rest of its cell on was written without the table's prefix, which inside a definition is the four
   columns that keep a line in it -- so the definition ended there, the rest of the table landed in the
