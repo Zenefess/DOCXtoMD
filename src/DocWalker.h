@@ -8,7 +8,8 @@
  * To Do: 1) Extract a text box's w:txbxContent in place (row 38), which today is inside a picture
  *           container and so is scanned for a blip and otherwise dropped.
  *        2) Read an unclosed field's end from a pre-scan, if a producer is ever found writing one: a begin
- *           with no end leaves everything after its instruction unread, and streaming cannot undo that.
+ *           with neither a separate nor an end leaves everything after it in its story unread, and streaming
+ *           cannot undo that.
  *        3) Carry an INCLUDEPICTURE's own URL where its cached result holds no picture.
  *        4) Drop the custom mark a w:customMarkFollows reference is followed by in its run, which today is
  *           emitted as text beside the "[^n]" that already stands for it.
@@ -79,9 +80,11 @@ typedef const WALK_STATUS cWALK_STATUS;
 ///       horizontal rule: a paragraph wearing a list marker did not come to nothing.
 /// @note What this build does not walk, and skips whole rather than descending into: the comment
 ///       references and ranges, w:sym and m:oMath. Comments are dropped by policy (mapping row 30);
-///       m:oMath and w:sym have no milestone yet and are the two places text is lost rather than merely
-///       unformatted -- both are DocWalker.cpp's To Do item 3. An element this build has never heard of
-///       is skipped the same way, which is the OOXML compatibility model.
+///       m:oMath and w:sym have no milestone yet and are two of the places text is lost rather than merely
+///       unformatted -- both are DocWalker.cpp's To Do item 3. A text box and a text-bearing
+///       mc:AlternateContent inside a run are two more, which the picture scan drops: this file's To Do 1
+///       and DocWalker.cpp's To Do 4. An element this build has never heard of is skipped the same way,
+///       which is the OOXML compatibility model.
 /// @note What M10 adds. Fields run through a begin/separate/end state machine with a stack, which lives
 ///       on the walk rather than on a paragraph because a field's result may span several (correctness
 ///       rule 7): everything between begin and separate is instruction and never content; a HYPERLINK's
@@ -123,8 +126,8 @@ typedef const WALK_STATUS cWALK_STATUS;
 ///       rows 13 and 12); so does a paragraph whose every text-bearing run is set in a monospace family,
 ///       which is row 12's second detection and is settled here because the font is a run property the
 ///       intermediate representation does not carry. A heading beats both.
-/// @note A run whose effective w:vanish or w:webHidden is on is dropped with its text. Word hides field
-///       instructions that way, so keeping them would put raw field codes in the output.
+/// @note A run whose effective w:vanish or w:webHidden is on is dropped with everything it holds but its
+///       w:fldChar and w:instrText, which the M10 note above says are read even there.
 /// @note A run whose effective w:caps is on has its text uppercased, which is mapping row 37 -- caps is
 ///       a transform on the bytes rather than a delimiter, so it belongs here and not to M6's emitter.
 ///       w:smallCaps leaves the text as typed, which the same row says.
@@ -181,7 +184,7 @@ cWALK_STATUS DocWalkNotesBytes(IR_DOCUMENTptrc document, cSTYLE_MODELptr styles,
 
 /// The user-facing sentence for a walk status, ready to hand to DiagErrorText.
 /// @param package  The package the walk ran over; a null pointer still yields a usable sentence.
-/// @param status   What DocWalk returned.
+/// @param status   What DocWalk or DocWalkNotes returned.
 /// @return A NUL-terminated ASCII sentence with no trailing punctuation, naming the part it is about
 ///         when one is known -- since M10 a walk reads more than one part, so a sentence about the bytes
 ///         of one names it. It is valid until the next call on the same package.

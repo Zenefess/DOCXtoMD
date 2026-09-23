@@ -3,14 +3,15 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-10
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-23
  * Description: numbering.xml as resolved per-numId levels, and the counter pass that turns them into markers.
  * To Do: 1) Read w:lvl/w:pStyle so a paragraph whose style a level names can take that level's ilvl.
  *        2) Keep w:lvlText once a policy wants a literal roman or letter marker rather than a decimal.
  *        3) Carry w:numPr from w:docDefaults, which no producer writes and which needs its own guard.
- *        4) Decide at M10 whether a footnote's lists share the body's counters. NumAssignMarkers keys
- *           one counter table on the abstract definition and walks the blocks in document order, so a
- *           second part's items would continue the body's sequence unless a milestone rules otherwise.
+ *        4) Give a note's lists counters of their own if Word is found numbering them apart from the
+ *           body's: NumAssignMarkers keys one counter table on the abstract definition and walks the
+ *           blocks in reading order, the body's and then each note's, so a note's items continue the
+ *           sequence of a body list over the same definition.
  * Dependencies: Ir.h, OpcPackage.h, StyleModel.h, XmlPull.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant

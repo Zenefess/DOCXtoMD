@@ -242,13 +242,13 @@ static cbool ConvertsFull(cchptr styleBody, cchptr numberBody, cchptr body, cchp
    cWALK_STATUS status  = DocWalkBytes(&document, &styles, &numbering, (cui8ptr)part, used);
    bool         matched = false;
 
-   // Every pass Convert.cpp runs between the walk and the emitter runs here too, in the same order:
-   // the emitter's contract since M6 is that every formatted span it is handed is already merged and
-   // already trimmed, and since M7 that every link it is handed has a destination and every block it
-   // is handed produces a byte. Testing it against a document no pass had been over would test a
-   // shape the program never produces. There is no package here, so a relationship resolves to
-   // nothing and only a w:anchor link reaches the emitter with a destination -- which is the half
-   // that needs no archive to be worth testing.
+   // Every pass Convert.cpp runs between the walk and the emitter, except MediaPlan, runs here too, in
+   // the same order: the emitter's contract since M6 is that every formatted span it is handed is
+   // already merged and already trimmed, and since M7 that every link it is handed has a destination
+   // and every block it is handed produces a byte. Testing it against a document no pass had been over
+   // would test a shape the program never produces. There is no package here, so a relationship
+   // resolves to nothing and only a w:anchor link reaches the emitter with a destination -- which is
+   // the half that needs no archive to be worth testing.
    bool ready = status.result == WALK_OK && EmitNotes(&document, &styles, &numbering, policy->footnotes, IR_NOTE_FOOT);
 
    if(ready) ready = EmitNotes(&document, &styles, &numbering, policy->endnotes, IR_NOTE_END);
@@ -276,8 +276,8 @@ static cbool ConvertsUnder(cchptr styleBody, cchptr numberBody, cchptr body, cch
    return ConvertsFull(styleBody, numberBody, body, wanted, &policy);
 }
 
-// Converts one body and its footnotes and endnotes, under the default policies, against the style and
-// numbering parts the list and code cases already use.
+// Converts one body and its footnotes and endnotes, under the default policies, against the numbering
+// part the list cases use and a styles part holding the quote, code and heading styles.
 static cbool Noted(cchptr body, cchptr footnotes, cchptr endnotes, cchptr wanted) {
    EMIT_CASE policy = {footnotes, endnotes, HARD_BREAK_BACKSLASH, TABLE_MODE_GFM};
    char      style[512];
@@ -311,8 +311,8 @@ static cbool Cited(cchptr note, cchptr wanted) {
    return Noted(PARA_OF(FREF("2")), notes, nullptr, wanted);
 }
 
-// Converts one body with no styles part, under a chosen hard-break policy.
-// The same under the default table policy, which is every case but the ones that name --tables.
+// Converts one body against optional styles and numbering parts, under a chosen hard-break policy and
+// the default table policy, which is every case but the ones that name --tables.
 static cbool ConvertsWith(cchptr styleBody, cchptr numberBody, cchptr body, cchptr wanted, cHARD_BREAK hardBreak) {
    return ConvertsUnder(styleBody, numberBody, body, wanted, hardBreak, TABLE_MODE_GFM);
 }
@@ -324,6 +324,7 @@ static cbool Merged(cchptr body, cchptr wanted) {
    return ConvertsUnder(nullptr, nullptr, body, wanted, HARD_BREAK_BACKSLASH, html);
 }
 
+// Converts one body with no styles or numbering part, under a chosen hard-break policy.
 static cbool ConvertsTo(cchptr body, cchptr wanted, cHARD_BREAK hardBreak) { return ConvertsWith(nullptr, nullptr, body, wanted, hardBreak); }
 
 // Converts one body with the default hard-break policy, which is what all but one case wants.

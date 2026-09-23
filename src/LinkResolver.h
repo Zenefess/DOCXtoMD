@@ -7,8 +7,9 @@
  * Description: Reference resolution: relationship ids, note labels, and bookmarks into GFM anchors.
  * To Do: 1) Fold beyond the simple one-to-one case mappings, for the few code points whose lower-case
  *           form is more than one character.
- *        2) Number a note referenced only from inside another note of the same story, which the walk
- *           does not read today because the reference is not seen until the note holding it is.
+ *        2) Number a note referenced only from inside another note of the same story, or a footnote
+ *           referenced only from inside an endnote, which the walk does not read today because the
+ *           reference is not seen until the note holding it is.
  * Dependencies: Ir.h, OpcPackage.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant

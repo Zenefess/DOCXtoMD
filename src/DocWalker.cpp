@@ -4,7 +4,7 @@
  * Owner: David William Bull
  * Created: 2026-08-25
  * Last Modified: 2026-09-23
- * Description: The body walk: wrappers, paragraph classification, runs and run content into the IR.
+ * Description: The body and notes walk: wrappers, fields, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
  *        2) Uppercase beyond ASCII and Latin-1 for w:caps, which needs Unicode's case tables.
@@ -2283,7 +2283,8 @@ static cui64 DocWantCount(cIR_DOCUMENTptr document, cIR_NOTE_KIND kind) {
 
 // Builds the set of one story's identifiers from every note reference the document holds so far -- the
 // body's, and the footnotes' when it is the endnotes being read. A reference inside a note to a note of
-// the same story is not seen, which is the one shape Word's own interface cannot produce.
+// the same story is not seen, and neither is an endnote's reference to a footnote, because the footnotes
+// are read before any endnote is.
 // @return How many identifiers the set holds, or -1 when it could not be allocated.
 static csi64 DocWantOpen(DOC_WANTEDptrc wanted, cIR_DOCUMENTptr document, cIR_NOTE_KIND kind) {
    cui64 count = DocWantCount(document, kind);

@@ -245,8 +245,7 @@ static cEXIT_CODE ConvertWriteFile(cwchptr path, cchptr bytes, cui64 byteCount) 
 // back as -1, and the model or the notes it would have held stay empty.
 //
 // OPC_REL_VIEW's pointers are into the package heap and stay valid only until the next OpcLoadRels grows
-// it, so every one of these has to be looked up before any further relationships are loaded -- which is
-// why ConvertPackage finds all four at once, straight after the main part's own.
+// it, so the view is read here and never kept: only the part index leaves this function.
 static csi32 ConvertRelatedPart(OPC_PACKAGEptrc package, csi32 mainPart, cOPC_REL_KIND kind) {
    csi32 relation = OpcFindRelByKind(package, mainPart, kind);
 
@@ -259,8 +258,8 @@ static csi32 ConvertRelatedPart(OPC_PACKAGEptrc package, csi32 mainPart, cOPC_RE
 }
 
 // Reads the notes of one story into the document, and the relationships their references are scoped to.
-// A notes part is read only when the body references one of its notes, so a refusal here is always about
-// a part the conversion needed.
+// A notes part is read only when something already walked references one of its notes -- the body, and
+// for the endnotes a footnote as well -- so a refusal here is always about a part the conversion needed.
 static cEXIT_CODE ConvertNotes(IR_DOCUMENTptrc document, OPC_PACKAGEptrc package, cSTYLE_MODELptr styles, cNUM_MODELptr numbering, // What is read
                                csi32 partIndex, cIR_NOTE_KIND kind, cwchptr inputPath) {                                           // From where
    cui32        before = IrNoteCount(document);
@@ -358,10 +357,10 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
       return (walked.result == WALK_ERROR_MEMORY ? EXIT_INTERNAL : EXIT_NOT_DOCX);
    }
 
-   // M10's notes, after the body because only a note the body references is read, and footnotes before
-   // endnotes because that is the order the two stories are read in -- which is what lets an endnote
-   // referenced from a footnote be found at all. Both are walked with the same style and numbering models
-   // as the body: a note's paragraphs name the same styles and the same lists.
+   // M10's notes, after the body because only a note something already walked references is read, and
+   // footnotes before endnotes because that is the order the two stories are read in -- which is what lets
+   // an endnote referenced from a footnote be found at all. Both are walked with the same style and
+   // numbering models as the body: a note's paragraphs name the same styles and the same lists.
    EXIT_CODE noted = ConvertNotes(&document, package, &styles, &numbering, footnotesPart, IR_NOTE_FOOT, inputPath);
 
    if(noted == EXIT_ALL_CONVERTED) noted = ConvertNotes(&document, package, &styles, &numbering, endnotesPart, IR_NOTE_END, inputPath);

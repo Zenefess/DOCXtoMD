@@ -190,7 +190,7 @@ static cui64 WalkList(cIR_BLOCKptr block, chptrc dest) {
 static_assert(ui32(IR_BLOCK_KIND_COUNT) == 6u, "TestDocWalker: the trace renderer must spell every block kind; add the new one here.");
 static_assert(ui32(IR_SPAN_KIND_COUNT) == 7u, "TestDocWalker: the trace renderer must spell every span kind; add the new one here.");
 
-// The trace notation the three renderers below share, so a case is one string comparison rather than
+// The trace notation the renderers below share, so a case is one string comparison rather than
 // ten assertions. A heading is H<level>{...} and a paragraph is P{...}; inside
 // a block, [text] is a text span, | is a hard break, and the letters before a bracket are its
 // formatting: b bold, i italic, s strike, ^ superscript, v subscript and c code. The other block
@@ -199,11 +199,10 @@ static_assert(ui32(IR_SPAN_KIND_COUNT) == 7u, "TestDocWalker: the trace renderer
 // image, and N(name) for a bookmark anchor; a muted anchor -- one nothing links to -- is N-(name).
 // M8's list membership stands in front of the block letter: [<level>#<numId>] is the reference the
 // walk read, and [<level>=<marker>] is what NumAssignMarkers made of it.
+// M10's note references are F(id) for a footnote and E(id) for an endnote, the id being the w:id
+// the walk read or the label LinkResolveNotes gave it, and F-(id) or E-(id) once that pass has muted
+// one; a block a note holds is prefixed f<w:id>: or e<w:id>:.
 
-// Renders one range of blocks, which is the whole document at the top level and one cell's content
-// inside a table. A table's own blocks are the blocks of its cells, so the range renderer and the
-// table renderer call each other -- and the range renderer skips past a table's whole block range,
-// or every cell's content would be rendered twice: once in the table and once at the top level.
 // Writes which note a block belongs to, as f<w:id>: for a footnote and e<w:id>: for an endnote, in front
 // of everything else the block renders as. A block of the body writes nothing.
 static void WalkNote(cIR_DOCUMENTptr document, cIR_BLOCKptr block, chptrc dest, cui64 destBytes, ui64ptrc used) {
@@ -220,6 +219,10 @@ static void WalkNote(cIR_DOCUMENTptr document, cIR_BLOCKptr block, chptrc dest, 
    WalkAppend(dest, destBytes, used, head);
 }
 
+// Renders one range of blocks, which is the whole document at the top level and one cell's content
+// inside a table. A table's own blocks are the blocks of its cells, so the range renderer and the
+// table renderer call each other -- and the range renderer skips past a table's whole block range,
+// or every cell's content would be rendered twice: once in the table and once at the top level.
 static void WalkRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc dest, cui64 destBytes, ui64ptrc used);
 
 // Renders one table: T, its column count, one character per column of alignment (- l c r), then m for

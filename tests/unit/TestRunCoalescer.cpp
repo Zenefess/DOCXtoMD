@@ -116,16 +116,14 @@ static cui64 CoalesceList(cIR_BLOCKptr block, chptrc dest) {
 static_assert(ui32(IR_BLOCK_KIND_COUNT) == 6u, "TestRunCoalescer: the trace renderer must spell every block kind; add the new one here.");
 static_assert(ui32(IR_SPAN_KIND_COUNT) == 7u, "TestRunCoalescer: the trace renderer must spell every span kind; add the new one here.");
 
-// The trace notation the three renderers below share, which is TestDocWalker's and two letters
-// wider: c is a code span and the block letters are P, H<level>, Q, C and R. M7's span
-// kinds render the same way here: L(dest) and L) for a link, I(source)[alt] for an image, N(name) for
-// a bookmark anchor. M8's list membership stands in front of the block letter in the same two forms
-// TestDocWalker spells: [<level>#<numId>] before the counter pass, [<level>=<marker>] after it.
+// The trace notation the renderers below share, which is TestDocWalker's: c is a code span and the
+// block letters are P, H<level>, Q, C and R. M7's span kinds render the same way here: L(dest) and L)
+// for a link, I(source)[alt] for an image, N(name) for a bookmark anchor. M8's list membership stands
+// in front of the block letter in the same two forms TestDocWalker spells: [<level>#<numId>] before
+// the counter pass, [<level>=<marker>] after it. M10's note references are F(id) for a footnote and
+// E(id) for an endnote, F-(id) or E-(id) once LinkResolveNotes has muted one, and a block a note holds
+// is prefixed f<w:id>: or e<w:id>:.
 
-// Renders one range of blocks, which is the whole document at the top level and one cell's content
-// inside a table. A table's own blocks are the blocks of its cells, so the range renderer and the
-// table renderer call each other -- and the range renderer skips past a table's whole block range,
-// or every cell's content would be rendered twice: once in the table and once at the top level.
 // Writes which note a block belongs to, as f<w:id>: for a footnote and e<w:id>: for an endnote, in front
 // of everything else the block renders as. A block of the body writes nothing.
 static void CoalesceNote(cIR_DOCUMENTptr document, cIR_BLOCKptr block, chptrc dest, cui64 destBytes, ui64ptrc used) {
@@ -142,6 +140,10 @@ static void CoalesceNote(cIR_DOCUMENTptr document, cIR_BLOCKptr block, chptrc de
    CoalesceAppend(dest, destBytes, used, head);
 }
 
+// Renders one range of blocks, which is the whole document at the top level and one cell's content
+// inside a table. A table's own blocks are the blocks of its cells, so the range renderer and the
+// table renderer call each other -- and the range renderer skips past a table's whole block range,
+// or every cell's content would be rendered twice: once in the table and once at the top level.
 static void CoalesceRange(cIR_DOCUMENTptr document, cui32 from, cui32 to, chptrc dest, cui64 destBytes, ui64ptrc used);
 
 // Renders one table: T, its column count, one character per column of alignment (- l c r), then m for

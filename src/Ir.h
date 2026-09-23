@@ -87,7 +87,7 @@ typedef const IR_SPAN_KIND cIR_SPAN_KIND;
 constexpr cui8 IR_SPAN_FLAG_NONE = 0x00u;
 constexpr cui8 IR_SPAN_FLAG_REL  = 0x01u; ///< The destination is a relationship id, not yet resolved
 constexpr cui8 IR_SPAN_FLAG_PART = 0x02u; ///< The destination is a package part name, not yet extracted
-constexpr cui8 IR_SPAN_FLAG_MUTE = 0x04u; ///< The span emits nothing: an anchor nothing links to
+constexpr cui8 IR_SPAN_FLAG_MUTE = 0x04u; ///< The span emits nothing: an anchor, a link marker or a note reference
 constexpr cui8 IR_SPAN_FLAG_END  = 0x08u; ///< A note reference names an endnote rather than a footnote
 
 //== List flags
@@ -396,7 +396,8 @@ cIR_MARK IrBeginBlock(IR_DOCUMENTptrc document, cIR_BLOCK_KIND kind, cui8 headin
 ///       picture is a picture and one holding nothing but a bookmark is a link target. A link's own two
 ///       markers do not: "[](url)" is a link with no text, which CONVERSION_REFERENCE 5.6 skips. An
 ///       anchor is judged again by IrDropEmptyBlocks once LinkResolve has muted the ones nothing points
-///       at, which is the only way a block can be emptied after it was ended.
+///       at, and so are a note reference LinkResolveNotes muted and a picture MediaPlan turned into an
+///       empty alt text; those are the ways a block can be emptied after it was ended.
 cbool IrEndBlock(IR_DOCUMENTptrc document, cIR_MARK mark);
 
 /// Starts a table on the block a mark named, which must have been begun as IR_BLOCK_TABLE.
@@ -506,9 +507,9 @@ cIR_ALIGN IrAlignOf(cIR_DOCUMENTptr document, cIR_TABLEptr table, cui32 column);
 /// @return Which note it is, or -1 when the document could not grow.
 /// @note A note is not a block. Its blocks are ordinary blocks appended after the body's, each stamped
 ///       with the note's index, so every pass above the walk keeps reading one flat array -- which is the
-///       same bargain a table's cells strike, and for the same reason. The emitter is the only reader
-///       that groups them, because it is the only one that writes a note somewhere other than where the
-///       walk put it.
+///       same bargain a table's cells strike, and for the same reason. Two readers group them:
+///       LinkResolveNotes, which numbers each note's references in the order the notes were numbered, and
+///       the emitter, which writes a note somewhere other than where the walk put it.
 csi32 IrBeginNote(IR_DOCUMENTptrc document, cIR_NOTE_KIND kind, csi32 id, csi32 part);
 
 /// Ends the note IrBeginNote started, so that the blocks begun after it belong to the body again.
@@ -606,7 +607,7 @@ cIR_MARK IrMark(cIR_DOCUMENTptr document);
 
 /// Undoes everything added since a mark.
 /// @param document  A prepared document.
-/// @param mark      What IrMark returned.
+/// @param mark      What IrMark or IrBeginBlock returned.
 /// @note Only whole blocks and whole spans are unwound. A mark taken in the middle of a block leaves
 ///       that block's own record alone, because its span range is not written until IrEndBlock.
 void IrRewind(IR_DOCUMENTptrc document, cIR_MARK mark);
@@ -666,10 +667,11 @@ IR_SPANptr IrSpanMutable(IR_DOCUMENTptrc document, cui32 index);
 /// Drops every block that no longer holds anything worth emitting.
 /// @param document  A prepared document.
 /// @note IrEndBlock keeps the invariant the emitter rests on -- every block it is handed produces at
-///       least one byte -- and two M7 passes can break it after the fact: LinkResolve mutes an anchor
-///       nothing points at, and MediaPlan can leave an image with nothing to show. Re-testing every
-///       block here restores the invariant in one place rather than making the emitter carry a case for
-///       a block that emits nothing.
+///       least one byte -- and later passes can break it after the fact: LinkResolve mutes an anchor
+///       nothing points at, LinkResolveNotes mutes a note reference whose note the document does not
+///       hold, and MediaPlan can leave an image with nothing to show. Re-testing every block here
+///       restores the invariant in one place rather than making the emitter carry a case for a block
+///       that emits nothing.
 /// @note The exemptions are IrEndBlock's, and the two tests have to agree or a block that survived
 ///       being ended would be thrown away on the second look. A list item is exempt only while its
 ///       reference still stands: NumAssignMarkers runs before this and clears the reference on a

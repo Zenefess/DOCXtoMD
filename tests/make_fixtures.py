@@ -718,11 +718,11 @@ def build_all(verbose=True, writing=True):
             parts = dict(tree)
             media(case + ".docx", [(leaf, parts[part]) for leaf, part in extracted[case]])
 
-    # -- a notes part is read only when the body references one of its notes, and then it is read like
-    # the main part: a malformed one refuses the document and the sentence names the part that broke.
-    # The relationships a note's references are scoped to are a part of their own, and refuse the same
-    # way; they are loaded only once a note has been read, which is why these are built on the footnotes
-    # golden rather than on the minimal document.
+    # -- a notes part is read only when something already walked references one of its notes, and then
+    # it is read like the main part: a malformed one refuses the document and the sentence names the part
+    # that broke. The relationships a note's references are scoped to are a part of their own, and refuse
+    # the same way; they are loaded only once a note has been read, which is why these are built on the
+    # footnotes golden rather than on the minimal document.
     noted = read_part_tree("footnotes")
 
     unclosed_notes = swap(noted, [("word/footnotes.xml", b"</w:footnotes>", b"")])

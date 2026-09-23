@@ -692,7 +692,8 @@ static cbool MdDollarPair(cIR_DOCUMENTptr document, cIR_BLOCKptr block, cui32 fr
 // Whether a span writes nothing at all, so that a lookahead must read straight past it.
 //
 // A muted span is one LinkResolve settled: a link with no destination or no content, an anchor
-// nothing points at. An empty text span is a run that carried properties and no text.
+// nothing points at, a note reference naming no note the document holds. An empty text span is a run
+// that carried properties and no text.
 static cbool MdSpanIsSilent(cIR_SPANptr span) {
    if(span->flags & IR_SPAN_FLAG_MUTE) return true;
    return span->kind == IR_SPAN_TEXT && !span->textBytes;
