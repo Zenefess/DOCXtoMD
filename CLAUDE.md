@@ -258,7 +258,7 @@ below.
     Since M11 a style also carries a **`w:pBdr`**, read by `StyleReadBorders` — the one reader for a
     paragraph's borders, which `DocWalker` calls too, so that a paragraph and a style can never disagree
     about what row 25's pattern is — and folded nearest-wins down the `w:basedOn` chain as one property
-    rather than side by side: 1 for row 25's lone bottom border, 0 for any other, -1 for nothing said.
+    rather than side by side: 1 for row 25's lone bottom or between border, 0 for any other, -1 for nothing said.
     That is LibreOffice's evidence, not a reading of the schema: its HTML import puts an `<hr>`'s border
     in a `Horizontal Line` style and nothing in the paragraph. M11 also added **`block quotation`** to
     the quote names, which is what LibreOffice 24.2 calls the style older builds exported as
@@ -312,7 +312,7 @@ below.
     Since M11 a level whose `w:lvlText` is **written, non-empty and nothing but blank space** — spaces,
     tabs, U+00A0 — is `NUM_FORMAT_PLAIN` whatever its `w:numFmt` says, unless it draws a picture bullet:
     a marker a reader cannot see is not a marker, and that is how pandoc spells a list item's second
-    paragraph, one such level at every depth of every list. An **empty** `w:lvlText` is deliberately left
+    paragraph, through one definition that is blank at all nine levels and that the continuations of every list share. An **empty** `w:lvlText` is deliberately left
     to `w:numFmt`, because `tests/fixtures/tablecells` carries one and was verified on Windows reading it
     as a bullet; widening the rule is one line, and it should be done on evidence. `NumResultText` names
     the part for every refusal but a failed allocation, as `StyleResultText` does. The part's two 4,096
@@ -724,7 +724,7 @@ below.
     delimiter row under the first row, and a row per row after it. The delimiter row is what makes the
     lines around it a table at all -- GFM reads one only where it holds exactly as many cells as the
     header -- so the width it is written at is the wider of what `w:tblGrid` declares and what the
-    widest row's cells reach, and every row is padded to it by walking its cells once rather than
+    widest row reaches, its `w:gridAfter` included, and every row is padded to it by walking its cells once rather than
     scanning for each column. A pipe table's cell is inline content, so a cell's blocks are flattened
     into one line joined by `<br>`: a hard break is the same element, a list item keeps its marker as
     literal text because losing `3.` from a cell loses the document's count, a code paragraph becomes a
@@ -925,8 +925,8 @@ below.
     exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
   - **What the binary does at M11**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
-    input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and which
-    part broke it**, an output that cannot be written exits 4, and a sound package is **converted** and
+    input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and, for most refusals that one part or one entry
+    name causes, which one**, an output that cannot be written exits 4, and a sound package is **converted** and
     exits **0**, having written `<stem>.md` beside its input and said so in a note. `--stdout` writes
     the document to standard output instead, through `DiagWriteOutBytes`, which goes to the handle
     rather than the CRT stream so that Windows cannot turn the emitter's LF endings into CRLF. A run
@@ -948,8 +948,9 @@ below.
     can refuse nothing. **M11 adds no option, no exit code and no note either**, and it refuses more
     under exit 3: an archive holding an entry name decision D10 rules out, whatever the entry is, with a
     sentence naming the rule and the entry — `not a valid DOCX; an entry name uses a backslash as a path
-    separator, which ZIP forbids, in _rels\.rels` — and a styles or numbering part whose root is wrong or
-    which declares more than its cap, whose sentence now names the part like every other refusal.
+    separator, which ZIP forbids, in _rels\.rels`. A styles or numbering part whose root is wrong or which
+    declares more than its cap is refused as it was before M11, and its sentence now names the part, as the
+    sentence for a malformed one already did.
   - **What M11 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
     escaping that keeps all of it from being re-read as markup; bold, italic,
     strikethrough, superscript, subscript, inline code, fenced code blocks, blockquotes and the
@@ -969,7 +970,7 @@ below.
     cell dropping out of its row. M11 adds the shapes two real producers were found writing: a horizontal
     rule spelled as a VML `o:hr` shape (pandoc) or carried by a paragraph style's `w:pBdr` (LibreOffice's
     HTML import), a list item's continuation spelled as a numbering level whose `w:lvlText` is blank
-    (pandoc), LibreOffice 24.2's `Block Quotation`, and a table row's `w:gridBefore` and `w:gridAfter`.
+    (pandoc) and LibreOffice 24.2's `Block Quotation`; it also reads a table row's `w:gridBefore` and `w:gridAfter`, which the hand-authored `tests/fixtures/tablegrid` pins.
     `w:sym`, `m:oMath` and comments are still skipped whole. Underline,
     highlight, colour and size are dropped by policy and always will be (mapping rows 8 and 9 for
     underline and highlight, and `docs/CONVERSION_REFERENCE.md` 2.3 for colour and size).
@@ -1201,7 +1202,7 @@ below.
   whose delimiter row had lost the `:---` LibreOffice's `w:jc="left"` asks for. The three that are the
   exception to "before the converter was run at it" are `pandocrules`, `libreofficelists` and
   `libreofficehtml`: each `expected.md` was written after a probe had converted the same document and
-  found the defect it pins, so they are regression pins, derived by hand but not blind.
+  found what it pins -- the defects `pandocrules` and `libreofficehtml` pin, and the Known gap `libreofficelists` pins -- so they are regression pins, derived by hand but not blind.
   `fixtures/minimal/src/` is the ordinary one: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`,
   `word/_rels/document.xml.rels` and `word/styles.xml`, hand-authored and reviewable.
   `fixtures/relocated/src/` is M4's definition-of-done fixture and is built to make a by-name
@@ -1241,15 +1242,15 @@ below.
   nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
   works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
   character data, `$` is the end and `!n` is refusal *n* — so one string per case reads better than ten
-  assertions. `src/` carries seven result-sentence tables, and five of them — `Utf`, `XmlPull`,
+  assertions. `src/` carries eight result-sentence tables, and five of them — `Utf`, `XmlPull`,
   `OpcPackage`, `StyleModel` and `NumberingModel` — are pinned against their enums by comparing
   specific rows against
-  the exact sentence, because a sentence table and the enum indexing it drift apart silently; that
+  the sentence or its closing words, because a sentence table and the enum indexing it drift apart silently; that
   check caught a real one-row misalignment during M4, and an M5 review caught the `OpcPackage` pair
   asserting only that the sentence was non-null, which `OpcResultText` can never return. `DocWalker`
   pins two rows -- the body's root and, since M10, the notes part's -- and `ZipReader`, since M11, pins
-  its entry-name table whole and four of `ZipResultText`'s other sentences, the rest of which the
-  container fixtures reach one substring at a time; both are still To Do. M5's suites reach the parser and the walker from string literals
+  its entry-name table whole and four of `ZipResultText`'s other sentences, some of the rest of which the
+  container fixtures reach one substring at a time; `TestZipReader`'s To Do names the rest of ZipReader's, and no To Do names DocWalker's. M5's suites reach the parser and the walker from string literals
   through `StyleLoadBytes` and `DocWalkBytes`, which are the halves of `StyleLoad` and `DocWalk` that
   work over bytes rather than over a package; `TestDocWalker` renders the whole intermediate
   representation into a compact trace — `H1{…}` a heading, `P{…}` a paragraph, `[text]` a span, `|` a
@@ -1651,15 +1652,15 @@ forbidden; before D6 it was.
   against the body's part instead fails three golden checks, which is how the mutation pass confirmed
   the test tests it. No unit case reaches it, because the unit suites build no package; `TestDocWalker`'s
   To Do says so.
-- **Every structural cap is driven from both sides since M11, and the numbering part's delegation cap
-  is the one driven at the unit level only.** `NUM_MAX_ABSTRACT`, `NUM_MAX_NUMS` and `STYLE_MAX_STYLES`
-  are 4,096 apiece, and a literal declaring 4,097 definitions is about a megabyte of source, so
+- **The styles, numbering and tokenizer caps are driven from both sides since M11, and of those the numbering part's
+  delegation cap is the one driven at the unit level only.** `NUM_MAX_ABSTRACT`, `NUM_MAX_NUMS` and `STYLE_MAX_STYLES`
+  are 4,096 apiece, and a literal declaring 4,097 definitions is several hundred kilobytes of source, so
   `make_fixtures.py` generates them instead: a part holding exactly the cap converts to the minimal
   document's own bytes and one holding one more is refused naming the part. `XML_MAX_DEPTH`,
   `XML_MAX_ATTRIBUTES` and `XML_MAX_NAMESPACES` are driven the same way, a fixture at each cap and one
   past it. `NUM_MAX_DELEGATE` is `TestNumberingModel`'s: a `w:numStyleLink` chain of 0, 1 and sixteen
   hops resolves and one of seventeen is a bullet. A **cycle** is pinned at both levels too, and the cap is
-  the whole guard that catches it -- every exit but the one that finds a definition carrying levels
+  the whole guard that catches it -- every exit but the one that finds a definition carrying no `w:numStyleLink`
   leaves the delegation unresolved, and unresolved is a bullet at every level, so a cycle runs the cap
   out and lands where a visited set would have put it sixteen steps earlier.
 - **One M6 promise is still not exercised, and M11 added a flag beside it that is not either.**
@@ -1687,7 +1688,7 @@ forbidden; before D6 it was.
   still the only bound on rows and on breaks; they were sized before M9 existed. A row cap has no
   natural value the way a column cap does, which is why M11 left it -- the four million empty rows above
   converted in under a second -- and `bench/` is owed before any of these numbers is a claim (bd1/bd2).
-- **Six things M11's producer corpus showed that this build does not do, each checked by converting a
+- **Six things M11's producer corpus raised that this build does not do, the first five checked by converting a
   real export.** (1) A heading whose **style** is italic keeps the italic: LibreOffice 24.2's `Heading 2`
   is bold and italic, and it comes out `## *A list*`, because mapping row 1 clears only the bold bit.
   `tests/fixtures/quotes` pins the same shape through a heading based on an italic quote style, and was
@@ -1703,7 +1704,7 @@ forbidden; before D6 it was.
   as `- `. (5) LibreOffice's HTML import spells superscript and subscript as `w:position` -- a raised or
   lowered baseline -- with a smaller `w:sz`, not as `w:vertAlign`, and nothing reads `w:position`, so
   `mc<sup>2</sup>` comes out `mc2`. (6) An **empty** `w:lvlText` is left to `w:numFmt` rather than read as
-  a marker-less continuation, because the one fixture that carries one was verified reading it as a
+  a marker-less continuation, because `tests/fixtures/tablecells`, which carries one on a bullet level, was verified reading it as a
   bullet; no producer M11 ran writes one for a continuation. Each of (2) to (5) is a rule a later
   session can add; none is a refusal or a crash.
 - **The raw-HTML fallback renders no cell decoration, and that is a limit rather than an oversight.**
@@ -1816,7 +1817,7 @@ implementation session must respect:
 | Code block | Fenced ``` — consecutive all-monospace paragraphs merge into one fence, whose length is one more than the longest backtick run inside it and never fewer than three. No info string: the language is not recoverable. An empty code paragraph is a blank line of the fence, and is trimmed only where it falls at either end of one |
 | Quote styles | `> ` blockquote — Quote, Intense Quote, Block Text, and LibreOffice's Quotations and Block Quotation (the name 24.2 exports), by name, never by indent. Two consecutive quote paragraphs are separated by a bare `>` rather than a blank line, so a quotation a producer broke in two stays one blockquote: session-derived at M6, and the one exception to the blank line between blocks |
 | Bullet / numbered lists | `-` / real computed numbers (`3.` honors start); nested by `ilvl`. Counters are keyed on the resolved **abstract definition**, never on the `numId`, so two `numId`s over one definition continue one sequence (2.9); a `w:startOverride` is keyed by `numId` instead and fires the first time that `numId` is used. Those are the two commands Word's list UI offers |
-| A numbering level whose `w:lvlText` is non-empty and nothing but blank space — spaces, tabs, U+00A0 | A marker-less continuation, as `w:numFmt="none"` is, whatever its `w:numFmt` says — unless the level draws a picture bullet. A marker a reader cannot see is not a marker, and it is how pandoc spells a list item's second paragraph. An **empty** `w:lvlText` is left to `w:numFmt`, because the one fixture carrying one was verified reading it as a bullet. Session-derived at M11 |
+| A numbering level whose `w:lvlText` is non-empty and nothing but blank space — spaces, tabs, U+00A0 | A marker-less continuation, as `w:numFmt="none"` is, whatever its `w:numFmt` says — unless the level draws a picture bullet. A marker a reader cannot see is not a marker, and it is how pandoc spells a list item's second paragraph. An **empty** `w:lvlText` is left to `w:numFmt`, because `tests/fixtures/tablecells` carries one on a bullet level and was verified reading it as a bullet. Session-derived at M11 |
 | A `w:numFmt` this build does not recognise, and an absent one | **Ordered**, a decimal. Every ST_NumberFormat token but `bullet` and `none` counts, so an unknown one is far likelier to be a counting format than a bullet — and reading it as a bullet throws away ordering the counter already has, while reading it as a decimal loses only a glyph shape row 15 says the renderer discards. A level whose marker is a `w:lvlPicBulletId` picture is a bullet. Session-derived at M8 |
 | A paragraph that is both a heading and a list item | The heading. 5.4 rules it outright, and it is the common case rather than an edge one: Word's Multilevel List linked to headings puts a `w:numPr` on every `Heading N` style, so without the rule every heading in such a document becomes an item and the structure inverts |
 | A paragraph that is both a list item and a quotation, a fence, or all-monospace | An item, keeping its kind — `- > quoted` and a fence inside its item. But row 12's **font heuristic** is switched off for an item, on the same reasoning as its monospace-baseline guard: the font is a guess at what a paragraph is and a `w:numPr` is a statement, so a list of code lines set in Consolas stays a list rather than becoming fences that have each lost their marker. A code *style* is unaffected. Session-derived at M8 |
@@ -1828,7 +1829,7 @@ implementation session must respect:
 | A marker-less continuation paragraph, a nested list starting at a number other than 1, and a nested list whose first item is empty | Each takes a blank line in front of it, because each is a block that cannot interrupt a paragraph. The last matters most and fails silently: a lone `-` under a line of text is a **setext underline**, so the line above becomes a heading rather than merely losing its structure |
 | Tables | GFM pipe tables; header = first row (a later `tblHeader` row is not promoted — see the next row); cell breaks → `<br>`; merged → padded GFM cells (gridSpan: content in first cell + empty pads; vMerge continue: empty cell; HTML `<table>` under `--tables=html-on-merge`); nested → HTML `<table>` fallback |
 | The header row, where several rows carry `w:tblHeader` or none does | **The first row, always.** GFM has exactly one header row and it is the one at the top, so a later `w:tblHeader` cannot be promoted without reordering the document — and the block array's order is what `LinkResolver`'s heading slugs and `MediaExtractor`'s picture numbering are both counted in. 2.5 offers an all-empty header row as a policy where the first row is clearly data; it is declined, because it costs a row of the reader's screen to say something no producer's markup actually asked for. Session-derived at M9 |
-| How wide a pipe table is | The **wider** of what `w:tblGrid` declares and what the widest row's cells actually reach. The grid is authoritative (2.5) but it is not a ceiling: a row whose cells reach past it has columns the grid did not declare, and clamping to the grid is exactly the silent loss row 19 forbids. Every row is then padded to that width. For the header row that is required: GFM reads a pipe table only where the delimiter row holds as many cells as the header, so a short header row turns the whole table into a paragraph. A renderer pads a short body row itself, so padding those is this build's choice rather than GFM's requirement. Session-derived at M9 |
+| How wide a pipe table is | The **wider** of what `w:tblGrid` declares and what the widest row actually reaches, its `w:gridAfter` included. The grid is authoritative (2.5) but it is not a ceiling: a row whose cells reach past it has columns the grid did not declare, and clamping to the grid is exactly the silent loss row 19 forbids. Every row is then padded to that width. For the header row that is required: GFM reads a pipe table only where the delimiter row holds as many cells as the header, so a short header row turns the whole table into a paragraph. A renderer pads a short body row itself, so padding those is this build's choice rather than GFM's requirement. Session-derived at M9 |
 | Column alignment | `:---`, `:---:` or `---:` from the **first row's** own `w:jc`, because a delimiter row is the only place an alignment can be written and it stands under the header. `start` and `end` read as left and right, having no bidirectional layout here to reverse them against (2.5's `w:bidiVisual` is "note and ignore"); `both` and `distribute` are alignments GFM cannot spell and become none. A cell spanning several columns aligns all of them. Session-derived at M9 |
 | Block content in a pipe table's cell | Flattened to one line, its blocks joined by `<br>`: a list item keeps its marker as literal text, because losing `3.` from a cell loses the document's own count; a code paragraph becomes a **code span**, which is the inline form of the fence it would otherwise have been; a heading, a quotation and a horizontal rule keep only what they say, because a `#` or a `> ` in a cell is literal text a reader has to ignore. Nesting inside a cell's list is lost, which is a known limit rather than a policy: GFM has no spelling for indentation inside a cell. Session-derived at M9 |
 | A `w:vMerge` restart wider than the row continuing it | The `rowspan` is written only where **every** column the restart covers is continued, so a ragged merge becomes an ordinary cell of its own width and the row below it keeps its columns. HTML can only spell a rectangle; counted at the restart's first column alone, the cell claimed columns nothing continued and a browser pushed the next cell of that row past them, so the raw-HTML form rendered one column wider than the pipe form of the same document. Session-derived at M9, and found by the grid oracle once its generator was widened to put a restart on a spanning cell |
@@ -1852,7 +1853,7 @@ implementation session must respect:
 | A field's cached result | Correctness rule 7 and reference 2.7 as written — a `HYPERLINK`, and a `REF` carrying `\h`, is a link around its result; a `TOC` field or a content control whose gallery says it is one vanishes whole; every other field is its result, and one with no separate is nothing — **except `INCLUDEPICTURE`**, which 2.7 would turn into `![](url)` from its instruction and which is its cached result here, a picture if it holds one. Session-derived at M10; `DocWalker.h`'s To Do 3 |
 | A link a field's result opens across a paragraph break | Closed at the end of each paragraph and opened again at the start of the next: two links to one destination, as a hyperlink across a hard break already is. Session-derived at M10 |
 | A paragraph whose mark a tracked change deleted | Runs on into the next paragraph (5.11), which gives the pair its classification; where the next block is a table, or the cell, note or body ends, it ends as written. Session-derived at M10 in the second half, because Word will not delete those marks |
-| Horizontal rule (`pBdr` bottom on empty ¶) | `---` with blank lines around. Since M11 two more spellings count, each found in a producer's output: a `w:pBdr` the paragraph's **style chain** carries where the paragraph carries none (LibreOffice's HTML import) — for an ordinary paragraph only, never a heading — and a VML shape with `o:hr` of `t` or `true` in an otherwise empty paragraph (pandoc's thematic break). A paragraph's own `w:pBdr` still wins outright |
+| Horizontal rule (`pBdr` bottom on empty ¶) | `---` with blank lines around. Since M11 two more spellings count, each found in a producer's output: a `w:pBdr` the paragraph's **style chain** carries where the paragraph carries none (LibreOffice's HTML import) — for an ordinary paragraph only, never a heading — and a VML `v:rect`, `v:roundrect`, `v:oval`, `v:shape` or `v:shapetype` with `o:hr` of `t` or `true` in an otherwise empty paragraph (pandoc's thematic break). A paragraph's own `w:pBdr` still wins outright |
 | `w:br` (textWrapping) / page break | Backslash hard break (`<br>` in cells, under either table form: a pipe table's row is one line by construction, and a line end inside an HTML cell renders only as a space) / nothing |
 | Hidden text | Dropped, for `w:vanish` (a toggle) and `w:webHidden` (nearest-wins) alike |
 | `w:caps` | The run's text is uppercased — ASCII and the Latin-1 supplement, which is where a 0x20 offset is exactly right; anything beyond needs Unicode's case tables and is a `To Do` |
@@ -2077,7 +2078,7 @@ still accept only one input; what it must not do is assume there will only ever 
   a stored ZIP entry.
 - Three runners, with different jobs. `tests/run_container.py` (M3, extended at M4) runs the exe
   over every fixture and asserts the exit code and a substring of the message, and reads every *sound*
-  archive back with Python's `zipfile`; `tests/x64/Release/DOCXtoMD.Tests.exe` (M4, extended at M5 and M6) runs
+  archive back with Python's `zipfile`; `tests/x64/Release/DOCXtoMD.Tests.exe` (M4, extended at every milestone since) runs
   the unit suite, which drives every case from a string literal and touches no file;
   `tests/run_golden.py` (M5) converts every golden fixture twice — once to a file beside the input and
   once through `--stdout`, which are different code paths in `Convert.cpp` — and byte-compares both
@@ -2973,9 +2974,9 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     one nested thirteen deep is dropped.
   - **Every rule M9 introduced was mutation-tested**, the way M6 established and M7 and M8 repeated,
     and the two the battery found unpinned are now pinned: the trailing-`<br>` trim, in both forms, and
-    the ragged merge above. Two mutations are *deliberately* left surviving and are recorded under Known
+    the ragged merge above. Two mutations were *deliberately* left surviving and were recorded under Known
     gaps rather than papered over — the inter-cell gap loop in each table form, `MdEmitPipeRow`'s and
-    `MdEmitTableHtml`'s, which no input this build reads can reach.
+    `MdEmitTableHtml`'s, which no input M9 read could reach; M11 reads `w:gridBefore`, which makes both run.
 - **M10 `[done]` Fields, notes, tracked changes** — field state machine, footnotes/endnotes,
   sdt, accept-all revisions. Two things M9 left for it by name: a second part's relationships, which is
   what tests that relationship ids are scoped per part (M4's coverage gap), and a multi-block note body,
@@ -3083,7 +3084,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   archive, or normalise while building the part index — and the ruling defers it to this point precisely so the
   producer-variance corpus can answer it rather than a guess. Do not close M11 without recording an answer and a
   fixture for it; "we looked and left it alone" is an answer, silence is not. Note what is *not* deferred: a
-  relationship **target** of any of those shapes is already refused by `OpcResolveTarget`, and no archive name has
+  relationship **target** that is not External and holds a `\`, a drive letter or a stream colon, or climbs above the package root, is already refused by `OpcResolveTarget`, and no archive name has
   ever reached disk. DoD: as before, plus a fixture per decided entry-name shape.
   **Status**: the code landed from Linux on 2026-09-23 as `[done-unverified]`, and the owner verified it
   on Windows on 2026-09-24. Both x64 configurations build with **zero errors and zero warnings**;
@@ -3102,10 +3103,10 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     binary rather than only itself -- and it is worth what it costs precisely because it proves nothing
     about `/W3`, `/sdl`, `/arch:AVX2` or the real `include/` headers, which is what the owner's run
     covers instead. The Debug run carries its own half of that: `/RTCu` is where an indeterminate read
-    surfaces. M11 grew no `al32` structure -- `IR_ROW`, `ZIP_READER` and three `StyleModel` records
+    surfaces. M11 grew no `al32` structure -- `IR_ROW`, `ZIP_READER`, `DocWalker`'s `DOC_CONTEXT` and four `StyleModel` records
     grew, and none is one -- so `mzero`'s aligned 256-bit path met nothing new.
   - **What the milestone is, in one line**: decision D10 answered and pinned, the producer corpus the
-    roadmap names turned into golden fixtures and the defects it found fixed, every structural cap driven
+    roadmap names turned into golden fixtures and the defects it found fixed, the styles, numbering and tokenizer caps driven
     from both sides, and the three Known gaps M9 left for it -- the column cap's case, `w:gridBefore` and
     `w:gridAfter`, and the uncapped cells per row -- closed. `src/` gained **no new module**, for the third
     milestone running; `tests/unit/` gained its thirteenth suite, `TestZipReader`.
@@ -3167,11 +3168,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   - **Every rule M11 introduced was mutation-tested**, the way M6 established and every milestone since
     has repeated: **fifty-one** mutations over the D10 rules and their message, the blank marker, the VML
     and style-borne rules, the quote name, the grid offsets, the cell cap, the colspan clamp, the break
-    collapse and the reservation, the part-naming sentences, and both sides of every cap. **Forty-nine**
+    collapse and the reservation, the part-naming sentences, and both sides of every cap M11 drives. **Forty-nine**
     fail at least one suite. Of the three that survived the first pass, one was a rule covered by
     nothing -- a tab in a `w:lvlText`, which the unit case spelled as a literal tab that XML's attribute
     normalisation had already turned into a space -- and is now pinned with `&#9;`; the other two are the
-    save and the restore of the VML-rule flag around a paragraph, which no input can reach, and are
+    clear and the restore of the VML-rule flag around a paragraph, which no input can reach, and are
     recorded under Known gaps beside M6's classification save for the same reason.
   - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/W3` and
     its zero-warnings requirement, `/sdl`, `/RTCu`, `/arch:AVX2` and the real `include/` headers. All of
@@ -3199,7 +3200,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   exits 1. Note MSVC v143 ships no thread sanitizer (`/fsanitize=address` only), so "no data races"
   cannot be a DoD command — the determinism comparisons are what is actually checkable.
 
-## Decisions (every row is ruled and settled — do not re-litigate)
+## Decisions (a ruled row is settled — do not re-litigate it)
 
 D1–D5 were ruled by the owner on 2026-08-18, D6 and D7 on 2026-08-19, and D8–D11 on 2026-08-24, the day M4
 raised them: the owner accepted all four session recommendations as written. **D12 was raised by M5 on 2026-08-25
@@ -3208,7 +3209,7 @@ and ruled on 2026-08-26**, the owner again accepting the recommendation as writt
 ship without doing *something*, and the row says exactly what would change if the owner rules the other way. **D14 was
 raised by M11 on 2026-09-23 and is `Open — owner call` too**, and unlike D13 the code keeps the behaviour it already
 had rather than the recommendation, because the recommendation would change a golden the owner verified. Keep the
-IDs stable — `docs/CONVERSION_REFERENCE.md` cites D1, D2, D8 and D10 by name — and keep a ruled row's question and
+IDs stable — `docs/CONVERSION_REFERENCE.md` cites D1, D2, D8, D10 and D12 by name — and keep a ruled row's question and
 the reasoning that was put to the owner rather than trimming it to the answer, because a ruling records what was
 asked as much as what was decided. New questions get the next free ID (D15, D16, …) with the same
 question/recommendation/status shape, and stay `Open — owner call` until the owner rules.
@@ -3224,11 +3225,11 @@ question/recommendation/status shape, and stay `Open — owner call` until the o
 | D7 | What batch surface does D6 need? (a) literal thread-per-file or a bounded pool? (b) how are multiple inputs passed? (c) how do per-file failures aggregate? (d) what do `--stdout` and `-o` mean for N files? | **(a) A bounded pool** sized to a user-specified thread count, defaulting to the system's virtual (logical) core count. **(b)** Inputs are repeated command-line operands: `DOCXtoMD [options] <input.docx> [input2.docx […]]`; output filenames are derived automatically. **(c)** Failed conversions are printed to the console before the process terminates, and partial success gets its own exit code. **(d)** `--stdout` is single-file only; `-o` gives the output path — the filename for one input, the directory for many | M13 |
 | D8 | Ill-formed UTF-8 inside a part: refuse the input, or substitute U+FFFD and carry on? CLAUDE.md's M4 definition of done says "rejected with a clear message"; `docs/CONVERSION_REFERENCE.md` 5.12 says "replace invalid sequences with U+FFFD rather than aborting". Sub-question: should the answer differ between a structural part (`[Content_Types].xml`, any `.rels`, the main part) and an optional one (`styles.xml`, `settings.xml`, an unreferenced footnote part)? | **Refuse**, as M4 implements, adopting the session recommendation in full. It is testable today as an exit code plus a substring, while U+FFFD substitution is only checkable against a golden `.md` that does not exist until M5; and refuse → replace is a strict relaxation still open later, while replace → refuse would break output users already had. The sub-question goes the same way: a part is a part, structural or optional. *(Consequence: `docs/CONVERSION_REFERENCE.md` 5.12 said the opposite and was corrected to match, which is what the ruling was for. U+FFFD survives only on the console path in `Utf`, where an unrepresentable path should still be reportable.)* | M4 (already implemented; `bad-utf8.docx` and `truncated-utf8.docx` pin it) |
 | D9 | When the `officeDocument` relationship resolves to a part whose content type is **not** one of the four WordprocessingML main-document types, does the tool convert it (trusting the relationship and reporting the disagreement) or refuse it as not a valid DOCX? "Cross-check" in correctness rule 1 is ambiguous between *verify and fail* and *fall back*, and the two readings give opposite exit codes for the same file. | **Trust the relationship and convert**, as M4 implements: the relationship is the specification's discovery mechanism and `[Content_Types].xml` is metadata, and refusing loses documents from producers that omit the Override. The content-type table stays a cross-check in the one case M4 already gives it — a relationship that resolved to a part the archive does not contain. | M4 (already implemented; `content-type-mismatch.docx` pins it, so the choice cannot change silently) |
-| D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | **Leave it as it is until M11** and decide there with the producer-variance corpus in hand. Nothing is exposed meanwhile: part names are only ever compared in memory and no path reaches disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Answered at M11: refuse.** `ZipCheckEntryName` refuses the archive, exit 3, when any entry name -- referenced or not -- begins with a drive letter, begins with `/`, holds a `\`, holds any other `:`, or has a `.` or `..` segment; the sentence names the rule and the entry. A directory entry's trailing `/` and an empty interior segment are accepted. The corpus the ruling asked for: twenty variants of a real pandoc export put through LibreOffice 24.2.7 and this build, and ten of them through python-docx 1.2 and pandoc 3.9 too. LibreOffice refuses exactly the shapes refused here and accepts exactly the rest; python-docx and pandoc are each inconsistent, reading some refused shapes and refusing others; and none of LibreOffice, pandoc or python-docx writes a refused shape. Nothing argued for leniency, so the strict and reversible direction stands. Six fixtures must be refused -- `entry-backslash`, `entry-absolute`, `entry-dot-prefix`, `entry-traversal`, `entry-drive-letter`, `entry-stream` -- and `directory-entries` and `empty-segment-entry` must convert. *(The answer is the milestone's, as the ruling delegated it; the owner may still overrule it, and relaxing to normalisation would be a change in `ZipCheckEntryName` and those six fixtures alone.)* |
+| D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | **Leave it as it is until M11** and decide there with the producer-variance corpus in hand. Nothing is exposed meanwhile: part names are only ever compared in memory and no path reaches disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Answered at M11: refuse.** `ZipCheckEntryName` refuses the archive, exit 3, when any entry name -- referenced or not -- begins with a drive letter, begins with `/`, holds a `\`, holds any other `:`, or has a `.` or `..` segment; the sentence names the rule and the entry. A directory entry's trailing `/` and an empty interior segment are accepted. The corpus the ruling asked for: twenty variants of a real pandoc export put through LibreOffice 24.2.7 and this build, and ten of them through python-docx 1.2 and pandoc 3.9 too. LibreOffice refuses exactly the shapes refused here and accepts exactly the rest; python-docx and pandoc are each inconsistent, reading some refused shapes and refusing others; and none of LibreOffice, pandoc or python-docx writes a refused shape. Nothing argued for leniency, so the strict and reversible direction stands. Six fixtures must be refused -- `entry-backslash`, `entry-absolute`, `entry-dot-prefix`, `entry-traversal`, `entry-drive-letter`, `entry-stream` -- and `directory-entries` and `empty-segment-entry` must convert. *(The answer is the milestone's, as the ruling delegated it; the owner may still overrule it, and relaxing to normalisation would be a change in `ZipCheckEntryName`, in whatever builds the part index from the names it then accepts, in `TestZipReader`'s refusal cases and in those six fixtures.)* |
 | D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | **Yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it earlier would oblige every future file to pass a session-authored checker with no CI behind it. | M12 |
 | D12 | GitHub renders `$...$` and `$$...$$` as LaTeX math, and has since 2022. `docs/CONVERSION_REFERENCE.md` 4.1 predates that and does not list `$` among the characters to escape, so today a paragraph reading `costs $5 and $10` is emitted verbatim and github.com renders `5 and ` in math font, losing both dollar signs. Should `$` join the unconditional inline escape set, join it conditionally (only where a closing `$` could pair with it), or stay unescaped? Note the cost of each: unconditional puts a backslash in front of every price in every document, conditional needs a lookahead the line-assembly pass can do but the reference does not describe, and leaving it corrupts a real and common shape on the one renderer this converter names in its own mapping table. The same question reaches `docs/CONVERSION_REFERENCE.md`, which would gain the row either way. | **Escape `$` conditionally**, adopting the session recommendation in full; ruled 2026-08-26. Unconditional escaping is the safe direction but it is visible on every ordinary document, and math is not a CommonMark feature -- it is one renderer's extension, so paying for it everywhere is out of proportion. *(Consequence, session-derived: "conditionally" is implemented as **at most one unescaped `$` per assembled line** -- a line holding two or more has every one of them escaped, a line holding one keeps it bare. A span needs two delimiters under every renderer's reading, so a count is safe without reproducing GitHub's exact opener and closer conditions, which this project cannot verify. All-or-none was preferred over leaving one bare per line because it also narrows the one residual: a line that pairs internally contributes no live dollar to the next line.)* | **done** (the rule, the reference row and `tests/fixtures/dollars` landed 2026-08-26, after M5's verification) |
 | D13 | `--stdout` and the media files. `--stdout` is single-input only (D7d) and writes the document to a pipe; M7 gives a document pictures, which are files and cannot go down a pipe. Three readings are available. **Extract anyway**, into the media directory beside where the `.md` *would* have gone, so the piped document and a written one are the same bytes and the pictures are on disk for whatever consumes the pipe. **Extract nothing**, on the reading that `--stdout` means "write no files", which makes the piped document name pictures that do not exist unless the reader also passes `--no-images`. **Refuse the combination**, which is the strictest and costs the shell pipeline that wants both. Note what the second and third cost beyond the obvious: `tests/run_golden.py` converts every fixture twice, once to a file and once through `--stdout`, and byte-compares both against one `expected.md` -- that is the check that has caught a `--stdout`-only defect before, and either of them ends it. | **Recommendation (not yet ruled): extract anyway.** `--stdout` is about where the *document* goes, and the media directory is derived from `-o` or from the input either way, so nothing about it is ambiguous. It is also the only reading under which the two output paths produce the same document, which is the property the golden runner exists to prove. The strict direction stays open: extract-anyway to refuse is a change a user notices, but so is every other pair, and no producer or consumer has a stake in this one yet. | **Implemented as recommended at M7**, and `tests/run_golden.py` compares the two paths byte for byte. If the owner rules otherwise, the change is in `ConvertFile` alone -- the pipeline below it does not know which path it is on. |
-| D14 | A heading whose **style** carries italic. Mapping row 1 rules that heading text is never additionally bolded, and the walker clears the bold bit on a heading's spans; it clears nothing else, so a heading style set italic comes out wrapped in `*…*`. That is not a hypothetical: LibreOffice 24.2's own `Heading 2` is bold and italic, so every second-level heading it exports reads `## *A list*` -- which `tests/fixtures/libreoffice` now pins -- and `tests/fixtures/quotes`, verified on Windows, pins `## *A heading beats a quote*` from a heading style based on an italic quote style. A heading's look is its template's business in the same way its boldness is, and GitHub renders every heading in its own face. Should italic that a heading gets from its **paragraph style chain** be dropped the way bold is, keeping italic that comes from the run's own `w:rPr` or its character style? And should strikethrough, which a style may also carry, go the same way? | **Recommendation (not yet ruled): drop style-borne italic from a heading, keep run-level italic, and leave strikethrough alone.** The rule would mirror row 1's reasoning exactly: what the template says about how headings look is not something the author said about these words, while a run the author italicised inside a heading is. Strikethrough is not a typographic default any template sets on a heading, so a heading struck through was struck by someone. The cost: two goldens change, one of them owner-verified, and `StyleResolveRun` has to report which layer an italic came from, which it does not today. | **Open — owner call.** The code keeps the existing behaviour meanwhile, because the recommendation would change `tests/fixtures/quotes`, which the owner verified; if ruled as recommended, the change is in `DocWalker`'s heading rule and `StyleModel`'s run resolution, plus both goldens. |
+| D14 | A heading whose **style** carries italic. Mapping row 1 rules that heading text is never additionally bolded, and the walker clears the bold bit on a heading's spans; it clears nothing else, so a heading style set italic comes out wrapped in `*…*`. That is not a hypothetical: LibreOffice 24.2's own `Heading 2` is bold and italic, so every second-level heading it exports reads `## *A list*` -- which `tests/fixtures/libreoffice` now pins -- and `tests/fixtures/quotes`, verified on Windows, pins `## *A heading beats a quote*` from a heading style based on an italic quote style. A heading's look is its template's business in the same way its boldness is, and GitHub renders every heading in its own face. Should italic that a heading gets from its **paragraph style chain** be dropped the way bold is, keeping italic that comes from the run's own `w:rPr` or its character style? And should strikethrough, which a style may also carry, go the same way? | **Recommendation (not yet ruled): drop style-borne italic from a heading, keep run-level italic, and leave strikethrough alone.** The rule would mirror row 1's reasoning exactly: what the template says about how headings look is not something the author said about these words, while a run the author italicised inside a heading is. Strikethrough is not a typographic default any template sets on a heading, so a heading struck through was struck by someone. The cost: two goldens change, both of them owner-verified, and `StyleResolveRun` has to report which layer an italic came from, which it does not today. | **Open — owner call.** The code keeps the existing behaviour meanwhile, because the recommendation would change `tests/fixtures/quotes` and `tests/fixtures/libreoffice`, both of which the owner verified; if ruled as recommended, the change is in `DocWalker`'s heading rule and `StyleModel`'s run resolution, plus both goldens. |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the
@@ -3250,8 +3251,8 @@ refuses ill-formed UTF-8 instead of substituting U+FFFD, and the Known-gaps entr
 disagreeing is replaced by the ruling (D8); the `officeDocument` relationship decides even when
 `[Content_Types].xml` disagrees, which is what M4 already does (D9); M11 inherits the ZIP-entry-name question and
 may not close without recording an answer (D10); and M12 gains the committed mechanical validator, with `include/`
-exempt (D11). Two of the four are pinned by a fixture rather than by prose — `bad-utf8.docx` and
-`content-type-mismatch.docx` — so a session that quietly reverses one fails a test rather than merely
+exempt (D11). Three of the four are pinned by a fixture rather than by prose — `bad-utf8.docx`,
+`content-type-mismatch.docx` and, since M11 answered D10, the six `entry-*` fixtures with `directory-entries.docx` and `empty-segment-entry.docx` — so a session that quietly reverses one fails a test rather than merely
 contradicting this file. Note what the owner ruled and what a session then derived: the rulings are the four
 recommendations as the table stated them; **which milestone owns D10 and D11's work, and the wording of the
 roadmap and reference edits, is session-derived** and may be revised without re-litigating the rulings.

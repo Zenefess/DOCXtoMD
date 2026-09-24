@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-10
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: numbering.xml as resolved per-numId levels, and the counter pass that turns them into markers.
  * To Do: 1) Read w:lvl/w:pStyle so a paragraph whose style a level names can take that level's ilvl.
  *        2) Keep w:lvlText once a policy wants a literal roman or letter marker rather than a decimal.
@@ -72,10 +72,11 @@ typedef const NUM_RESULT cNUM_RESULT;
 /// What one level's w:numFmt classifies as. The enumeration ST_NumberFormat holds sixty-odd tokens and
 /// this reader needs none of them by name: GitHub-Flavored Markdown can spell a bullet, a decimal
 /// number and nothing else, so every counting format collapses onto one value.
-/// @note A level whose w:lvlText is written as blank space -- one or more spaces, tabs or no-break spaces
-///       -- is NUM_FORMAT_PLAIN whatever its w:numFmt says, because a marker a reader cannot see is not a
-///       marker. Pandoc writes a bullet level of " " for a list item's continuation paragraphs. An empty
-///       w:lvlText is left as its w:numFmt says; NumberingModel.cpp's NumMarkerIsBlank says why.
+/// @note A level whose w:lvlText is written as blank space -- one or more spaces, tabs or no-break spaces -- is
+///       NUM_FORMAT_PLAIN whatever its w:numFmt says, unless it draws a w:lvlPicBulletId picture, because a
+///       marker a reader cannot see is not a marker. Pandoc writes a bullet level of " " for a list item's
+///       continuation paragraphs. An empty w:lvlText is left as its w:numFmt says; NumberingModel.cpp's
+///       NumMarkerIsBlank says why.
 /// @note An unrecognised token, and an absent w:numFmt, both read as NUM_FORMAT_ORDERED. Every token
 ///       the specification defines but bullet and none is a counting format, so a token this build has
 ///       never heard of is far likelier to be one than to be a bullet -- and degrading it to a bullet

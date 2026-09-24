@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: ZIP container reader: EOCD and ZIP64 discovery, directory parsing, and capped extraction.
  * To Do: 1) Expose the decompression caps on the command line as --max-decompressed and friends.
  *        2) Say which cap a ZIP_ERROR_LIMIT refusal reached, the way an entry-name refusal names its rule.
@@ -582,8 +582,8 @@ static cchptr ZipNameMessage(ZIP_READERptrc reader) {
 
    for(ui64 index = 0; sentence[index] && used < room; ++index) reader->message[used++] = sentence[index];
    for(cchptr walk = ", in "; *walk && used < room; ++walk) reader->message[used++] = *walk;
-   // An entry name is attacker-controlled bytes. A carriage return or an escape sequence in one would
-   // overwrite or forge a console line, so anything below a space is replaced rather than printed.
+   // An entry name is attacker-controlled bytes. A carriage return or an escape sequence in one would overwrite
+   // or forge a console line, so anything below a space, and 0x7F, is replaced rather than printed.
    for(ui64 index = 0; reader->badName[index] && used < room; ++index) {
       cchar byte = reader->badName[index];
 

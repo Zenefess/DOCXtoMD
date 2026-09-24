@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: The intermediate representation: blocks, spans and the arena the walker builds them in.
  * To Do: 1) Record the source paragraph index on a block, so a diagnostic can point at the original.
  *        2) Carry a cell's own w:tcBorders and w:shd, which the HTML fallback could render and the
@@ -442,7 +442,9 @@ csi32 IrBeginTable(IR_DOCUMENTptrc document, cIR_MARK mark);
 ///       mc:Fallback had since discarded, and emitted it as raw HTML it did not need.
 /// @note The grid is authoritative for a table's width (CONVERSION_REFERENCE 2.5) but it is not a
 ///       ceiling: a row whose cells reach past it has columns the grid did not declare, and clamping
-///       to the grid is the silent loss mapping row 19 forbids. The table is as wide as the wider.
+///       to the grid is the silent loss mapping row 19 forbids. The table is as wide as the wider, and a
+///       row's reach counts its w:gridAfter -- or, for a row of no cells, its w:gridBefore and w:gridAfter
+///       together.
 void IrEndTable(IR_DOCUMENTptrc document, csi32 table, csi32 lastRow, cui32 grid);
 
 /// Starts a row of one table, linking it behind the row before it.

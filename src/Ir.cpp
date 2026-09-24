@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: The intermediate representation's arena: growth, span appends and empty-block trimming.
  * To Do: 1) Size the first allocation from the part's own byte count, once the walker knows it.
  *        2) Release the arena back to the allocator between documents when M13 reuses a worker.
@@ -344,10 +344,11 @@ csi32 IrBeginCell(IR_DOCUMENTptrc document, csi32 row, csi32 after, cui32 span, 
    cui32      column = IrNextColumn(document, row, (linked ? after : -1));
    IR_CELLptr cell   = document->cells + fresh;
 
-   // The column is left where the arithmetic puts it rather than clamped, so that two cells of one row
-   // can never claim the same one. A cell past IR_MAX_COLUMNS is simply outside the grid the emitter
-   // writes, which is the one place this build stops honouring "never drop a column" -- and a table
-   // 256 columns wide has stopped being readable on any page long before that.
+   // The column is left where the arithmetic puts it rather than clamped, so that two cells of one row can
+   // never claim the same one. A cell that would start at or past IR_MAX_COLUMNS never reaches here -- the
+   // walker skips it whole -- and the part of a cell spanning past it is outside the grid the emitter writes,
+   // so the cap is the one place this build stops honouring "never drop a column" -- and a table 256 columns
+   // wide has stopped being readable on any page long before that.
    cell->blockAt    = document->blockCount;
    cell->blockCount = 0;
    cell->column     = column;

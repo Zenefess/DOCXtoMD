@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: First-party ZIP container reader: directory parsing, entry lookup, and verified extraction.
  * To Do: 1) Expose the decompression caps on the command line as --max-decompressed and friends.
  *        2) Say which cap a ZIP_ERROR_LIMIT refusal reached, the way an entry-name refusal names its rule.
@@ -56,8 +56,10 @@ typedef const ZIP_RESULT cZIP_RESULT;
 ///       references the entry. Strict is also the reversible direction -- a refusal can be relaxed into a
 ///       normalisation later, while the reverse would break output users already had.
 /// @note What is **not** refused is as deliberate. A trailing '/' is a directory entry, which zip tools and
-///       Python's zipfile write routinely, and an empty interior segment is inert: no part name this reader
-///       resolves has one, so no lookup can ever reach it. LibreOffice accepts both.
+///       Python's zipfile write routinely, and an empty interior segment is not a way out of the package: no
+///       relationship target this reader resolves can have one, and an Override's PartName, read verbatim when
+///       [Content_Types].xml stands in for a missing main part, can name such an entry only as a part of the
+///       package. LibreOffice accepts both.
 enum ZIP_NAME_RULE : si32 {
    ZIP_NAME_OK = 0,      ///< A relative path this reader will hold
    ZIP_NAME_DRIVE,       ///< A letter and a colon at the start: a Windows drive, as in "C:/x"
@@ -192,11 +194,12 @@ cZIP_RESULT ZipReadEntry(ZIP_READERptrc reader, cui32 index, ui8ptrptrc bytes, u
 /// The user-facing sentence for a result, ready to hand to DiagErrorText.
 /// @param reader  The reader the result came from; a null pointer still yields a usable sentence.
 /// @param result  The result to describe.
-/// @return A NUL-terminated ASCII sentence with no trailing punctuation. For ZIP_ERROR_INFLATE the reader's
-///         record of which RFC 1951 rule broke is folded in, and for ZIP_ERROR_NAME the rule and the entry
-///         that broke it, so one call gives the best message available. The wording lives here rather than
-///         in Inflate because this is the layer that knows the stream came out of a .docx.
-/// @note The sentence for a refused entry is composed in the reader's own buffer and is valid until the
-///       next call on the same reader; every other sentence is static. The entry name in it is
-///       attacker-controlled bytes, so anything below a space is printed as '?' rather than as itself.
+/// @return A NUL-terminated sentence, ASCII with no trailing punctuation except where it quotes an entry name.
+///         For ZIP_ERROR_INFLATE the reader's record of which RFC 1951 rule broke is folded in, and for
+///         ZIP_ERROR_NAME the rule and the entry that broke it, so one call gives the best message available.
+///         The wording lives here rather than in Inflate because this is the layer that knows the stream came
+///         out of a .docx.
+/// @note The sentence for a refused entry is composed in the reader's own buffer and is valid until the next
+///       call on the same reader; every other sentence is static. The entry name in it is attacker-controlled
+///       bytes, so anything below a space, and 0x7F, is printed as '?' rather than as itself.
 cchptr ZipResultText(ZIP_READERptrc reader, cZIP_RESULT result);

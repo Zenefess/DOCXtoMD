@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-10
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: Numbering part parsing, delegation chasing, override folding and the counter pass.
  * To Do: 1) Share one open-addressed index builder with StyleModel and OpcPackage, which write the
  *           same probe three times over.
@@ -175,9 +175,9 @@ static cNUM_FORMAT NumFormatOfToken(cXML_TEXT value) {
 // indents one like an item and draws no marker beside it.
 //
 // An *empty* value is deliberately not blank here. What an empty w:lvlText draws on a bullet level is a
-// question no producer this build has seen answers -- none of the four writes one -- and the one fixture
-// that carries it, tests/fixtures/tablecells, was verified on Windows reading it as a bullet. Widening this
-// to cover it is one line, and it should be done on evidence rather than on a reading of the schema.
+// question no producer this build has seen answers -- none M11 ran writes one on a bullet level -- and the one
+// fixture that carries it, tests/fixtures/tablecells, was verified on Windows reading it as a bullet. Widening
+// this to cover it is one line, and it should be done on evidence rather than on a reading of the schema.
 static cbool NumMarkerIsBlank(cXML_TEXT value) {
    ui64 index = 0;
 
@@ -251,8 +251,9 @@ static cbool NumReadLevel(XML_READERptrc reader, NUM_LEVELptrc level, si32ptrc i
    // A marker a reader cannot see is not a marker. A level whose w:lvlText draws nothing is a continuation
    // paragraph of the list, which is what w:numFmt none says in so many words -- so it becomes that, and
    // is not given a "-" or a number the document never showed. A picture bullet draws its picture whatever
-   // the text says, which is why it is the one exception. The counter still counts such a level, exactly
-   // as it counts a numFmt none one: the specification increments a level whatever its marker looks like.
+   // the text says, which is why it is the one exception. The counter pass treats such a level exactly as
+   // it treats a numFmt none one: it touches no counter and clears nothing, because the paragraph
+   // continues the item above it.
    if(blank && !picture) level->format = NUM_FORMAT_PLAIN;
    return true;
 }
@@ -466,11 +467,11 @@ static csi32 NumLookup(csi32ptr keys, cui32 count, csi32ptr buckets, cui32 mask,
 // style, that style's own w:pPr/w:numPr names a numId, that numId names a w:num, and that w:num names
 // the abstract definition holding the levels -- which carries a w:styleLink saying so.
 //
-// One guard, and the depth cap is it. A bare cap would leave a two-step loop resolving to an arbitrary
-// member of itself, on a parity the cap's own value decides -- but every way of leaving this walk bar
-// the one that finds a definition carrying levels leaves delegate at -1, so a loop runs the cap out
-// and lands on the same answer a visited set would have given sixteen steps earlier. The comment on
-// the cap itself, below, says that from the other side.
+// One guard, and the depth cap is it. A bare cap would leave a two-step loop resolving to an arbitrary member
+// of itself, on a parity the cap's own value decides -- but every way of leaving this walk bar the one that
+// finds a definition carrying no w:numStyleLink leaves delegate at -1, so a loop runs the cap out and lands on
+// the same answer a visited set would have given sixteen steps earlier. The comment on the cap itself, below,
+// says that from the other side.
 static void NumResolveDelegates(NUM_MODELptrc model, cSTYLE_MODELptr styles, csi32ptr keys, csi32ptr buckets, cui32 mask) {
    for(ui32 index = 0; index < model->abstractCount; ++index) {
       si32 walk  = si32(index);

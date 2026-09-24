@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: The body and notes walk: wrappers, fields, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
@@ -1389,8 +1389,8 @@ static cbool DocOpenParagraph(DOC_CONTEXTptrc context, DOC_PARAGRAPHptrc para) {
    return DocFlushBookmarks(context) && DocFieldReopen(context);
 }
 
-// Ends a paragraph's block, classifying it by everything its runs said, and writes mapping row 25's rule
-// where a lone bottom border stood on a paragraph that came to nothing.
+// Ends a paragraph's block, classifying it by everything its runs said, and writes mapping row 25's rule where
+// a paragraph that came to nothing carried a lone bottom border, its own or its style's, or drew a VML one.
 //
 // A paragraph that began inside a field nobody sees and came to nothing is gone whole -- its list marker,
 // its blank line of code and its border with it. That is every paragraph of a TOC after the one it begins

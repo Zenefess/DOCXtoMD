@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: Line assembly, inline delimiters, the blank-line discipline and every block kind's shape.
  * To Do: 1) Emit a fenced block inside a *quote*, which no block kind can express today: a paragraph
  *           is a quotation or a fence and never both, so only a list item reaches a prefixed fence.
@@ -1865,16 +1865,18 @@ static cbool MdEmitTableHtml(MD_EMITTERptrc emitter, cIR_DOCUMENTptr document, c
          // expires on the row after the last of them -- and a row whose cell at that column is
          // ordinary rather than a continuation is the row the run stopped at. So no skip is written
          // for it, and none is needed.
-         // The pipe form's gap loop, for the columns a w:gridBefore leaves empty. A merge from a row
-         // above may still hold one of them, which is what the held[] test is for.
+         // The pipe form's gap loop, for the columns a w:gridBefore leaves empty. No merge can hold one of
+         // those, because a continuation is matched by column and they hold no cell. The held[] test is for
+         // the continuations a row opens with: the branch above counts them from the running column rather
+         // than from their own, so some of the columns they cover are visited here.
          while(column < cell->column && column < IR_MAX_COLUMNS) {
             if(!held[column] && !MdEmitHtmlPad(emitter, bare, close)) return false;
             ++column;
          }
 
-         // A cell past the grid writes no held[] entry and decorates a column the table does not have,
-         // so its row span is never asked for: that guard is what bounds the walk below at 256 calls,
-         // and nothing caps how many cells a row may hold.
+         // A cell starting at or past IR_MAX_COLUMNS writes no held[] entry and is never asked for its row
+         // span, which bounds the walk below at 256 calls a row. The walker skips such a cell whole -- the cap
+         // on cells per row -- so this guard, like the width test below, is defensive.
          cbool restart = (cell->flags & IR_CELL_VRESTART) && cell->column < IR_MAX_COLUMNS;
          cui32 rows    = (restart ? MdRowSpanOf(document, row, cell->column, width) : 1u);
 

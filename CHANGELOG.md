@@ -28,20 +28,22 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   `entry-absolute`, `entry-dot-prefix` (every name under `./`, which pandoc reads), `entry-traversal`,
   `entry-drive-letter` and `entry-stream` -- and two that must convert to the minimal document's own
   bytes, `directory-entries` and `empty-segment-entry`.
-- **`tests/unit/TestZipReader.cpp`**, the thirteenth suite: every rule of `ZipCheckEntryName`, including
-  the order in which a name breaking several reports, the result sentences pinned against their enum rows,
-  and the composed message -- the rule, the name, the control-byte replacement and the truncation at the
-  reader's 512-byte buffer. It runs first, because the container is the first stage a document meets.
-- **Producer-variance goldens.** Five part trees are real exports, unzipped byte for byte: `pandoc` (pandoc
-  3.9 from Markdown), `libreoffice` (LibreOffice 24.2.7 from pandoc's ODT of the same Markdown),
-  `pandocrules` (pandoc's list continuations, a code block in an item and its thematic break),
-  `libreofficelists` (the same through LibreOffice) and `libreofficehtml` (LibreOffice's HTML import).
-  `gdocslike` is **hand-authored** to `docs/CONVERSION_REFERENCE.md` 5.10's Google Docs row -- no Google
-  Docs export was available -- and says so in its own name. Each `expected.md` was written by hand. `pandoc`
-  and `gdocslike` matched on their first run; `libreoffice` did not, and the two lines it failed on were
-  one converter defect (the quote style below) and one error in the hand-written file, whose delimiter
-  row had lost the `:---` LibreOffice's `w:jc="left"` asks for. `pandocrules`, `libreofficelists` and
-  `libreofficehtml` were written after the probes that found the defects they pin.
+- **`tests/unit/TestZipReader.cpp`**, the thirteenth suite: every rule of `ZipCheckEntryName`, including the
+  order in which a name breaking several reports, the whole entry-name sentence table and four of
+  `ZipResultText`'s other sentences pinned against their enum rows, and the composed message -- the rule, the
+  name, the control-byte replacement and the truncation at the reader's 512-byte buffer. It runs first, because
+  the container is the first stage a document meets.
+- **Producer-variance goldens.** Five part trees are real exports, unzipped byte for byte: `pandoc` (pandoc 3.9
+  from Markdown), `libreoffice` (LibreOffice 24.2.7 from pandoc's ODT of the same Markdown), `pandocrules`
+  (pandoc's list continuations, a code block in an item and its thematic break), `libreofficelists` (the same
+  through LibreOffice) and `libreofficehtml` (LibreOffice's HTML import). `gdocslike` is **hand-authored** to
+  `docs/CONVERSION_REFERENCE.md` 5.10's Google Docs row -- no Google Docs export was available -- and says so in
+  its own name. Each `expected.md` was written by hand. `pandoc` and `gdocslike` matched on their first run;
+  `libreoffice` did not, and the two lines it failed on were one converter defect (the quote style below) and
+  one error in the hand-written file, whose delimiter row had lost the `:---` LibreOffice's `w:jc="left"` asks
+  for. `pandocrules`, `libreofficelists` and `libreofficehtml` were written after the probes that converted
+  their documents: the first and last pin the defects those probes found, and `libreofficelists` pins Known gap
+  (2).
 - **`w:gridBefore` and `w:gridAfter`** (`tests/fixtures/tablegrid`). A row that declares it starts part-way
   across the grid -- which Word writes for an indented row and for one whose leading cells were deleted --
   now has its first cell in the column the row names, with empty cells before it, and its trailing columns
@@ -59,19 +61,20 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   level draws a picture bullet. That is how pandoc marks a list item's second paragraph. An **empty**
   `w:lvlText` keeps what `w:numFmt` says, because `tests/fixtures/tablecells` was verified on Windows
   reading one as a bullet.
-- **Fixtures that drive every structural cap from both sides.** `most-abstract-nums`, `most-nums` and
-  `most-styles` hold exactly `NUM_MAX_ABSTRACT`, `NUM_MAX_NUMS` and `STYLE_MAX_STYLES` and convert to the
-  minimal document's bytes; `too-many-abstract-nums`, `too-many-nums` and `too-many-styles` hold one more
-  and are refused naming the part. `deepest-nesting`, `most-attributes` and `most-namespaces` sit exactly
-  at `XML_MAX_DEPTH`, `XML_MAX_ATTRIBUTES` and `XML_MAX_NAMESPACES`, and their `too-` twins one past.
+- **Fixtures that drive the styles, numbering and tokenizer caps from both sides.** `most-abstract-nums`,
+  `most-nums` and `most-styles` hold exactly `NUM_MAX_ABSTRACT`, `NUM_MAX_NUMS` and `STYLE_MAX_STYLES` and
+  convert to the minimal document's bytes; `too-many-abstract-nums`, `too-many-nums` and `too-many-styles` hold
+  one more and are refused naming the part. `deepest-nesting`, `most-attributes` and `most-namespaces` sit
+  exactly at `XML_MAX_DEPTH`, `XML_MAX_ATTRIBUTES` and `XML_MAX_NAMESPACES`, and their `too-` twins one past.
   `TestNumberingModel` drives `NUM_MAX_DELEGATE` at 0, 1, 16 and 17 hops of a `w:numStyleLink` chain, and
   `TestDocWalker` and `TestMdEmitter` drive `IR_MAX_COLUMNS` with a row wider than the cap.
 - **A document type declaration in every part it can reach, not only the body**: `xxe-content-types`,
   `xxe-package-rels`, `xxe-footnotes` declare an external entity, and `billion-laughs` puts the expansion in
   `word/styles.xml`. Each is refused where the `<!DOCTYPE` stands and the sentence names the part.
   `bad-styles-root` and `bad-numbering-root` pin the root sentences the same way.
-- `StyleReadBorders`, the one reader for a `w:pBdr`, moved from `DocWalker` to `StyleModel` so that a
-  paragraph's borders and a style's cannot come to disagree about what row 25's pattern is.
+- The one reader for a `w:pBdr` moved from `DocWalker`, where it was `DocReadBorders`, to `StyleModel` as
+  `StyleReadBorders` so that a paragraph's borders and a style's cannot come to disagree about what row 25's
+  pattern is.
 - **M10, fields, notes and tracked changes.** The second milestone running that added **no module**: a
   field is a state the walk carries, a revision is a rule the walk applies, and a note is a run of
   ordinary blocks with a record beside them. `Ir` grew a span kind and a record array, `DocWalker` the

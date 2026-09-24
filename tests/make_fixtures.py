@@ -565,11 +565,12 @@ def build_all(verbose=True, writing=True):
 
 
     # -- entry names, which is decision D10 answered at M11. A name shaped like a way out of the package
-    # refuses the archive whether or not anything would ever look it up: LibreOffice 24.2 refuses exactly
-    # this set, and none of the producers a session could run writes any of it. Each rule gets a fixture,
-    # and two of them get the shape a real tool produces rather than a lone extra entry -- Windows
-    # PowerShell's Compress-Archive writes every separator as a backslash, and an archiver handed "." as its
-    # root can prefix every name with "./", which pandoc 3.9 reads and LibreOffice and this reader do not.
+    # refuses the archive whether or not anything would ever look it up: LibreOffice 24.2 refuses exactly this
+    # set, and none of the producers a session could run writes any of it. Each rule gets a fixture, and three
+    # of them rewrite every name in the package rather than adding a lone extra entry, two of those in the
+    # shape a real tool produces -- Windows PowerShell's Compress-Archive writes every separator as a
+    # backslash, and an archiver handed "." as its root can prefix every name with "./", which pandoc 3.9
+    # reads and LibreOffice and this reader do not.
 
     def extra_entry(name):
         """The minimal package, whole and sound, with one more entry beside it that nothing references."""

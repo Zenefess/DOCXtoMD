@@ -3,10 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-09-23
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: Unit tests for ZipReader's pure core: decision D10's entry-name rules and the result sentences.
  * To Do: 1) Drive ZipOpen from an in-memory archive, once the reader can take bytes rather than a path.
- *        2) Pin the remaining result sentences, which the container fixtures reach one substring at a time.
+ *        2) Pin the remaining result sentences, some of which the container fixtures reach one substring at a time.
  * Dependencies: BuildGuards.h, Check.h, Inflate.h, ZipReader.h, typedefs.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -23,9 +23,9 @@
 
 //-- Helpers
 
-// Rows of ZipReader's two sentence tables, spelled here so a table and the enum indexing it cannot drift
-// apart in silence -- which is the drift M4 caught in another module's table, and the reason every table
-// in src/ is pinned by content rather than by non-nullness.
+// Sentences ZipResultText returns, rows of its two sentence tables among them, spelled here so a table and the
+// enum indexing it cannot drift apart in silence -- which is the drift M4 caught in another module's table, and
+// the reason every table in src/ is pinned by content rather than by non-nullness.
 static constexpr cchptr LIMIT_SAID     = "refusing this file; it exceeds a decompression limit, so it may be a ZIP bomb";
 static constexpr cchptr OLE_SAID       = "not a valid DOCX; this is an OLE compound file, so an encrypted .docx or a legacy .doc";
 static constexpr cchptr DISTANCE_SAID  = "not a valid DOCX; a deflate stream matches data from before the start of the entry";
