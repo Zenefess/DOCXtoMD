@@ -693,6 +693,12 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- **Fifty-five statements about M11 that were wrong.** A read-only audit put every M11 claim in CLAUDE.md,
+  this file, `docs/CONVERSION_REFERENCE.md` and the comments of `src/` and `tests/` against the repository.
+  Among what it corrected: four comments that described the opposite of the code (a blank-marker level is not
+  counted, cells per row are capped, 0x7F is replaced like the bytes below a space, and delegation resolves
+  on a definition with no `w:numStyleLink`), the claim that every structural cap is driven from both sides,
+  and a table width that now counts a row's `w:gridAfter`.
 - **LibreOffice 24.2's quotation style converted as an ordinary paragraph.** It exports the style as
   `Block Quotation`, where older builds wrote `Quotations`, so every blockquote in a LibreOffice document
   lost its `> `. `block quotation` joins the quote names. Found by `tests/fixtures/libreoffice`'s first
