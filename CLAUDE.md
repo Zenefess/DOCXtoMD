@@ -1326,10 +1326,8 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough. At
-M10 they returned **157**, **118** and **1518** checks, over the **83** fixtures `make_fixtures.py`
-built, and all four were confirmed on Windows on 2026-09-23. At M11 they return **227**, **154** and
-**1614** checks over **118** fixtures -- the shim's numbers from Linux on 2026-09-23, which no Windows
-run has confirmed yet. The three check counts are the interesting ones: they are what
+M11 they return **227**, **154** and **1614** checks, over the **118** fixtures `make_fixtures.py`
+builds, and all four were confirmed on Windows on 2026-09-24. The three check counts are the interesting ones: they are what
 the shim measures on Linux, and at every milestone since M3 they have been exactly what the real MSVC
 binary then returned. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
 on both platforms -- and is recorded only so a run that builds a different number is noticed.
@@ -3079,7 +3077,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     both configurations build warning-free and every suite returns what the shim returned. What stays
     Linux-only is the other half of the pair, AddressSanitizer and UndefinedBehaviorSanitizer, neither
     of which is switched on in `DOCXtoMD.vcxproj`.
-- **M11 `[done-unverified]` Hostile-input hardening** — bombs, traversal, XXE, producer-variance fixtures
+- **M11 `[done]` Hostile-input hardening** — bombs, traversal, XXE, producer-variance fixtures
   (Google Docs / LibreOffice / Pandoc exports). **D10 lands here**: the milestone owns the question of what a ZIP
   *entry name* carrying `\`, a leading `/`, `..`, a drive letter or an NTFS stream suffix should do — refuse the
   archive, or normalise while building the part index — and the ruling defers it to this point precisely so the
@@ -3087,13 +3085,25 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   fixture for it; "we looked and left it alone" is an answer, silence is not. Note what is *not* deferred: a
   relationship **target** of any of those shapes is already refused by `OpcResolveTarget`, and no archive name has
   ever reached disk. DoD: as before, plus a fixture per decided entry-name shape.
-  **Status**: the code landed from Linux on 2026-09-23 as `[done-unverified]`. Nothing in it has been
-  compiled by MSVC or run on Windows, so the global DoD's bullet 1 -- zero warnings at `/W3` -- is
-  **unrun**, and so are the four commands under "Build & run" against the real binary. The next Windows
-  session verifies it: both x64 configurations, `python tests\make_fixtures.py` (118 fixtures),
-  `python tests\run_container.py` against Release and Debug (227 checks), `python tests\run_golden.py`
-  (154) and `tests\x64\Release\DOCXtoMD.Tests.exe` (1614). Those are the shim's numbers, and at every
-  milestone since M3 they have been what MSVC then returned.
+  **Status**: the code landed from Linux on 2026-09-23 as `[done-unverified]`, and the owner verified it
+  on Windows on 2026-09-24. Both x64 configurations build with **zero errors and zero warnings**;
+  `python tests\make_fixtures.py` builds all **118** fixtures; `python tests\run_container.py` passes all
+  **227** checks against `x64\Release` and all **227** again against `x64\Debug`;
+  `python tests\run_golden.py` passes all **154**; and `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
+  **1614**. Those runs discharge the two global bullets no Linux session can reach: bullet 1, zero
+  warnings at `/W3`, and bullet 4, where `run_golden.py` byte-compares the seven new golden pairs against
+  an `expected.md` written by hand. They discharge the milestone's own addition too: the six entry-name
+  fixtures D10 refuses are among `run_container.py`'s 227 checks, and the two it accepts are checked there
+  and byte-compared by `run_golden.py` against the minimal document. Bullets 2, 3 and 5 are mechanical
+  and were checked on Linux, so the marker is `[done]` with nothing outstanding.
+  - **The three tallies are the shim's, exactly.** 227, 154 and 1614, the same three numbers in the
+    same order a Linux session measured before any of this reached a Windows machine, and the fixture
+    count with them. That is the **ninth** milestone running where the shim predicted the real MSVC
+    binary rather than only itself -- and it is worth what it costs precisely because it proves nothing
+    about `/W3`, `/sdl`, `/arch:AVX2` or the real `include/` headers, which is what the owner's run
+    covers instead. The Debug run carries its own half of that: `/RTCu` is where an indeterminate read
+    surfaces. M11 grew no `al32` structure -- `IR_ROW`, `ZIP_READER` and three `StyleModel` records
+    grew, and none is one -- so `mzero`'s aligned 256-bit path met nothing new.
   - **What the milestone is, in one line**: decision D10 answered and pinned, the producer corpus the
     roadmap names turned into golden fixtures and the defects it found fixed, every structural cap driven
     from both sides, and the three Known gaps M9 left for it -- the column cap's case, `w:gridBefore` and
@@ -3163,10 +3173,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     normalisation had already turned into a space -- and is now pinned with `&#9;`; the other two are the
     save and the restore of the VML-rule flag around a paragraph, which no input can reach, and are
     recorded under Known gaps beside M6's classification save for the same reason.
-  - **What a Linux session could not reach**: `/W3` and its zero-warnings requirement, `/sdl`, `/RTCu`,
-    `/arch:AVX2` and the real `include/` headers. Those are the next Windows session's to confirm, and the
-    shim's agreement with MSVC at eight milestones running is a reason to expect the counts to hold, not
-    evidence that they do.
+  - **What a Linux session could not reach, and what the owner's Windows run then covered**: `/W3` and
+    its zero-warnings requirement, `/sdl`, `/RTCu`, `/arch:AVX2` and the real `include/` headers. All of
+    it is now covered: both configurations build warning-free and every suite returns what the shim
+    returned. What stays Linux-only is the other half of the pair, AddressSanitizer and
+    UndefinedBehaviorSanitizer, neither of which is switched on in `DOCXtoMD.vcxproj`.
 - **M12 `[todo]` CI** — GitHub Actions `windows-latest`: msbuild x64 Release (the only platform) +
   fixture build + golden runner. **D11 lands here too**: commit the mechanical GCS validator every session since M1
   has written into a scratch directory and thrown away — r17 prolog regexes, 3-space indent, no tabs, ASCII,
