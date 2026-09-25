@@ -3,10 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-09-23
  * Description: Unit tests for OpcPackage's pure core: relationship target resolution and rels naming.
  * To Do: 1) Drive OpcOpen from an in-memory archive, once a fixture can be built without touching disk.
- *        2) Add the producer-shaped packages (Google Docs, LibreOffice, Pandoc) when M11 collects them.
+ *        2) Resolve the producer packages M11 collected in tests/fixtures -- pandoc, libreoffice and the
+ *           rest -- from literals; today only the goldens reach their relationship parts.
  * Dependencies: BuildGuards.h, Check.h, OpcPackage.h, typedefs.h, memory management.h, windows.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant

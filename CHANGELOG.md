@@ -8,6 +8,73 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M11, hostile-input hardening.** The third milestone running that added **no module**: decision D10's
+  answer is a check in `ZipReader`, the producer quirks are rules in `StyleModel`, `NumberingModel` and
+  `DocWalker`, and the table and amplification limits are bounds in `Ir`, `DocWalker`, `RunCoalescer`
+  and `MdEmitter`. What it did add is thirty-three fixtures, seven of them golden part trees, and the
+  thirteenth unit suite, `TestZipReader`.
+- **Decision D10, answered: an entry name shaped like a way out of the package refuses the archive.**
+  `ZipCheckEntryName` holds five rules, in the order `ZIP_NAME_RULE` declares them -- a drive letter, a
+  leading `/`, a `\` anywhere, any other `:` (an NTFS alternate data stream), and a `.` or `..` segment --
+  and `ZipParseCentral` applies them to every name in the central directory, whether or not anything would
+  ever look the entry up, returning the new `ZIP_ERROR_NAME`. A directory entry's trailing `/` and an empty
+  interior segment are accepted. The refusal is exit 3, and its sentence names the rule and then the
+  entry, with every byte below a space or equal to 0x7F printed as `?`, because an entry name is
+  attacker-controlled and a carriage return or an escape sequence in one would forge a console line.
+  The evidence is a survey of twenty variants: LibreOffice 24.2.7 refuses and accepts exactly the same
+  twenty, python-docx 1.2 and pandoc 3.9 each accept some refused shapes and refuse others, and none of
+  the three producers M11 could run writes a refused shape. Pinned by six fixtures that must be refused --
+  `entry-backslash` (every separator a backslash, the shape PowerShell's `Compress-Archive` writes),
+  `entry-absolute`, `entry-dot-prefix` (every name under `./`, which pandoc reads), `entry-traversal`,
+  `entry-drive-letter` and `entry-stream` -- and two that must convert to the minimal document's own
+  bytes, `directory-entries` and `empty-segment-entry`.
+- **`tests/unit/TestZipReader.cpp`**, the thirteenth suite: every rule of `ZipCheckEntryName`, including the
+  order in which a name breaking several reports, the whole entry-name sentence table and four of
+  `ZipResultText`'s other sentences pinned against their enum rows, and the composed message -- the rule, the
+  name, the control-byte replacement and the truncation at the reader's 512-byte buffer. It runs first, because
+  the container is the first stage a document meets.
+- **Producer-variance goldens.** Five part trees are real exports, unzipped byte for byte: `pandoc` (pandoc 3.9
+  from Markdown), `libreoffice` (LibreOffice 24.2.7 from pandoc's ODT of the same Markdown), `pandocrules`
+  (pandoc's list continuations, a code block in an item and its thematic break), `libreofficelists` (the same
+  through LibreOffice) and `libreofficehtml` (LibreOffice's HTML import). `gdocslike` is **hand-authored** to
+  `docs/CONVERSION_REFERENCE.md` 5.10's Google Docs row -- no Google Docs export was available -- and says so in
+  its own name. Each `expected.md` was written by hand. `pandoc` and `gdocslike` matched on their first run;
+  `libreoffice` did not, and the two lines it failed on were one converter defect (the quote style below) and
+  one error in the hand-written file, whose delimiter row had lost the `:---` LibreOffice's `w:jc="left"` asks
+  for. `pandocrules`, `libreofficelists` and `libreofficehtml` were written after the probes that converted
+  their documents: the first and last pin the defects those probes found, and `libreofficelists` pins Known gap
+  (2).
+- **`w:gridBefore` and `w:gridAfter`** (`tests/fixtures/tablegrid`). A row that declares it starts part-way
+  across the grid -- which Word writes for an indented row and for one whose leading cells were deleted --
+  now has its first cell in the column the row names, with empty cells before it, and its trailing columns
+  count toward the table's width. `IR_ROW` carries both as `skipBefore` and `skipAfter`, clamped to
+  `IR_MAX_COLUMNS`, and `IrNextColumn` is where a cell's column now comes from. The gap-filling loops in
+  `MdEmitPipeRow` and `MdEmitTableHtml`, which M9 kept although no input could reach them, now run.
+- **Mapping row 25's two other spellings.** A VML shape carrying `o:hr="t"` or `o:hr="true"` in an otherwise
+  empty paragraph is a horizontal rule -- it is what pandoc writes for a thematic break and what Word's
+  Insert Horizontal Line writes. And a `w:pBdr` in a paragraph's **style chain** counts where the paragraph
+  carries none of its own, folding nearest-wins through `w:basedOn`: LibreOffice's HTML import puts an
+  `<hr>`'s border in its `Horizontal Line` style and nothing in the paragraph. A paragraph's own `w:pBdr`
+  still wins outright, and a style's border speaks for an ordinary paragraph only, never for a heading.
+- A numbering level whose `w:lvlText` is **non-empty and nothing but blank space** -- spaces, tabs,
+  U+00A0 -- is a marker-less continuation, `NUM_FORMAT_PLAIN`, whatever its `w:numFmt` says, unless the
+  level draws a picture bullet. That is how pandoc marks a list item's second paragraph. An **empty**
+  `w:lvlText` keeps what `w:numFmt` says, because `tests/fixtures/tablecells` was verified on Windows
+  reading one as a bullet.
+- **Fixtures that drive the styles, numbering and tokenizer caps from both sides.** `most-abstract-nums`,
+  `most-nums` and `most-styles` hold exactly `NUM_MAX_ABSTRACT`, `NUM_MAX_NUMS` and `STYLE_MAX_STYLES` and
+  convert to the minimal document's bytes; `too-many-abstract-nums`, `too-many-nums` and `too-many-styles` hold
+  one more and are refused naming the part. `deepest-nesting`, `most-attributes` and `most-namespaces` sit
+  exactly at `XML_MAX_DEPTH`, `XML_MAX_ATTRIBUTES` and `XML_MAX_NAMESPACES`, and their `too-` twins one past.
+  `TestNumberingModel` drives `NUM_MAX_DELEGATE` at 0, 1, 16 and 17 hops of a `w:numStyleLink` chain, and
+  `TestDocWalker` and `TestMdEmitter` drive `IR_MAX_COLUMNS` with a row wider than the cap.
+- **A document type declaration in every part it can reach, not only the body**: `xxe-content-types`,
+  `xxe-package-rels`, `xxe-footnotes` declare an external entity, and `billion-laughs` puts the expansion in
+  `word/styles.xml`. Each is refused where the `<!DOCTYPE` stands and the sentence names the part.
+  `bad-styles-root` and `bad-numbering-root` pin the root sentences the same way.
+- The one reader for a `w:pBdr` moved from `DocWalker`, where it was `DocReadBorders`, to `StyleModel` as
+  `StyleReadBorders` so that a paragraph's borders and a style's cannot come to disagree about what row 25's
+  pattern is.
 - **M10, fields, notes and tracked changes.** The second milestone running that added **no module**: a
   field is a state the walk carries, a revision is a rule the walk applies, and a note is a run of
   ordinary blocks with a record beside them. `Ir` grew a span kind and a record array, `DocWalker` the
@@ -366,6 +433,28 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   nothing.
 
 ### Changed
+- **A cell that would start at or past column 256 is skipped whole**, before any of it is stored:
+  `DocWalkCell` asks `IrNextColumn` first. It is the cap on cells per row that M9's review asked for, and
+  it is `IR_MAX_COLUMNS` rather than a second number, because a cell past the emitted grid is one no reader
+  could ever see -- M9 kept its record, its content, and every picture, list item and note reference in
+  it, and a picture there was still extracted to disk. On the shim, a part of 4,000,000 `<w:tc/>` (28 MB)
+  peaked at 151 MB before and 55 MB after, measured with a scratch probe the commit does not carry, so
+  `bench/` is still owed.
+- **`RunCoalesce` reserves what the rebuild can actually write.** It reserved `RUN_SPLIT_MAX` span slots
+  for every span; it now counts, after the merge, `RUN_SPLIT_MAX` for a formatted text span outside a
+  fence and one for anything else. The merge also drops a break that directly follows a break outside a
+  fence, which the emitter was already collapsing, so no output byte changes. Together they took a part
+  of 4,000,000 consecutive `<w:br/>` (28 MB) from a 238 MB peak to 151 MB on the shim, by the same scratch
+  probe. Breaks separated by text are untouched: 76 MB of `<w:t>a</w:t><w:br/>` still peaks at 521 MB.
+- `IR_ROW` grew from twelve bytes to sixteen to carry `skipBefore` and `skipAfter` as 16-bit counts,
+  which a `static_assert` ties to `IR_MAX_COLUMNS`. An empty `<w:tr/>` is seven bytes, so a part of
+  4,000,000 of them now peaks at 164 MB rather than 152 MB on the shim.
+- `IrBeginRow` takes the row's `w:gridBefore` and `w:gridAfter`, and `IrEndTable` measures a row's reach
+  as its last cell's end plus its `w:gridAfter` -- or, for a row of no cells, the two together.
+- `ZipResultText` takes a mutable reader, because an entry-name refusal is composed in the reader's own
+  buffer, and `ZIP_READER` carries the rule, the refused name and that buffer.
+- `DocReadParagraphProperties` reports a paragraph's borders as a tri-state -- a rule, some other border,
+  or nothing said -- so that `DocSettleParagraph` can fall back to the style chain's border.
 - The walk's sentence for a part that is not well-formed XML now **names the part**, because a walk
   reads more than one, and so does its new sentence for a notes part whose root is not the story its
   relationship names: `DocWalkResultText` appends `, in <part>` to both. A malformed body now reads
@@ -604,6 +693,35 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- **Fifty-five statements about M11 that were wrong.** A read-only audit put every M11 claim in CLAUDE.md,
+  this file, `docs/CONVERSION_REFERENCE.md` and the comments of `src/` and `tests/` against the repository.
+  Among what it corrected: four comments that described the opposite of the code (a blank-marker level is not
+  counted, cells per row are capped, 0x7F is replaced like the bytes below a space, and delegation resolves
+  on a definition with no `w:numStyleLink`), the claim that every structural cap is driven from both sides,
+  and a table width that now counts a row's `w:gridAfter`.
+- **LibreOffice 24.2's quotation style converted as an ordinary paragraph.** It exports the style as
+  `Block Quotation`, where older builds wrote `Quotations`, so every blockquote in a LibreOffice document
+  lost its `> `. `block quotation` joins the quote names. Found by `tests/fixtures/libreoffice`'s first
+  run, and pinned by it and by `libreofficehtml`.
+- **pandoc's list continuations became bullet items.** pandoc writes a list item's second paragraph as a
+  `w:numPr` naming a bullet level whose `w:lvlText` is one space, and each came out as a new `- ` item --
+  a code block in an item became a bulleted fence, and an ordered list's second paragraph a bullet between
+  two numbers. They are marker-less continuations now, indented under their item. Pinned by `pandocrules`.
+- **A horizontal rule written as VML, or carried by a style, vanished.** pandoc's thematic break and
+  LibreOffice's imported `<hr>` both came out as nothing: the first is a drawing container with no picture
+  in it, which M7 rightly turns into nothing, and the second is an empty paragraph whose border only its
+  style declares. Both are `---` now. Pinned by `pandocrules` and `libreofficehtml`.
+- **A row carrying `w:gridBefore` slid its cells left**, into the columns the row had said to leave empty,
+  and a table whose width came only from a `w:gridAfter` was written narrower than its rows. Pinned by
+  `tablegrid`, and by `TestMdEmitter` for the raw-HTML form.
+- **A raw-HTML cell at the edge of the 256-column cap could write a `colspan` past the grid**, making its
+  row wider than every other. Found by M11's generated-table run and pinned by `TestMdEmitter`: a cell is
+  now written as wide as the columns left to it.
+- **A styles or numbering part refused for its content named no part.** The fix after M10's verification
+  named the part for a malformed one, but a part whose root was not `w:styles` or `w:numbering`, or which
+  declared more than its cap, still said only "the style part" or "the numbering part". Every refusal
+  but a failed allocation now goes through `OpcMessageIn`. Found by the cap fixtures above, which assert
+  the part name.
 - A **malformed styles or numbering part was refused without naming it.** `StyleResultText` and
   `NumResultText` returned `XmlResultText`'s bare sentence -- "not a valid DOCX; a part ends in the middle
   of an element" -- while every other refusal names the part that broke, and both parts are found through

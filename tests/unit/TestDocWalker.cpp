@@ -899,6 +899,71 @@ void TestDocWalker(void) {
       CHECK(TracedAs(nullptr, joined, "T1-{(P{[a]})}"));
    }
 
+   CheckGroup("DocWalker: a table wider than IR_MAX_COLUMNS");
+   {
+      static char wide[65536];
+      static char wanted[4096];
+      ui64        used = 0;
+      ui64        at   = 0;
+
+      // A w:tblGrid declaring one column more than the cap stops counting at the cap, and so does one
+      // w:gridSpan wider than the whole of it: a table is IR_MAX_COLUMNS wide at the most.
+      wide[0] = 0;
+      WalkAppend(wide, sizeof(wide), &used, "<w:tbl><w:tblGrid>");
+      for(ui32 column = 0; column <= IR_MAX_COLUMNS; ++column) WalkAppend(wide, sizeof(wide), &used, "<w:gridCol/>");
+      WalkAppend(wide, sizeof(wide), &used, "</w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>");
+      wanted[0] = 0;
+      WalkAppend(wanted, sizeof(wanted), &at, "T256");
+      for(ui32 column = 0; column < IR_MAX_COLUMNS; ++column) WalkAppend(wanted, sizeof(wanted), &at, "-");
+      WalkAppend(wanted, sizeof(wanted), &at, "{(P{[x]})}");
+      CHECK(TracedAs(nullptr, wide, wanted));
+
+      wanted[0] = 0;
+      at        = 0;
+      WalkAppend(wanted, sizeof(wanted), &at, "T256");
+      for(ui32 column = 0; column < IR_MAX_COLUMNS; ++column) WalkAppend(wanted, sizeof(wanted), &at, "-");
+      WalkAppend(wanted, sizeof(wanted), &at, "m{(256:P{[x]})}");
+      cchptr spanning = "<w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val=\"257\"/></w:tcPr><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+
+      CHECK(TracedAs(nullptr, spanning, wanted));
+
+      // A row holding more cells than the grid can have. Every cell that starts at or past the cap is
+      // skipped whole, content and all -- here the picture a reader could never have seen, which used
+      // to be planned and extracted like any other -- and the cells before the cap are untouched.
+      used    = 0;
+      wide[0] = 0;
+      WalkAppend(wide, sizeof(wide), &used, "<w:tbl><w:tr>");
+      for(ui32 column = 0; column < IR_MAX_COLUMNS - 1u; ++column) WalkAppend(wide, sizeof(wide), &used, "<w:tc/>");
+      WalkAppend(wide, sizeof(wide), &used, "<w:tc><w:p><w:r><w:t>last</w:t></w:r></w:p></w:tc>");
+      WalkAppend(wide, sizeof(wide), &used, "<w:tc><w:p><w:r><w:t>past</w:t></w:r></w:p>");
+      WalkAppend(wide, sizeof(wide), &used, DRAWING_OPEN "descr=\"lost\"" DRAWING_BLIP "r:embed=\"rId1\"" DRAWING_SHUT "</w:tc>");
+      WalkAppend(wide, sizeof(wide), &used, "<w:tc><w:p><w:r><w:t>further</w:t></w:r></w:p></w:tc></w:tr></w:tbl>");
+      wanted[0] = 0;
+      at        = 0;
+      WalkAppend(wanted, sizeof(wanted), &at, "T256");
+      for(ui32 column = 0; column < IR_MAX_COLUMNS; ++column) WalkAppend(wanted, sizeof(wanted), &at, "-");
+      WalkAppend(wanted, sizeof(wanted), &at, "{");
+      for(ui32 column = 0; column < IR_MAX_COLUMNS - 1u; ++column) WalkAppend(wanted, sizeof(wanted), &at, "()");
+      WalkAppend(wanted, sizeof(wanted), &at, "(P{[last]})}");
+      CHECK(TracedAs(nullptr, wide, wanted));
+      // A w:gridBefore reaching the cap leaves no room for any cell of its row at all, and the row's own
+      // reach is what makes the table as wide as it says.
+      wanted[0] = 0;
+      at        = 0;
+      WalkAppend(wanted, sizeof(wanted), &at, "T256");
+      for(ui32 column = 0; column < IR_MAX_COLUMNS; ++column) WalkAppend(wanted, sizeof(wanted), &at, "-");
+      WalkAppend(wanted, sizeof(wanted), &at, "{}");
+      CHECK(TracedAs(nullptr,
+                     "<w:tbl><w:tr><w:trPr><w:gridBefore w:val=\"999\"/></w:trPr>"
+                     "<w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                     wanted));
+      // And a w:gridBefore and w:gridAfter widen a table the way a cell reaching past the grid does.
+      CHECK(TracedAs(nullptr,
+                     "<w:tbl><w:tr><w:trPr><w:gridBefore w:val=\"1\"/><w:gridAfter w:val=\"1\"/></w:trPr>"
+                     "<w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+                     "T3---{(P{[x]})}"));
+   }
+
    CheckGroup("DocWalker: a table nested past the cap is dropped");
    {
       char deep[4096];
@@ -1328,6 +1393,42 @@ void TestDocWalker(void) {
                   "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr>"
                   "<w:r><w:t xml:space=\"preserve\">  </w:t></w:r></w:p>",
                   "R{}"));
+   // The border may live in the paragraph's style, which is where LibreOffice's Horizontal Line style
+   // keeps it, and it folds down a w:basedOn chain like any other paragraph property.
+   constexpr cchptr RULED_STYLE = "<w:style w:type=\"paragraph\" w:styleId=\"HL\"><w:name w:val=\"Horizontal Line\"/>"
+                                  "<w:pPr><w:pBdr><w:bottom w:val=\"double\"/></w:pBdr></w:pPr></w:style>"
+                                  "<w:style w:type=\"paragraph\" w:styleId=\"HL2\"><w:basedOn w:val=\"HL\"/></w:style>"
+                                  "<w:style w:type=\"paragraph\" w:styleId=\"H1\"><w:name w:val=\"heading 1\"/>"
+                                  "<w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:style>";
+
+   CHECK(TracedAs(RULED_STYLE, "<w:p><w:pPr><w:pStyle w:val=\"HL\"/></w:pPr><w:r/></w:p>", "R{}"));
+   CHECK(TracedAs(RULED_STYLE, "<w:p><w:pPr><w:pStyle w:val=\"HL2\"/></w:pPr></w:p>", "R{}"));
+   CHECK(TracedAs(RULED_STYLE, "<w:p><w:pPr><w:pStyle w:val=\"HL\"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "P{[a]}"));
+   // The paragraph's own w:pBdr wins outright over its style's, in both directions.
+   CHECK(TracedAs(RULED_STYLE,
+                  "<w:p><w:pPr><w:pStyle w:val=\"HL\"/>"
+                  "<w:pBdr><w:bottom w:val=\"none\"/></w:pBdr></w:pPr></w:p>",
+                  ""));
+   CHECK(TracedAs(RULED_STYLE,
+                  "<w:p><w:pPr><w:pStyle w:val=\"HL\"/>"
+                  "<w:pBdr><w:top w:val=\"single\"/></w:pBdr></w:pPr></w:p>",
+                  ""));
+   // A heading style's border is how a template draws its headings, so an empty heading is not a rule.
+   CHECK(TracedAs(RULED_STYLE, "<w:p><w:pPr><w:pStyle w:val=\"H1\"/></w:pPr></w:p>", ""));
+   // And the VML spelling, which Word's Insert Horizontal Line and pandoc's "***" both write: a shape
+   // carrying o:hr, in a paragraph that came to nothing. A shape without it is a drawing and nothing more.
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:pict><v:rect o:hr=\"t\" o:hrstd=\"t\"/></w:pict></w:r></w:p>", "R{}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:pict><v:rect o:hr=\"true\"/></w:pict></w:r></w:p>", "R{}"));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:pict><v:rect o:hr=\"f\"/></w:pict></w:r></w:p>", ""));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:pict><v:rect/></w:pict></w:r></w:p>", ""));
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:t>a</w:t></w:r><w:r><w:pict><v:rect o:hr=\"t\"/></w:pict></w:r></w:p>", "P{[a]}"));
+   // A rule drawn inside a discarded mc:Choice is not drawn: the Fallback is what the paragraph holds.
+   CHECK(TracedAs(nullptr,
+                  "<w:p><mc:AlternateContent><mc:Choice Requires=\"w14\"><w:r><w:pict><v:rect o:hr=\"t\"/></w:pict></w:r>"
+                  "</mc:Choice><mc:Fallback/></mc:AlternateContent></w:p>",
+                  ""));
+   // And the verdict is the paragraph's own: a rule in one paragraph does not reach the next.
+   CHECK(TracedAs(nullptr, "<w:p><w:r><w:pict><v:rect o:hr=\"t\"/></w:pict></w:r></w:p><w:p/>", "R{}"));
    CHECK(TracedAs(nullptr,
                   "<w:p><w:r><w:t>a</w:t></w:r></w:p>"
                   "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>"

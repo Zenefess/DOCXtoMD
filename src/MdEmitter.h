@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: The Markdown emitter: one growable UTF-8 buffer, line assembly and the delimiter rules.
  * To Do: 1) Size the buffer from the part's byte count rather than growing from a fixed first block.
  *        2) Emit an image's wp:extent size as an HTML img element where a document depends on it (row 23).
@@ -170,9 +170,9 @@ void MdClose(MD_EMITTERptrc emitter);
 ///       CommonMark HTML block runs to the next blank line and passes every byte of itself through
 ///       unparsed: emphasis becomes <strong> and <em>, a code span <code>, a link an <a href> and a
 ///       break a <br>, and text takes MD_CONTEXT_HTML_BLOCK, where the only escapes are entities.
-/// @note The delimiter row is what makes a pipe table a table at all: GFM reads one only where the
-///       delimiter row has exactly as many cells as the header, so the width every row is padded to is
-///       the wider of what w:tblGrid declares and what the widest row's cells actually reach.
+/// @note The delimiter row is what makes a pipe table a table at all: GFM reads one only where the delimiter
+///       row has exactly as many cells as the header, so the width every row is padded to is the wider of what
+///       w:tblGrid declares and what the widest row actually reaches, its w:gridAfter included.
 /// @note What M10's notes emit. A reference is "[^n]", where n is the label LinkResolveNotes gave its
 ///       note, and the definitions follow the body in label order, each "[^n]: " and its first line with
 ///       every later line of it indented four columns -- a definition is a container like a list item,

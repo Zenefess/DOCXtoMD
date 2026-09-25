@@ -65,10 +65,11 @@ def check(exe, args, expected, matches, why, failures):
     print("ok    %-28s exit %d  %s" % (args[-1] if args else "<no arguments>", code, why))
 
 
-# Fixtures whose word/document.xml is the part tree's file unaltered, so an independent reader must
-# produce exactly those bytes. The rest deliberately carry a grown or repeated body, and duplicate-names
-# is excluded on purpose: zipfile takes the last record of a repeated name and ZipReader documents taking
-# the first, which is a divergence rather than a defect.
+# Fixtures whose word/document.xml is the part tree's file unaltered, so an independent reader must produce
+# exactly those bytes. The rest are read back without their body being compared -- some carry a grown,
+# repeated or different body, some this one unaltered -- and duplicate-names is excluded on purpose: zipfile
+# takes the last record of a repeated name and ZipReader documents taking the first, which is a divergence
+# rather than a defect.
 SAME_BODY = ["minimal-stored.docx", "minimal-deflated.docx", "fixed-huffman.docx", "zip64.docx",
              "data-descriptor.docx", "with-comment.docx"]
 

@@ -3,11 +3,11 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-10
+ * Last Modified: 2026-09-23
  * Description: Unit tests for name normalization, role detection, basedOn folding and the toggle XOR.
  * To Do: 1) Drive a w:numPr in w:docDefaults once StyleModel carries one, which today it deliberately
  *           does not -- see the To Do on the declaration and the guard such a fold would need.
- *        2) Add a case per producer from CONVERSION_REFERENCE 5.10 as real exports are collected at M11.
+ *        2) Add a case per producer as the corpus grows; M11's LibreOffice and pandoc exports are below.
  * Dependencies: BuildGuards.h, Check.h, StyleModel.h, typedefs.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -131,6 +131,9 @@ void TestStyleModel(void) {
    CHECK(RoleIs("intense quote", STYLE_ROLE_QUOTE, 0u));
    CHECK(RoleIs("block text", STYLE_ROLE_QUOTE, 0u));
    CHECK(RoleIs("quotations", STYLE_ROLE_QUOTE, 0u));
+   CHECK(RoleIs("block quotation", STYLE_ROLE_QUOTE, 0u));  // LibreOffice 24.2's name for Quotations
+   CHECK(RoleIs("first paragraph", STYLE_ROLE_NORMAL, 0u)); // pandoc's and LibreOffice's, which are body text
+   CHECK(RoleIs("table heading", STYLE_ROLE_NORMAL, 0u));   // LibreOffice's, which is not a heading
    CHECK(RoleIs("source code", STYLE_ROLE_CODE, 0u));
    CHECK(RoleIs("preformatted text", STYLE_ROLE_CODE, 0u));
    CHECK(RoleIs("html preformatted", STYLE_ROLE_CODE, 0u));

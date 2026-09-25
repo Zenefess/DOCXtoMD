@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+<w:body>
+    <w:bookmarkStart w:id="15" w:name="producer-variance" />
+    <w:p><w:pPr><w:pStyle w:val="Heading1" /></w:pPr><w:r><w:t xml:space="preserve">Producer variance</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="FirstParagraph" /></w:pPr><w:r><w:t xml:space="preserve">This paragraph has</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:rPr><w:b /><w:bCs /></w:rPr><w:t xml:space="preserve">bold</w:t></w:r><w:r><w:t xml:space="preserve">,</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:rPr><w:i /><w:iCs /></w:rPr><w:t xml:space="preserve">italic</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t xml:space="preserve">and</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:rPr><w:rStyle w:val="VerbatimChar" /></w:rPr><w:t xml:space="preserve">code</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t xml:space="preserve">in it, and a</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:hyperlink r:id="rId9"><w:r><w:rPr><w:rStyle w:val="Hyperlink" /></w:rPr><w:t xml:space="preserve">link</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve">.</w:t></w:r></w:p>
+    <w:bookmarkStart w:id="14" w:name="a-list" />
+    <w:p><w:pPr><w:pStyle w:val="Heading2" /></w:pPr><w:r><w:t xml:space="preserve">A list</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Compact" /><w:numPr><w:ilvl w:val="0" /><w:numId w:val="1001" /></w:numPr></w:pPr><w:r><w:t xml:space="preserve">First bullet</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Compact" /><w:numPr><w:ilvl w:val="1" /><w:numId w:val="1002" /></w:numPr></w:pPr><w:r><w:t xml:space="preserve">Nested bullet</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Compact" /><w:numPr><w:ilvl w:val="0" /><w:numId w:val="1001" /></w:numPr></w:pPr><w:r><w:t xml:space="preserve">Second bullet</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Compact" /><w:numPr><w:ilvl w:val="0" /><w:numId w:val="1003" /></w:numPr></w:pPr><w:r><w:t xml:space="preserve">One</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Compact" /><w:numPr><w:ilvl w:val="0" /><w:numId w:val="1003" /></w:numPr></w:pPr><w:r><w:t xml:space="preserve">Two</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Compact" /><w:numPr><w:ilvl w:val="0" /><w:numId w:val="1003" /></w:numPr></w:pPr><w:r><w:t xml:space="preserve">Three</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="BlockText" /></w:pPr><w:r><w:t xml:space="preserve">A quotation that stands apart.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="SourceCode" /></w:pPr><w:r><w:rPr><w:rStyle w:val="VerbatimChar" /></w:rPr><w:t xml:space="preserve">code line one</w:t></w:r><w:r><w:br /></w:r><w:r><w:rPr><w:rStyle w:val="VerbatimChar" /></w:rPr><w:t xml:space="preserve">code line two</w:t></w:r></w:p>
+    <w:tbl><w:tblPr><w:tblStyle w:val="Table" /><w:tblW w:type="auto" w:w="0" /><w:tblLook w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="0" w:noVBand="0" w:val="0020" /></w:tblPr><w:tblGrid><w:gridCol w:w="3960" /><w:gridCol w:w="3960" /></w:tblGrid><w:tr><w:trPr><w:tblHeader w:val="on" /></w:trPr><w:tc><w:tcPr /><w:p><w:pPr><w:pStyle w:val="Compact" /></w:pPr><w:r><w:t xml:space="preserve">Name</w:t></w:r></w:p></w:tc><w:tc><w:tcPr /><w:p><w:pPr><w:pStyle w:val="Compact" /></w:pPr><w:r><w:t xml:space="preserve">Value</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:tcPr /><w:p><w:pPr><w:pStyle w:val="Compact" /></w:pPr><w:r><w:t xml:space="preserve">a</w:t></w:r></w:p></w:tc><w:tc><w:tcPr /><w:p><w:pPr><w:pStyle w:val="Compact" /></w:pPr><w:r><w:t xml:space="preserve">1</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:tcPr /><w:p><w:pPr><w:pStyle w:val="Compact" /></w:pPr><w:r><w:t xml:space="preserve">b</w:t></w:r></w:p></w:tc><w:tc><w:tcPr /><w:p><w:pPr><w:pStyle w:val="Compact" /></w:pPr><w:r><w:t xml:space="preserve">2</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:pPr><w:pStyle w:val="BodyText" /></w:pPr><w:r><w:t xml:space="preserve">A sentence with a footnote.</w:t></w:r><w:r><w:rPr><w:rStyle w:val="FootnoteReference" /></w:rPr><w:footnoteReference w:id="10" /></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="CaptionedFigure" /></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="50800" cy="50800" /><wp:effectExtent b="0" l="0" r="0" t="0" /><wp:docPr descr="A small square" title="" id="12" name="Picture" /><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr descr="square.png" id="13" name="Picture" /><pic:cNvPicPr><a:picLocks noChangeArrowheads="1" noChangeAspect="1" /></pic:cNvPicPr></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId11" /><a:stretch><a:fillRect /></a:stretch></pic:blipFill><pic:spPr bwMode="auto"><a:xfrm><a:off x="0" y="0" /><a:ext cx="50800" cy="50800" /></a:xfrm><a:prstGeom prst="rect"><a:avLst /></a:prstGeom><a:noFill /><a:ln w="9525"><a:noFill /><a:headEnd /><a:tailEnd /></a:ln></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="ImageCaption" /></w:pPr><w:r><w:t xml:space="preserve">A small square</w:t></w:r></w:p>
+    <w:bookmarkEnd w:id="14" />
+    <w:bookmarkEnd w:id="15" />
+    <w:sectPr>
+      <w:footnotePr>
+        
+                
+        <w:numRestart w:val="eachSect" />
+        
+              
+      </w:footnotePr>
+    </w:sectPr>
+  </w:body>
+</w:document>

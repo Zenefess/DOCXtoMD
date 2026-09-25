@@ -58,10 +58,11 @@ static_assert(sizeof(STYLE_TOGGLE_NAMES) / sizeof(STYLE_TOGGLE_NAMES[0]) == ui64
 // ones that make it a fenced code block (row 12). Row 13's w:ind >= 720 twips heuristic is deliberately
 // not implemented: the reference itself has it off by default, because an indent is ambiguous.
 static constexpr cchptr STYLE_QUOTE_NAMES[] = {
-    "quote",         // Word's built-in Quote
-    "intense quote", // Word's built-in Intense Quote
-    "block text",    // Word's built-in Block Text
-    "quotations"     // LibreOffice's own name for the same thing
+    "quote",          // Word's built-in Quote
+    "intense quote",  // Word's built-in Intense Quote
+    "block text",     // Word's built-in Block Text
+    "quotations",     // LibreOffice's own name for the same thing, as older builds export it
+    "block quotation" // and as LibreOffice 24.2 exports it, which tests/fixtures/libreoffice pins
 };
 
 static constexpr cchptr STYLE_CODE_BLOCK_NAMES[] = {
@@ -296,6 +297,7 @@ struct STYLE_LAYER {
    si32             outlineLvl; ///< What a w:pPr contributed, or -1
    si32             numId;      ///< What a w:pPr's w:numPr named, or -1; 0 is a value and not an absence
    si32             numLevel;   ///< What that w:numPr's w:ilvl named, or -1
+   si8              border;     ///< What a w:pPr's w:pBdr said: 1 row 25's rule, 0 any other, -1 none
 };
 
 typedef STYLE_LAYER *const STYLE_LAYERptrc;
@@ -306,6 +308,7 @@ static void StyleClearLayer(STYLE_LAYERptrc layer) {
    layer->outlineLvl = -1;
    layer->numId      = -1;
    layer->numLevel   = -1;
+   layer->border     = -1;
 }
 
 void StyleReadDirectProperty(XML_READERptrc reader, STYLE_DIRECT_RUNptrc direct) {
@@ -433,6 +436,50 @@ static cbool StyleReadNumbering(XML_READERptrc reader, STYLE_LAYERptrc layer) {
    }
 }
 
+// The two halves of CT_PBdr: the sides that make an empty paragraph a horizontal rule, and the sides that
+// say it is a box or a rule above rather than below. w:start and w:end belong to the table border types
+// and never appear in a paragraph's own w:pBdr.
+static constexpr cchptr STYLE_BORDERS_UNDER[]  = {"bottom", "between", nullptr};
+static constexpr cchptr STYLE_BORDERS_BESIDE[] = {"top", "left", "right", "bar", nullptr};
+
+// Whether the element the reader is on is one of a paragraph's border names, in the WordprocessingML
+// namespace, which is the one namespace a border may be spelled in.
+static cbool StyleIsBorder(XML_READERptrc reader, cchptrcptr names) {
+   for(ui64 index = 0; names[index]; ++index) {
+      if(XmlIsElement(reader, XML_NS_W, names[index])) return true;
+   }
+   return false;
+}
+
+cbool StyleReadBorders(XML_READERptrc reader, boolptrc rule) {
+   cui32 depthHere = reader->depth;
+   bool  below     = false;
+   bool  other     = false;
+
+   for(;;) {
+      cXML_TOKEN token = XmlNext(reader);
+
+      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
+      if(token == XML_TOKEN_END_ELEMENT && reader->depth == depthHere) {
+         *rule = below && !other;
+         return true;
+      }
+      if(token != XML_TOKEN_START_ELEMENT) continue;
+
+      cXML_TEXT value = XmlAttribute(reader, XML_NS_W, "val");
+      cbool     drawn = !XmlTextEqual(value, "none") && !XmlTextEqual(value, "nil");
+      cbool     under = StyleIsBorder(reader, STYLE_BORDERS_UNDER);
+      // The sides of CT_PBdr are tested by name rather than by exclusion. An element this build has
+      // never heard of -- a vendor extension, an mc:AlternateContent -- is ignored rather than counted
+      // as a border, which is the OOXML compatibility model: what is not understood gets no vote.
+      cbool beside = StyleIsBorder(reader, STYLE_BORDERS_BESIDE);
+
+      if(drawn && under) below = true;
+      else if(drawn && beside) other = true;
+      if(!XmlSkipElement(reader)) return false;
+   }
+}
+
 // Walks the children of the w:pPr the reader is on.
 static cbool StyleReadParagraphBag(XML_READERptrc reader, STYLE_LAYERptrc layer) {
    cui32 containerDepth = reader->depth;
@@ -445,6 +492,14 @@ static cbool StyleReadParagraphBag(XML_READERptrc reader, STYLE_LAYERptrc layer)
       if(token != XML_TOKEN_START_ELEMENT) continue;
       if(XmlIsElement(reader, XML_NS_W, "numPr")) {
          if(!StyleReadNumbering(reader, layer)) return false;
+         continue;
+      }
+      // Consumed by its reader for the same reason as w:numPr: its borders are children, not attributes.
+      if(XmlIsElement(reader, XML_NS_W, "pBdr")) {
+         bool rule = false;
+
+         if(!StyleReadBorders(reader, &rule)) return false;
+         layer->border = (rule ? 1 : 0);
          continue;
       }
       StyleReadParagraphProperty(reader, layer);
@@ -546,6 +601,7 @@ static cbool StyleReadStyle(STYLE_MODELptrc model, XML_READERptrc reader, boolpt
    record->outlineLvl   = marks.outlineLvl;
    record->numId        = marks.numId;
    record->numLevel     = marks.numLevel;
+   record->border       = marks.border;
    record->role         = role;
    record->headingLevel = level;
    record->doubleStrike = runs.run.doubleStrike;
@@ -711,6 +767,7 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
    resolved->outlineLvl   = -1;
    resolved->numId        = -1;
    resolved->numLevel     = -1;
+   resolved->border       = -1;
    resolved->role         = STYLE_ROLE_NORMAL;
    resolved->headingLevel = 0;
    resolved->doubleStrike = -1;
@@ -729,6 +786,11 @@ static void StyleFoldChain(STYLE_MODELptrc model, cui32 index) {
       // of "no numbering" and has to be able to cancel what a w:basedOn parent supplied.
       if(record->numId >= 0) resolved->numId = record->numId;
       if(record->numLevel >= 0) resolved->numLevel = record->numLevel;
+      // A w:pBdr folds as one property rather than side by side, which is the approximation this reader
+      // makes: a style adding a top border to a parent's bottom one is drawn by Word as a box, and here
+      // the nearer w:pBdr simply decides. Row 25 asks about one pattern, and the nearer statement of
+      // a paragraph's borders is the one the author last made.
+      if(record->border >= 0) resolved->border = record->border;
       if(record->doubleStrike >= 0) resolved->doubleStrike = record->doubleStrike;
       if(record->webHidden >= 0) resolved->webHidden = record->webHidden;
       if(record->monospace >= 0) resolved->monospace = record->monospace;
@@ -916,7 +978,7 @@ cchptr StyleName(cSTYLE_MODELptr model, csi32 styleIndex) {
 }
 
 cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleIndex, csi32 directOutline, csi32 directNumId, csi32 directLevel) {
-   STYLE_PARAGRAPH_PROPS props = {-1, -1, STYLE_ROLE_NORMAL, 0};
+   STYLE_PARAGRAPH_PROPS props = {-1, -1, STYLE_ROLE_NORMAL, 0, -1};
 
    cbool              known    = (styleIndex >= 0 && ui32(styleIndex) < model->styleCount && model->resolved);
    cSTYLE_RESOLVEDptr resolved = (known ? model->resolved + styleIndex : nullptr);
@@ -926,6 +988,7 @@ cSTYLE_PARAGRAPH_PROPS StyleResolveParagraph(cSTYLE_MODELptr model, csi32 styleI
    // through on its own; see the note on the declaration for why the halves are not one property.
    props.numId    = (directNumId >= 0 ? directNumId : (resolved ? resolved->numId : -1));
    props.numLevel = (directLevel >= 0 ? directLevel : (resolved ? resolved->numLevel : -1));
+   props.border   = (resolved ? resolved->border : si8(-1));
 
    if(resolved && resolved->role == STYLE_ROLE_HEADING) {
       props.role         = STYLE_ROLE_HEADING;
@@ -1035,5 +1098,9 @@ cchptr StyleResultText(OPC_PACKAGEptrc package, cSTYLE_MODELptr model, cSTYLE_RE
    // of an element" does not say which, and the styles part is found through a relationship, not by name.
    if(result == STYLE_ERROR_XML && model && model->lastXml != XML_OK) return OpcMessageIn(package, XmlResultText(model->lastXml), model->part);
    if(result < 0 || result >= STYLE_RESULT_COUNT) return "the style part could not be read";
+   // So does every other sentence about the part's content -- a root that is not w:styles, and more styles
+   // than the cap allows, which M11's generated fixtures found saying neither which part nor where. A
+   // failed allocation is this program's problem rather than the part's, and names nothing.
+   if(result != STYLE_OK && result != STYLE_ERROR_MEMORY && model) return OpcMessageIn(package, STYLE_RESULT_TEXT[result], model->part);
    return STYLE_RESULT_TEXT[result];
 }

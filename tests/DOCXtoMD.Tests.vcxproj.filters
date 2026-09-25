@@ -107,6 +107,9 @@
     <ClCompile Include="unit\TestXmlPull.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="unit\TestZipReader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\BuildGuards.h">

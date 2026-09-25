@@ -564,6 +564,54 @@ def build_all(verbose=True, writing=True):
            "five thousand Override rows, past the content-types cap and inside every byte cap", sound=True)
 
 
+    # -- entry names, which is decision D10 answered at M11. A name shaped like a way out of the package
+    # refuses the archive whether or not anything would ever look it up: LibreOffice 24.2 refuses exactly this
+    # set, and none of the producers a session could run writes any of it. Each rule gets a fixture, and three
+    # of them rewrite every name in the package rather than adding a lone extra entry, two of those in the
+    # shape a real tool produces -- Windows PowerShell's Compress-Archive writes every separator as a
+    # backslash, and an archiver handed "." as its root can prefix every name with "./", which pandoc 3.9
+    # reads and LibreOffice and this reader do not.
+
+    def extra_entry(name):
+        """The minimal package, whole and sound, with one more entry beside it that nothing references."""
+        return [make_entry(part, raw) for part, raw in parts] + [make_entry(name, b"<unreferenced/>")]
+
+    write("entry-backslash.docx", build_zip([make_entry(name.replace("/", "\\"), raw) for name, raw in parts]))
+    expect("entry-backslash.docx", 3, ["uses a backslash as a path separator", "_rels\\.rels"],
+           "every separator a backslash, the shape Compress-Archive writes", sound=True)
+
+    write("entry-absolute.docx", build_zip([make_entry("/" + name, raw) for name, raw in parts]))
+    expect("entry-absolute.docx", 3, ["is an absolute path", "/[Content_Types].xml"],
+           "every entry name with a leading slash", sound=True)
+
+    write("entry-dot-prefix.docx", build_zip([make_entry("./" + name, raw) for name, raw in parts]))
+    expect("entry-dot-prefix.docx", 3, ["holds a . or .. segment", "./[Content_Types].xml"],
+           "every entry name prefixed with ./, which pandoc reads and LibreOffice does not", sound=True)
+
+    write("entry-traversal.docx", build_zip(extra_entry("word/../../evil.xml")))
+    expect("entry-traversal.docx", 3, ["holds a . or .. segment", "word/../../evil.xml"],
+           "an unreferenced entry climbing out of the package", sound=True)
+
+    write("entry-drive-letter.docx", build_zip(extra_entry("C:/Windows/win.ini")))
+    expect("entry-drive-letter.docx", 3, ["begins with a drive letter", "C:/Windows/win.ini"],
+           "an unreferenced entry naming a Windows drive", sound=True)
+
+    write("entry-stream.docx", build_zip(extra_entry("word/document.xml:Zone.Identifier")))
+    expect("entry-stream.docx", 3, ["names an NTFS alternate data stream", "word/document.xml:Zone.Identifier"],
+           "an unreferenced entry naming an alternate data stream of the body", sound=True)
+
+    # What D10 does not refuse, which is as deliberate: a directory entry, which zip tools and Python's
+    # zipfile write routinely, and an empty interior segment, which no part name this reader resolves can
+    # have and which LibreOffice accepts too. Both convert to the minimal document's exact bytes.
+    folders = [make_entry(name, b"", method="store") for name in ["_rels/", "word/", "word/_rels/"]]
+    write("directory-entries.docx", build_zip(folders + [make_entry(name, raw) for name, raw in parts]))
+    expect("directory-entries.docx", 0, ["wrote", "directory-entries.md"],
+           "directory entries ending in a slash beside every part, which are not refused")
+
+    write("empty-segment-entry.docx", build_zip(extra_entry("word//unused.xml")))
+    expect("empty-segment-entry.docx", 0, ["wrote", "empty-segment-entry.md"],
+           "an unreferenced entry with an empty segment, which is inert and not refused")
+
     # -- containers that are not usable DOCX files. Every one exits 3.
 
     write("not-a-zip.docx", b"This file is plain text, not a ZIP archive, and is padded past 22 bytes.\n")
@@ -694,6 +742,8 @@ def build_all(verbose=True, writing=True):
                  "decoy-main-rel.docx", "mixed-case-names.docx", "duplicate-names.docx"]:
         golden(same, "minimal")
     golden("relocated-main.docx", "relocated")
+    golden("directory-entries.docx", "minimal")
+    golden("empty-segment-entry.docx", "minimal")
     # Which media file each extracting fixture must produce, and which part of its own tree the bytes
     # come from. The numbering is the order the document first draws each picture, which is what
     # MediaExtractor promises and the one thing a reader of the .md can check by eye.
@@ -702,14 +752,19 @@ def build_all(verbose=True, writing=True):
                             ("image3.gif", "word/media/logo.gif"),
                             ("image4.dat", "word/media/odd.dat"),
                             ("image5.jpg", "word/media/mystery.png")],
-                 "footnotes": [("image1.png", "word/media/pic.png")]}
+                 "footnotes": [("image1.png", "word/media/pic.png")],
+                 "pandoc": [("image1.png", "word/media/rId11.png")],
+                 "libreoffice": [("image1.png", "word/media/image1.png")],
+                 "gdocslike": [("image1.png", "word/media/image1.png")]}
 
     for case in ["headings", "toggles", "textflow", "nostyles", "wrappers", "dollars",
                  "fragments", "hoisting", "inline", "code", "quotes", "rules", "monodefault",
                  "monostyle", "links", "images", "anchors",
                  "lists", "listcounters", "listbroken", "liststyles",
-                 "tables", "tablemerges", "tablenested", "tablecells",
-                 "fields", "toc", "footnotes", "revisions"]:
+                 "tables", "tablemerges", "tablenested", "tablecells", "tablegrid",
+                 "fields", "toc", "footnotes", "revisions",
+                 "pandoc", "libreoffice", "gdocslike",
+                 "pandocrules", "libreofficelists", "libreofficehtml"]:
         tree = read_part_tree(case)
         write(case + ".docx", build_zip([make_entry(name, raw) for name, raw in tree]))
         expect(case + ".docx", 0, ["wrote", case + ".md"], "the %s golden fixture" % case)
@@ -754,6 +809,134 @@ def build_all(verbose=True, writing=True):
     write("bad-numbering.docx", build_zip([make_entry(name, raw) for name, raw in bad_numbering]))
     expect("bad-numbering.docx", 3, ["ends in the middle of an element", "word/numbering.xml"],
            "a numbering part whose root never closes", sound=True)
+
+    # -- the numbering part's two structural caps, which M8 declared and M11 drives. Each is driven on
+    # both sides of its boundary: exactly NUM_MAX_ABSTRACT or NUM_MAX_NUMS definitions are read, and the
+    # minimal document converts to its own bytes beside them because no paragraph names one of them; one
+    # definition more refuses the document, naming the part. A literal part this size is about a
+    # megabyte of source, which is why these are generated here and not written as trees or unit cases.
+    numbering_rel = (b'  <Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                     b'relationships/numbering" Target="numbering.xml"/>\n</Relationships>')
+
+    def numbered(abstracts, instances):
+        """The minimal package with a numbering part declaring the given counts of each definition."""
+        body = [b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                b'<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\n']
+        body += [b'<w:abstractNum w:abstractNumId="%d"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>'
+                 b'</w:abstractNum>\n' % index for index in range(abstracts)]
+        body += [b'<w:num w:numId="%d"><w:abstractNumId w:val="%d"/></w:num>\n' % (index + 1, index % max(abstracts, 1))
+                 for index in range(instances)]
+        body.append(b'</w:numbering>\n')
+        tree = swap(read_part_tree("minimal"), [("word/_rels/document.xml.rels", b"</Relationships>", numbering_rel)])
+        tree.append(("word/numbering.xml", b"".join(body)))
+        return build_zip([make_entry(name, raw) for name, raw in tree])
+
+    write("most-abstract-nums.docx", numbered(4096, 1))
+    expect("most-abstract-nums.docx", 0, ["wrote", "most-abstract-nums.md"],
+           "exactly NUM_MAX_ABSTRACT abstract definitions, which are read")
+    golden("most-abstract-nums.docx", "minimal")
+    write("too-many-abstract-nums.docx", numbered(4097, 1))
+    expect("too-many-abstract-nums.docx", 3, ["declares more definitions than this reader accepts", "word/numbering.xml"],
+           "one abstract definition past NUM_MAX_ABSTRACT, which refuses the document", sound=True)
+    write("most-nums.docx", numbered(1, 4096))
+    expect("most-nums.docx", 0, ["wrote", "most-nums.md"], "exactly NUM_MAX_NUMS list instances, which are read")
+    golden("most-nums.docx", "minimal")
+    write("too-many-nums.docx", numbered(1, 4097))
+    expect("too-many-nums.docx", 3, ["declares more definitions than this reader accepts", "word/numbering.xml"],
+           "one list instance past NUM_MAX_NUMS, which refuses the document", sound=True)
+
+    # The styles part's own cap, STYLE_MAX_STYLES, driven the same way: the minimal styles part carries two
+    # styles, and padding brings it to exactly the cap and to one past it.
+    def styled(total):
+        pads = b"".join(b'<w:style w:type="paragraph" w:styleId="Pad%05d"><w:name w:val="Pad %d"/></w:style>\n'
+                        % (index, index) for index in range(total - 2))
+        tree = swap(read_part_tree("minimal"), [("word/styles.xml", b"</w:styles>", pads + b"</w:styles>")])
+        return build_zip([make_entry(name, raw) for name, raw in tree])
+
+    write("most-styles.docx", styled(4096))
+    expect("most-styles.docx", 0, ["wrote", "most-styles.md"], "exactly STYLE_MAX_STYLES styles, which are read")
+    golden("most-styles.docx", "minimal")
+    write("too-many-styles.docx", styled(4097))
+    expect("too-many-styles.docx", 3, ["declares more styles than this reader accepts", "word/styles.xml"],
+           "one style past STYLE_MAX_STYLES, which refuses the document and names the part", sound=True)
+
+    # A styles or numbering part whose root is something else refuses the document too, and names the part:
+    # the root sentence says which kind of part it expected, and only the name says which part it read.
+    wrong_root = swap(read_part_tree("relocated"), [("shared/theme-styles.xml", b"<w:styles ", b"<w:notStyles "),
+                                                    ("shared/theme-styles.xml", b"</w:styles>", b"</w:notStyles>")])
+    write("bad-styles-root.docx", build_zip([make_entry(name, raw) for name, raw in wrong_root]))
+    expect("bad-styles-root.docx", 3, ["root element is not w:styles", "shared/theme-styles.xml"],
+           "a styles part whose root element is not w:styles", sound=True)
+
+    wrong_lists = swap(read_part_tree("lists"), [("word/numbering.xml", b"<w:numbering ", b"<w:notNumbering "),
+                                                 ("word/numbering.xml", b"</w:numbering>", b"</w:notNumbering>")])
+    write("bad-numbering-root.docx", build_zip([make_entry(name, raw) for name, raw in wrong_lists]))
+    expect("bad-numbering-root.docx", 3, ["root element is not w:numbering", "word/numbering.xml"],
+           "a numbering part whose root element is not w:numbering", sound=True)
+
+    # -- a document type declaration is refused in every part, not only in the body. XmlPull refuses one
+    # where it stands, before its internal subset is looked at, which is what makes an external entity and
+    # the billion-laughs expansion cost nothing -- and every part reaches a tokenizer through the one door
+    # that does it. These pin the door rather than the body: each sentence names the part it was found in.
+    xxe = b'?>\n<!DOCTYPE x [<!ENTITY secret SYSTEM "file:///etc/passwd">]>\n'
+    laughs = (b'?>\n<!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">'
+              b'<!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">]>\n')
+    for leaf, part, tree, prologue in [("xxe-content-types.docx", "[Content_Types].xml", "minimal", xxe),
+                                       ("xxe-package-rels.docx", "_rels/.rels", "minimal", xxe),
+                                       ("billion-laughs.docx", "word/styles.xml", "minimal", laughs),
+                                       ("xxe-footnotes.docx", "word/footnotes.xml", "footnotes", xxe)]:
+        hostile = swap(read_part_tree(tree), [(part, b"?>\n", prologue)])
+        write(leaf, build_zip([make_entry(name, raw) for name, raw in hostile]))
+        expect(leaf, 3, ["document type declaration", part],
+               "a DTD declaring entities in %s, refused where it stands" % part, sound=True)
+
+    # -- the tokenizer's three structural caps, each on both sides of its boundary. The accepted side has
+    # to convert to the minimal document's own bytes, which is what proves the cap is where it says and
+    # not merely somewhere below the refusal: XML_MAX_DEPTH open elements, XML_MAX_ATTRIBUTES attributes on
+    # one element, and XML_MAX_NAMESPACES bindings live at once.
+    body_open, body_rest = body.split(b"<w:body>")
+    paragraphs, section = body_rest.split(b"    <w:sectPr>")
+
+    def nested(pairs, singles):
+        """The minimal body's paragraphs inside pairs of w:sdt/w:sdtContent and single w:customXml."""
+        wrapped = (b"<w:sdt><w:sdtContent>" * pairs + b"<w:customXml>" * singles + paragraphs
+                   + b"</w:customXml>" * singles + b"</w:sdtContent></w:sdt>" * pairs)
+        doc = body_open + b"<w:body>" + wrapped + b"    <w:sectPr>" + section
+        tree = swap(read_part_tree("minimal"), [("word/document.xml", body, doc)])
+        return build_zip([make_entry(name, raw) for name, raw in tree])
+
+    # document, body, 2 x pairs, then w:p, w:r, w:rPr and w:b: the deepest element is 2 x pairs + 6.
+    write("deepest-nesting.docx", nested(125, 0))
+    expect("deepest-nesting.docx", 0, ["wrote", "deepest-nesting.md"], "elements nested exactly XML_MAX_DEPTH deep")
+    golden("deepest-nesting.docx", "minimal")
+    write("too-deep-nesting.docx", nested(125, 1))
+    expect("too-deep-nesting.docx", 3, ["nests elements deeper", "word/document.xml"],
+           "one element nested past XML_MAX_DEPTH", sound=True)
+
+    def attributed(count):
+        names = b"".join(b' a%d="x"' % index for index in range(count))
+        tree = swap(read_part_tree("minimal"), [("word/document.xml", b"<w:body>", b"<w:body" + names + b">")])
+        return build_zip([make_entry(name, raw) for name, raw in tree])
+
+    write("most-attributes.docx", attributed(128))
+    expect("most-attributes.docx", 0, ["wrote", "most-attributes.md"], "exactly XML_MAX_ATTRIBUTES attributes on one element")
+    golden("most-attributes.docx", "minimal")
+    write("too-many-attributes.docx", attributed(129))
+    expect("too-many-attributes.docx", 3, ["too many attributes", "word/document.xml"],
+           "one attribute past XML_MAX_ATTRIBUTES on one element", sound=True)
+
+    def bound(extra):
+        names = b"".join(b' xmlns:p%d="urn:p%d"' % (index, index) for index in range(extra))
+        tree = swap(read_part_tree("minimal"), [("word/document.xml", b'main">', b'main"' + names + b">")])
+        return build_zip([make_entry(name, raw) for name, raw in tree])
+
+    # The minimal body's root binds one prefix of its own, so 127 more is the cap exactly.
+    write("most-namespaces.docx", bound(127))
+    expect("most-namespaces.docx", 0, ["wrote", "most-namespaces.md"], "exactly XML_MAX_NAMESPACES bindings live at once")
+    golden("most-namespaces.docx", "minimal")
+    write("too-many-namespaces.docx", bound(128))
+    expect("too-many-namespaces.docx", 3, ["more XML namespaces at once", "word/document.xml"],
+           "one binding past XML_MAX_NAMESPACES", sound=True)
 
     # The other direction: a notes part nothing references is never read, so a malformed one costs the
     # document nothing -- and it has to produce exactly the bytes the minimal document produces. It is not

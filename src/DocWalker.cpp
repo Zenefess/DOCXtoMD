@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: The body and notes walk: wrappers, fields, paragraph classification, runs and run content into the IR.
  * To Do: 1) Choose an understood mc:Choice by its Requires prefix once an extension namespace is understood,
  *           and honour the mc:Ignorable and mc:ProcessContent *attributes*, which nothing reads today.
@@ -142,7 +142,7 @@ struct DOC_PARAGRAPH {
    si32          listId;    ///< The w:numId its w:numPr resolved to
    si32          listLevel; ///< Its w:ilvl, or 0
    bool          list;      ///< Whether it is an item of a list the document resolves
-   bool          rule;      ///< Whether its w:pBdr is mapping row 25's lone bottom border
+   bool          rule;      ///< Whether it drew mapping row 25's rule: a lone bottom border, or a VML one
    bool          sawText;   ///< Whether any of its runs produced a visible character
    bool          allMono;   ///< Whether every such run was set in a monospace family
    bool          quiet;     ///< Whether it began inside a field whose content is dropped
@@ -182,6 +182,7 @@ struct DOC_CONTEXT {
    bool            inLink;                                         ///< Whether a hyperlink is open around the content
    bool            sawText;                                        ///< Whether the paragraph being walked produced any text
    bool            allMono;                                        ///< Whether every text-bearing run of it was monospace
+   bool            drewRule;                                       ///< Whether it held a VML horizontal rule, o:hr
    bool            memory;                                         ///< Whether an allocation failed; sticky once set
 };
 
@@ -1022,6 +1023,7 @@ static cbool DocWalkImage(DOC_CONTEXTptrc context) {
    ui32     fillDepth = 0;
    bool     altTaken  = false;
    bool     refTaken  = false;
+   bool     ruled     = false;
 
    // An image carries no formatting of its own: bold around a picture renders nothing, and a delimiter
    // pair with an image between it is one more thing for the flanking rules to fail on.
@@ -1061,9 +1063,17 @@ static cbool DocWalkImage(DOC_CONTEXTptrc context) {
       }
       if(!DocIsNamed(context->reader, XML_NS_V, DOC_VML_SHAPES)) continue;
       if(!DocTakeAlt(context, XML_NS_NONE, DOC_VML_ALT, &altTaken)) return false;
+      // Mapping row 25's other spelling: a VML shape carrying o:hr is the horizontal rule Word's
+      // Insert Horizontal Line writes and pandoc writes for "***". VML spells a boolean t or true.
+      cXML_TEXT line = XmlAttribute(context->reader, XML_NS_O, "hr");
+
+      if(XmlTextEqual(line, "t") || XmlTextEqual(line, "true")) ruled = true;
    }
    if(!refTaken) {
       IrRewind(context->document, mark);
+      // A rule is not a picture, so it leaves no span behind: it is the paragraph that becomes one, and
+      // only if it came to nothing else, which DocFinishParagraph decides with a lone bottom border's test.
+      if(ruled) context->drewRule = true;
       return true;
    }
 
@@ -1199,49 +1209,6 @@ static cbool DocBlockIsInk(cIR_DOCUMENTptr document, cIR_MARK mark) {
 
 //-- Paragraphs
 
-// The two halves of CT_PBdr: the sides that make an empty paragraph a horizontal rule, and the sides
-// that say it is a box or a rule above rather than below. w:start and w:end belong to the table border
-// types and never appear in a paragraph's own w:pBdr.
-static constexpr cchptr DOC_BORDERS_UNDER[]  = {"bottom", "between", nullptr};
-static constexpr cchptr DOC_BORDERS_BESIDE[] = {"top", "left", "right", "bar", nullptr};
-
-// Whether the element the reader is on is one of a paragraph's border names, in the WordprocessingML
-// namespace, which is the one namespace a border may be spelled in.
-static cbool DocIsBorder(XML_READERptrc reader, cchptrcptr names) { return DocIsNamed(reader, XML_NS_W, names); }
-
-// Reads the w:pBdr the reader is on, and reports whether its borders are the pattern Word writes for an
-// autoformatted horizontal rule: a bottom or a between border and no other (CONVERSION_REFERENCE 2.4).
-// A w:val of none or nil is a border switched off, which every producer writes rather than omitting the
-// element; a border element with no w:val at all is taken as present, since its presence is the signal.
-static cbool DocReadBorders(DOC_CONTEXTptrc context, boolptrc rule) {
-   cui32 depthHere = context->reader->depth;
-   bool  below     = false;
-   bool  other     = false;
-
-   for(;;) {
-      cXML_TOKEN token = XmlNext(context->reader);
-
-      if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
-      if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) {
-         *rule = below && !other;
-         return true;
-      }
-      if(token != XML_TOKEN_START_ELEMENT) continue;
-
-      cXML_TEXT value = XmlAttribute(context->reader, XML_NS_W, "val");
-      cbool     drawn = !XmlTextEqual(value, "none") && !XmlTextEqual(value, "nil");
-      cbool     under = DocIsBorder(context->reader, DOC_BORDERS_UNDER);
-      // The sides of CT_PBdr are tested by name rather than by exclusion. An element this build has
-      // never heard of -- a vendor extension, an mc:AlternateContent -- is ignored rather than counted
-      // as a border, which is the OOXML compatibility model: what is not understood gets no vote.
-      cbool beside = DocIsBorder(context->reader, DOC_BORDERS_BESIDE);
-
-      if(drawn && under) below = true;
-      else if(drawn && beside) other = true;
-      if(!XmlSkipElement(context->reader)) return false;
-   }
-}
-
 // Reads the w:val of the element the reader is on as a decimal integer, reporting whether it was one.
 // A value that is absent, empty or not all digits leaves the destination alone, which is what keeps
 // "the paragraph said nothing" apart from "the paragraph said zero". DocParseNumber carries the note on
@@ -1315,7 +1282,7 @@ static cbool DocReadMarkProperties(DOC_CONTEXTptrc context, boolptrc struck) {
 
 // Reads the w:pPr the reader is on, and consumes it.
 static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style, si32ptrc outline, // Its style and heading level
-                                        boolptrc rule, DOC_NUM_REFptrc num, boolptrc struck) {     // Its rule, list and deleted mark
+                                        si8ptrc border, DOC_NUM_REFptrc num, boolptrc struck) {    // Its borders, list and deleted mark
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -1324,8 +1291,13 @@ static cbool DocReadParagraphProperties(DOC_CONTEXTptrc context, si32ptrc style,
       if(token == XML_TOKEN_ERROR || token == XML_TOKEN_END_OF_INPUT) return false;
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) return true;
       if(token != XML_TOKEN_START_ELEMENT) continue;
+      // Read by the style model's own reader, so that a paragraph's w:pBdr and a style's cannot come to
+      // disagree about what row 25's pattern is. The paragraph's own wins outright over its style's.
       if(XmlIsElement(context->reader, XML_NS_W, "pBdr")) {
-         if(!DocReadBorders(context, rule)) return false;
+         bool rule = false;
+
+         if(!StyleReadBorders(context->reader, &rule)) return false;
+         *border = (rule ? 1 : 0);
          continue;
       }
       if(XmlIsElement(context->reader, XML_NS_W, "numPr")) {
@@ -1382,13 +1354,19 @@ static cbool DocListSurvives(cIR_BLOCK_KIND kind, cSTYLE_PARAGRAPH_PROPS props, 
 }
 
 // Settles a paragraph's classification from its resolved properties.
-static void DocSettleParagraph(DOC_CONTEXTptrc context, DOC_PARAGRAPHptrc para, cSTYLE_PARAGRAPH_PROPS props, cbool rule) {
+//
+// Row 25's border comes from the paragraph's own w:pBdr where it carries one, and from its style chain
+// where it does not -- which is where LibreOffice keeps it: its Horizontal Line style holds the bottom
+// border and the paragraph holds nothing at all. A style's border speaks for an ordinary paragraph only.
+// A heading style drawn with a rule beneath it -- Word 2007's Title was one -- is how a template draws
+// its headings, and an empty heading is a stray paragraph rather than a rule its author asked for.
+static void DocSettleParagraph(DOC_CONTEXTptrc context, DOC_PARAGRAPHptrc para, cSTYLE_PARAGRAPH_PROPS props, csi8 border) {
    para->level     = props.headingLevel;
    para->kind      = DocBlockKind(props);
    para->list      = DocListSurvives(para->kind, props, context->numbering);
    para->listId    = props.numId;
    para->listLevel = (props.numLevel > 0 ? props.numLevel : 0);
-   para->rule      = rule;
+   para->rule      = (border >= 0 ? border > 0 : props.border > 0 && para->kind == IR_BLOCK_PARAGRAPH);
 }
 
 // Opens a paragraph's block, or adopts the one a paragraph whose mark was deleted left open.
@@ -1411,8 +1389,8 @@ static cbool DocOpenParagraph(DOC_CONTEXTptrc context, DOC_PARAGRAPHptrc para) {
    return DocFlushBookmarks(context) && DocFieldReopen(context);
 }
 
-// Ends a paragraph's block, classifying it by everything its runs said, and writes mapping row 25's rule
-// where a lone bottom border stood on a paragraph that came to nothing.
+// Ends a paragraph's block, classifying it by everything its runs said, and writes mapping row 25's rule where
+// a paragraph that came to nothing carried a lone bottom border, its own or its style's, or drew a VML one.
 //
 // A paragraph that began inside a field nobody sees and came to nothing is gone whole -- its list marker,
 // its blank line of code and its border with it. That is every paragraph of a TOC after the one it begins
@@ -1491,7 +1469,7 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    si32          outline   = -1;
    DOC_NUM_REF   num       = {-1, -1};
    DOC_PARAGRAPH para;
-   bool          rule    = false;
+   si8           border  = -1; // -1 while the paragraph has said nothing about its borders
    bool          struck  = false;
    bool          settled = false;
    bool          begun   = false;
@@ -1503,19 +1481,21 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
    // at its reference -- so the case it guards is still hypothetical; row 38's text boxes would make it real.
    cbool outerText = context->sawText;
    cbool outerMono = context->allMono;
+   cbool outerRule = context->drewRule;
    // A paragraph a deleted mark ran on into this one lends it its votes and the moment it began.
    cbool adopting = context->joining;
 
-   para.mark        = {-1, 0, 0, 0, 0, 0, 0, 0};
-   para.kind        = IR_BLOCK_PARAGRAPH;
-   para.level       = 0;
-   para.listId      = -1;
-   para.listLevel   = 0;
-   para.list        = false;
-   para.rule        = false;
-   para.quiet       = (adopting ? context->joined.quiet : DocQuiet(context));
-   context->sawText = (adopting ? context->joined.sawText : false);
-   context->allMono = (adopting ? context->joined.allMono : true);
+   para.mark         = {-1, 0, 0, 0, 0, 0, 0, 0};
+   para.kind         = IR_BLOCK_PARAGRAPH;
+   para.level        = 0;
+   para.listId       = -1;
+   para.listLevel    = 0;
+   para.list         = false;
+   para.rule         = false;
+   para.quiet        = (adopting ? context->joined.quiet : DocQuiet(context));
+   context->sawText  = (adopting ? context->joined.sawText : false);
+   context->allMono  = (adopting ? context->joined.allMono : true);
+   context->drewRule = false;
    for(;;) {
       cXML_TOKEN token = XmlNext(context->reader);
 
@@ -1523,13 +1503,13 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
       if(token != XML_TOKEN_START_ELEMENT) continue;
       if(!settled && XmlIsElement(context->reader, XML_NS_W, "pPr")) {
-         if(!DocReadParagraphProperties(context, &style, &outline, &rule, &num, &struck)) return false;
+         if(!DocReadParagraphProperties(context, &style, &outline, &border, &num, &struck)) return false;
          continue;
       }
       if(!settled) {
          // The properties are settled by the time any content is reached: w:pPr is the paragraph's first
          // child whenever it is present, so anything else means there is no more of it to come.
-         DocSettleParagraph(context, &para, StyleResolveParagraph(context->styles, style, outline, num.numId, num.level), rule);
+         DocSettleParagraph(context, &para, StyleResolveParagraph(context->styles, style, outline, num.numId, num.level), border);
          head    = (para.level > 0);
          settled = true;
       }
@@ -1543,11 +1523,16 @@ static cbool DocWalkParagraph(DOC_CONTEXTptrc context) {
          break;
       }
    }
-   if(!settled) DocSettleParagraph(context, &para, StyleResolveParagraph(context->styles, style, outline, num.numId, num.level), rule);
-   para.sawText     = context->sawText;
-   para.allMono     = context->allMono;
-   context->sawText = outerText;
-   context->allMono = outerMono;
+   if(!settled) DocSettleParagraph(context, &para, StyleResolveParagraph(context->styles, style, outline, num.numId, num.level), border);
+   para.sawText = context->sawText;
+   para.allMono = context->allMono;
+   // A VML horizontal rule is found in the content rather than in the w:pPr, so it joins the border's
+   // verdict only now. The rule test is still DocFinishParagraph's: a paragraph that drew one and then
+   // said something beside it is that text, not a rule.
+   para.rule         = para.rule || context->drewRule;
+   context->sawText  = outerText;
+   context->allMono  = outerMono;
+   context->drewRule = outerRule;
    // Accept-all revisions, correctness rule 8, for a revision that is not a wrapper: a tracked
    // change deleted this paragraph's mark, so its text runs on into the next paragraph and the two are one
    // (CONVERSION_REFERENCE 5.11). The block stays open for the next w:p to adopt. A paragraph that opened
@@ -1604,8 +1589,10 @@ static cbool DocReadGrid(DOC_CONTEXTptrc context, ui32ptrc columns) {
 // that repeats at a page break, which is the only thing WordprocessingML has to say "this row is a
 // header"; w:del marks a row a tracked change removed, and accept-all drops it with its content
 // (correctness rule 8). A w:val of none or nil on either switches it off, the way every toggle spells
-// "not set" rather than being omitted.
-static cbool DocReadRowProperties(DOC_CONTEXTptrc context, boolptrc header, boolptrc deleted) {
+// "not set" rather than being omitted. w:gridBefore and w:gridAfter are how many grid columns the row
+// leaves empty before its first cell and after its last, which Word writes for an indented row and for a
+// row whose leading cells were deleted; each is a count, read like any other.
+static cbool DocReadRowProperties(DOC_CONTEXTptrc context, boolptrc header, boolptrc deleted, ui32ptrc skipBefore, ui32ptrc skipAfter) {
    cui32 depthHere = context->reader->depth;
 
    for(;;) {
@@ -1620,6 +1607,14 @@ static cbool DocReadRowProperties(DOC_CONTEXTptrc context, boolptrc header, bool
 
       if(XmlIsElement(context->reader, XML_NS_W, "tblHeader")) *header = on;
       else if(XmlIsElement(context->reader, XML_NS_W, "del")) *deleted = true;
+      else if(XmlIsElement(context->reader, XML_NS_W, "gridBefore") || XmlIsElement(context->reader, XML_NS_W, "gridAfter")) {
+         si32 parsed = 0;
+
+         if(DocReadDecimal(context, &parsed) && parsed > 0) {
+            if(XmlIsElement(context->reader, XML_NS_W, "gridBefore")) *skipBefore = ui32(parsed);
+            else *skipAfter = ui32(parsed);
+         }
+      }
       if(!XmlSkipElement(context->reader)) return false;
    }
 }
@@ -1668,8 +1663,8 @@ static cbool DocOpenCell(DOC_CONTEXTptrc context, cui32 span, cui8 flags, si32pt
 }
 
 // Opens one row, linking it behind the row before it.
-static cbool DocOpenRow(DOC_CONTEXTptrc context, cbool header, si32ptrc row) {
-   *row = IrBeginRow(context->document, context->table, context->lastRow, header);
+static cbool DocOpenRow(DOC_CONTEXTptrc context, cbool header, cui32 skipBefore, cui32 skipAfter, si32ptrc row) {
+   *row = IrBeginRow(context->document, context->table, context->lastRow, header, skipBefore, skipAfter);
    if(*row < 0) {
       context->memory = true;
       return false;
@@ -1687,6 +1682,12 @@ static cbool DocOpenRow(DOC_CONTEXTptrc context, cbool header, si32ptrc row) {
 // can reach a delimiter row. The question is reopened per cell and closed again on the way out, so a
 // nested table's cells never answer it for the cell they stand in.
 static cbool DocWalkCell(DOC_CONTEXTptrc context) {
+   // A cell that would start at or past IR_MAX_COLUMNS is outside every grid the emitter writes, so it is
+   // skipped whole before a byte of it is stored: its record, its content, and every picture, list item
+   // and note reference inside it, none of which a reader could ever see. That is the cap on cells per
+   // row, and it is the columns' own ceiling rather than a second number -- see IrNextColumn.
+   if(IrNextColumn(context->document, context->row, context->lastCell) >= IR_MAX_COLUMNS) return XmlSkipElement(context->reader);
+
    cui32     depthHere    = context->reader->depth;
    cIR_ALIGN outerJustify = context->justify;
    ui32      span         = 1u;
@@ -1742,12 +1743,14 @@ static cbool DocWalkCell(DOC_CONTEXTptrc context) {
 
 // Walks one w:tr into one row.
 static cbool DocWalkRow(DOC_CONTEXTptrc context) {
-   cui32 depthHere = context->reader->depth;
-   bool  header    = false;
-   bool  deleted   = false;
-   bool  settled   = false;
-   bool  ok        = true;
-   si32  row       = -1;
+   cui32 depthHere  = context->reader->depth;
+   bool  header     = false;
+   bool  deleted    = false;
+   bool  settled    = false;
+   bool  ok         = true;
+   si32  row        = -1;
+   ui32  skipBefore = 0;
+   ui32  skipAfter  = 0;
 
    context->lastCell = -1;
    for(;;) {
@@ -1757,7 +1760,7 @@ static cbool DocWalkRow(DOC_CONTEXTptrc context) {
       if(token == XML_TOKEN_END_ELEMENT && context->reader->depth == depthHere) break;
       if(token != XML_TOKEN_START_ELEMENT) continue;
       if(!settled && !deleted && XmlIsElement(context->reader, XML_NS_W, "trPr")) {
-         if(!DocReadRowProperties(context, &header, &deleted)) return false;
+         if(!DocReadRowProperties(context, &header, &deleted, &skipBefore, &skipAfter)) return false;
          continue;
       }
       // Accept-all revisions, correctness rule 8: a row a tracked change deleted is not there, and
@@ -1768,7 +1771,7 @@ static cbool DocWalkRow(DOC_CONTEXTptrc context) {
          continue;
       }
       if(!settled) {
-         if(!DocOpenRow(context, header, &row)) return false;
+         if(!DocOpenRow(context, header, skipBefore, skipAfter, &row)) return false;
          settled = true;
       }
       if(!DocDispatchChild(context, DOC_LEVEL_ROW, -1, false)) {
@@ -1779,7 +1782,7 @@ static cbool DocWalkRow(DOC_CONTEXTptrc context) {
    if(deleted) return ok;
    // A w:tr with no w:tc at all. Word writes one while a user is building a table, and it is a row of
    // empty cells on the page, so it is a row here too.
-   if(!settled && !DocOpenRow(context, header, &row)) return false;
+   if(!settled && !DocOpenRow(context, header, skipBefore, skipAfter, &row)) return false;
    IrEndRow(context->document, row, context->lastCell);
    return ok;
 }
@@ -1998,6 +2001,7 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
    // all-monospace Fallback demotes the fence that survives to an inline code span.
    cbool markedText = context->sawText;
    cbool markedMono = context->allMono;
+   cbool markedRule = context->drewRule;
    // The two chain tails are walker state for the same reason and are restored the same way: an
    // mc:AlternateContent is legal around a w:tr and around a w:tc, so a discarded mc:Choice can leave
    // a row or a cell behind that the rewind has already thrown away. Putting the tails back is the
@@ -2033,6 +2037,7 @@ static cbool DocWalkAlternate(DOC_CONTEXTptrc context, cDOC_LEVEL level, csi32 p
             IrRewind(context->document, mark);
             context->sawText      = markedText;
             context->allMono      = markedMono;
+            context->drewRule     = markedRule;
             context->lastRow      = markedRow;
             context->lastCell     = markedCell;
             context->justify      = markedJustify;
@@ -2142,6 +2147,7 @@ static void DocContextOpen(DOC_CONTEXTptrc context, IR_DOCUMENTptrc document,   
    context->inLink          = false;
    context->sawText         = false;
    context->allMono         = true;
+   context->drewRule        = false;
    context->memory          = false;
 }
 

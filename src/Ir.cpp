@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-24
  * Description: The intermediate representation's arena: growth, span appends and empty-block trimming.
  * To Do: 1) Size the first allocation from the part's own byte count, once the walker knows it.
  *        2) Release the arena back to the allocator between documents when M13 reuses a worker.
@@ -269,15 +269,21 @@ void IrEndTable(IR_DOCUMENTptrc document, csi32 table, csi32 lastRow, cui32 grid
    ui32 columns = (grid > IR_MAX_COLUMNS ? IR_MAX_COLUMNS : grid);
 
    for(ui32 index = owner->firstRow; index != IR_NO_INDEX;) {
-      cIR_ROWptr row = IrRowAt(document, index);
+      cIR_ROWptr row  = IrRowAt(document, index);
+      ui32       edge = 0;
 
       if(!row) break;
+      // The row's own reach is where its last cell ends plus its w:gridAfter -- or, for a row of no cells,
+      // its w:gridBefore and w:gridAfter together -- so a grid the document declared only through those two
+      // elements is still as wide as the row says.
+      edge = row->skipBefore;
       for(ui32 at = row->firstCell; at != IR_NO_INDEX;) {
          cIR_CELLptr cell  = IrCellAt(document, at);
          ui32        reach = 0;
 
          if(!cell) break;
          reach = cell->column + cell->span;
+         edge  = reach;
          if(reach > columns) columns = (reach > IR_MAX_COLUMNS ? IR_MAX_COLUMNS : reach);
          if(cell->span > 1u || (cell->flags & (IR_CELL_VRESTART | IR_CELL_VMERGED))) owner->flags |= IR_TABLE_MERGED;
          for(ui32 step = 0; step < cell->blockCount; ++step) {
@@ -290,13 +296,15 @@ void IrEndTable(IR_DOCUMENTptrc document, csi32 table, csi32 lastRow, cui32 grid
          }
          at = cell->nextCell;
       }
+      edge += row->skipAfter;
+      if(edge > columns) columns = (edge > IR_MAX_COLUMNS ? IR_MAX_COLUMNS : edge);
       index = row->nextRow;
    }
    owner->columns = (columns < 1u ? 1u : columns);
    IrStoreAligns(document, owner);
 }
 
-csi32 IrBeginRow(IR_DOCUMENTptrc document, csi32 table, csi32 after, cbool header) {
+csi32 IrBeginRow(IR_DOCUMENTptrc document, csi32 table, csi32 after, cbool header, cui32 skipBefore, cui32 skipAfter) {
    if(table < 0 || ui32(table) >= document->tableCount) return -1;
    if(!IrReserve((ptrptrc)&document->rows, &document->rowCapacity, ui64(document->rowCount) + 1u, sizeof(IR_ROW))) {
       document->failed = true;
@@ -306,9 +314,11 @@ csi32 IrBeginRow(IR_DOCUMENTptrc document, csi32 table, csi32 after, cbool heade
    cui32     fresh = document->rowCount;
    IR_ROWptr row   = document->rows + fresh;
 
-   row->firstCell = IR_NO_INDEX;
-   row->nextRow   = IR_NO_INDEX;
-   row->flags     = (header ? IR_ROW_HEADER : IR_ROW_NONE);
+   row->firstCell  = IR_NO_INDEX;
+   row->nextRow    = IR_NO_INDEX;
+   row->skipBefore = ui16(skipBefore > IR_MAX_COLUMNS ? IR_MAX_COLUMNS : skipBefore);
+   row->skipAfter  = ui16(skipAfter > IR_MAX_COLUMNS ? IR_MAX_COLUMNS : skipAfter);
+   row->flags      = (header ? IR_ROW_HEADER : IR_ROW_NONE);
    if(after >= 0 && ui32(after) < fresh) document->rows[after].nextRow = fresh;
    else document->tables[table].firstRow = fresh;
    ++document->rowCount;
@@ -331,13 +341,14 @@ csi32 IrBeginCell(IR_DOCUMENTptrc document, csi32 row, csi32 after, cui32 span, 
    cui32      fresh  = document->cellCount;
    cui32      wanted = (span < 1u ? 1u : (span > IR_MAX_COLUMNS ? IR_MAX_COLUMNS : span));
    cbool      linked = (after >= 0 && ui32(after) < fresh);
-   cui32      column = (linked ? document->cells[after].column + document->cells[after].span : 0u);
+   cui32      column = IrNextColumn(document, row, (linked ? after : -1));
    IR_CELLptr cell   = document->cells + fresh;
 
-   // The column is left where the arithmetic puts it rather than clamped, so that two cells of one row
-   // can never claim the same one. A cell past IR_MAX_COLUMNS is simply outside the grid the emitter
-   // writes, which is the one place this build stops honouring "never drop a column" -- and a table
-   // 256 columns wide has stopped being readable on any page long before that.
+   // The column is left where the arithmetic puts it rather than clamped, so that two cells of one row can
+   // never claim the same one. A cell that would start at or past IR_MAX_COLUMNS never reaches here -- the
+   // walker skips it whole -- and the part of a cell spanning past it is outside the grid the emitter writes,
+   // so the cap is the one place this build stops honouring "never drop a column" -- and a table 256 columns
+   // wide has stopped being readable on any page long before that.
    cell->blockAt    = document->blockCount;
    cell->blockCount = 0;
    cell->column     = column;
@@ -349,6 +360,12 @@ csi32 IrBeginCell(IR_DOCUMENTptrc document, csi32 row, csi32 after, cui32 span, 
    else document->rows[row].firstCell = fresh;
    ++document->cellCount;
    return si32(fresh);
+}
+
+cui32 IrNextColumn(cIR_DOCUMENTptr document, csi32 row, csi32 after) {
+   if(after >= 0 && ui32(after) < document->cellCount) return document->cells[after].column + document->cells[after].span;
+   if(row < 0 || ui32(row) >= document->rowCount) return 0u;
+   return document->rows[row].skipBefore;
 }
 
 void IrEndCell(IR_DOCUMENTptrc document, csi32 cell, cui32 blockAt, cIR_ALIGN align) {

@@ -3,11 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-09-09
+ * Last Modified: 2026-09-24
  * Description: Package model implementation: content types, relationship parsing, target resolution.
  * To Do: 1) Cache a folded copy of each part name if profiling ever shows the comparator mattering.
- *        2) Normalise a backslash in an entry name at M11, which decision D10 gave that question to.
- *        3) Read docProps/core.xml for a title, once the emitter has somewhere to put one.
+ *        2) Read docProps/core.xml for a title, once the emitter has somewhere to put one.
  * Dependencies: BuildGuards.h, Diag.h, OpcPackage.h, Utf.h, XmlPull.h, ZipReader.h, typedefs.h,
  *               memory management.h, windows.h
  * ISA: Scalar
@@ -998,8 +997,8 @@ cchptr OpcMessageIn(OPC_PACKAGEptrc package, cchptr sentence, csi32 partIndex) {
       ++used;
    }
    for(cchptr walk = ", in "; *walk && used < sizeof(package->message) - 1u; ++walk) package->message[used++] = *walk;
-   // An entry name is attacker-controlled bytes. A carriage return or a linefeed in one would overwrite
-   // or forge a console line, so anything below a space is replaced rather than printed.
+   // An entry name is attacker-controlled bytes. A carriage return or a linefeed in one would overwrite or
+   // forge a console line, so anything below a space, and 0x7F, is replaced rather than printed.
    for(ui64 index = 0; name[index] && used < sizeof(package->message) - 1u; ++index) {
       cchar byte = name[index];
 

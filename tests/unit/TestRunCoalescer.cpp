@@ -526,6 +526,21 @@ void TestRunCoalescer(void) {
    // A rule carries no spans at all, and an empty code paragraph is kept although it holds none either.
    CHECK(Coalesces("<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\"/></w:pBdr></w:pPr></w:p>", "R{}"));
    CHECK(CoalescesAs(STYLE_CODE, "<w:p><w:pPr><w:pStyle w:val=\"SC\"/></w:pPr></w:p>", "C{}"));
+   // Two breaks with nothing between them are one everywhere but in a fence, where each is a blank line:
+   // the emitter already writes them that way, and dropping the second here is what keeps a run of them
+   // from costing a record apiece in the rebuild. A marker between them is something between them.
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t><w:br/><w:br/><w:br/><w:t>b</w:t></w:r></w:p>", "P{[a]|[b]}"));
+   CHECK(Coalesces("<w:p><w:pPr><w:pStyle w:val=\"H\"/></w:pPr><w:r><w:t>a</w:t><w:br/><w:br/><w:t>b</w:t></w:r></w:p>", "P{[a]|[b]}"));
+   CHECK(Coalesces("<w:p><w:r><w:t>a</w:t><w:br/></w:r>"
+                   "<w:hyperlink w:anchor=\"x\"><w:r><w:br/><w:t>b</w:t></w:r></w:hyperlink></w:p>",
+                   "P{[a]|L(#x)|[b]L)}"));
+   CHECK(CoalescesAs(STYLE_CODE,
+                     "<w:p><w:pPr><w:pStyle w:val=\"SC\"/></w:pPr>"
+                     "<w:r><w:t>a</w:t><w:br/><w:br/><w:t>b</w:t></w:r></w:p>",
+                     "C{[a]||[b]}"));
+   CHECK(Coalesces("<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Consolas\"/></w:rPr>"
+                   "<w:t>a</w:t><w:br/><w:br/><w:t>b</w:t></w:r></w:p>",
+                   "C{c[a]||c[b]}"));
    // A quote is an ordinary paragraph as far as this pass is concerned, prefix and all.
    CHECK(CoalescesAs(STYLE_QUOTE,
                      "<w:p><w:pPr><w:pStyle w:val=\"Q\"/></w:pPr>"

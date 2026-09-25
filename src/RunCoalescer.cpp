@@ -159,12 +159,23 @@ static void RunMergeBlocks(IR_DOCUMENTptrc document) {
       ui32        kept   = 0;
 
       if(!block) continue;
+
+      cbool literal = (block->kind == IR_BLOCK_CODE);
+
       for(ui32 at = 0; at < block->spanCount; ++at) {
          IR_SPANptr span = document->spans + block->spanAt + at;
          // An empty text span is a run that carried a w:rPr and no text, which CONVERSION_REFERENCE 5.5
          // says must contribute nothing. Dropping it here also stops it separating two spans that would
          // otherwise merge, which is the same defect wearing a different hat.
          if(span->kind == IR_SPAN_TEXT && !span->textBytes) continue;
+         // Two breaks with nothing between them are one on the page everywhere but inside a fence: the
+         // emitter collapses them in a paragraph, a heading, an item and both table forms alike, because
+         // a Markdown line that is empty ends the paragraph. Inside a fence each is a blank line and is
+         // kept. Dropping the second here changes no byte of the output -- a block's kind is final by
+         // now, the monospace verdict included -- and it is what stops a run of seven-byte w:br elements
+         // costing an IR_SPAN apiece a second time in the rebuild below, which M11's probes found to be
+         // the most memory a part could make this pass hold per byte of its own.
+         if(span->kind == IR_SPAN_BREAK && !literal && kept && document->spans[block->spanAt + kept - 1u].kind == IR_SPAN_BREAK) continue;
 
          IR_SPANptr previous = RunMergeInto(document->spans + block->spanAt, target);
 
@@ -249,11 +260,38 @@ static void RunHoistSpan(RUN_REBUILDptrc rebuild, cIR_DOCUMENTptr document, cIR_
 
 //== Entry points
 
+// How many spans the rebuild can write, counted over what the merge left rather than over the array as
+// the walk built it. Only a formatted text span outside a fence can be split, into at most RUN_SPLIT_MAX
+// pieces; every other span -- a break, a link marker, an anchor, a plain run -- is copied as one.
+//
+// That is a bound on memory rather than tidiness. Reserving RUN_SPLIT_MAX slots for every span made a
+// w:br cost four IR_SPAN records at the peak where it had cost one, and a break is seven bytes of input
+// -- M11's hostile-input pass measured it as the largest amplifier the IR had. The count is taken
+// after RunMergeBlocks, which only ever shrinks a block, so what the walk fragmented costs nothing here.
+static cui64 RunRebuildBound(cIR_DOCUMENTptr document) {
+   ui64 bound = 1u;
+
+   for(ui32 index = 0; index < IrBlockCount(document); ++index) {
+      cIR_BLOCKptr block = IrBlockAt(document, index);
+
+      if(!block) continue;
+
+      cbool literal = (block->kind == IR_BLOCK_CODE);
+
+      for(ui32 at = 0; at < block->spanCount; ++at) {
+         cIR_SPANptr span = IrSpanAt(document, block->spanAt + at);
+
+         bound += (span && span->kind == IR_SPAN_TEXT && span->fmt != IR_FMT_NONE && !literal ? RUN_SPLIT_MAX : 1u);
+      }
+   }
+   return bound;
+}
+
 cbool RunCoalesce(IR_DOCUMENTptrc document) {
    if(IrFailed(document)) return false;
    RunMergeBlocks(document);
 
-   cui64 wanted = ui64(document->spanCount) * RUN_SPLIT_MAX + 1u;
+   cui64 wanted = RunRebuildBound(document);
 
    // The replacement array is indexed by a ui32 like the original, so a document that could not be
    // addressed after splitting is a refusal rather than a wrap. The container caps stop one long before.
