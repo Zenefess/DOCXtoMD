@@ -237,7 +237,9 @@ class Selection:
         full = os.path.abspath(name)
         if not os.path.lexists(full):
             raise UsageError("no such file or directory: %s" % name)
-        nominal = inside(full, self.root)
+        # The parent resolved, the last name kept: the link itself, however the repository was reached --
+        # through another link, or on Windows through an 8.3 short name such as RUNNER~1 in %TEMP%.
+        nominal = inside(os.path.join(os.path.realpath(os.path.dirname(full)), os.path.basename(full)), self.root)
         if nominal is not None and os.path.islink(full):
             self.problem(nominal, LINK_REASON)
             return
@@ -1249,6 +1251,7 @@ def tree_cases(root):
         os.symlink(os.path.join("..", "include"), os.path.join(linked, "src", "inclink"))
         os.symlink("Nowhere.h", os.path.join(linked, "src", "Dangling.h"))
         os.symlink("elsewhere", os.path.join(moved, "src"))
+        os.symlink("linked", os.path.join(root, "alias"))
     except (OSError, NotImplementedError, AttributeError):
         print("skip  the link cases: this host cannot make a symbolic link")
     else:
@@ -1257,6 +1260,8 @@ def tree_cases(root):
         run("a path through a link resolves to where it really is", [os.path.join(linked, "src", "inclink", "typedefs.h")],
             linked, [], [], 1)
         run("naming a link is a problem", [os.path.join(linked, "src", "Dangling.h")], linked, [], [("src/Dangling.h", "symbolic link")])
+        run("naming a link through another name for the repository", [os.path.join(root, "alias", "src", "Dangling.h")],
+            os.path.join(root, "alias"), [], [("src/Dangling.h", "symbolic link")])
         run("src/ itself a link", [], moved, ["tests/ok.py"], [("src", "symbolic link")])
     return results
 
