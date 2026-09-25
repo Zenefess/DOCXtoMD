@@ -22,13 +22,14 @@ never judged however it is named. tests/fixtures/ is input data (.editorconfig's
 tests/build/, tests/x64/ and __pycache__/ are generated, so none of those is judged either. Any other
 file under src/ or tests/ whose type this script has no rules for is a problem rather than a silent
 pass, and so is a symbolic link, which Git checks out as a link on Linux and as a text file on Windows.
-Paths compare in exact letter case on every host, as Git's do, so a verdict never depends on whether the
-file system folds case. The Python checks use the running interpreter's grammar; CI's is 3.12.
+Directory names and extensions compare in exact letter case on every host, as Git's do, so a verdict does
+not depend on whether a Windows or Linux file system folds case. The Python checks use the running interpreter's grammar; CI's is 3.12.
 
 Exit status: 0 clean; 1 at least one problem, including a default run that finds nothing to judge; 2 a
 usage error, or named paths that leave nothing to judge.
 """
 
+import contextlib
 import copy
 import datetime
 import io
@@ -39,6 +40,7 @@ import subprocess
 import sys
 import tempfile
 import tokenize
+import warnings
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 REPO = os.path.dirname(ROOT)
@@ -67,8 +69,9 @@ LINK_REASON = "a symbolic link; Git checks one out as a link on Linux and as a t
 # What each kind of file is held to. C and C++ carry every rule. Python carries a tagged r17 deviation
 # and a tagged four-space indent (.editorconfig's RULE-DEV:r8), so its prolog check is the tag itself.
 # MSBuild XML is written and rewritten by Visual Studio, two-space indented, with <Import> elements of
-# 179 columns it puts back on every save: r8 does not reach it and e2's "unless splitting is
-# impractical" is exactly its case, so only the hard cap binds -- RULE-DEV:r8,e2 for IDE-owned XML.
+# 179 columns it puts back on every save: r8's three-space step does not reach it (its ban on tabs does) and
+# e2's "unless splitting is impractical" is exactly its case, so only the hard cap binds -- RULE-DEV:r8,e2
+# for IDE-owned XML.
 CPP = "C++"
 PYTHON = "Python"
 MSBUILD = "MSBuild"
@@ -119,31 +122,36 @@ class UsageError(Exception):
 # Choosing what to judge
 
 
-def place(parts):
+def place(parts, directory=False):
     """Where a repository-relative path, split on '/', sits: (kind, reason), kind being 'exempt',
-    'outside', 'skip', 'case' or 'inside'. Names compare in exact case on every host, as Git's do; a
-    name that matches a special one only when case is folded is 'case', because a file system that folds
-    case would put it somewhere this script treats differently."""
-    specials = [(0, EXEMPT)] + [(0, top) for top in SCOPE] + [(1, sub) for _, sub in SKIPPED_DIRS]
-    for position, name in specials:
-        if len(parts) > position and parts[position] != name and parts[position].lower() == name.lower():
-            if position == 0 or parts[0] == "tests":
-                return "case", "differs from %s only in letter case, so a host that folds case would treat it as %s" % (
-                    "/".join(parts[:position] + [name]), name)
-    for part in parts:
-        for name in SKIPPED_NAMES:
-            if part != name and part.lower() == name.lower():
-                return "case", "differs from %s only in letter case" % name
+    'outside', 'skip', 'case' or 'inside'. Directory names compare in exact case on every host, as Git's
+    do; one that matches a special name only when case is folded is 'case', because a file system that
+    folds case would put it somewhere this script treats differently. A skipped name is a directory, so a
+    file that happens to be called tests/x64 or __pycache__ is not skipped; directory says the last part
+    is a directory."""
+    tops = [EXEMPT] + list(SCOPE)
+    if parts[0] not in tops and parts[0].lower() in [top.lower() for top in tops]:
+        name = next(top for top in tops if top.lower() == parts[0].lower())
+        return "case", "differs from %s only in letter case, so a host that folds case would treat it as %s" % (name, name)
     if parts[0] == EXEMPT:
         return "exempt", EXEMPT_REASON
     if parts[0] not in SCOPE:
         return "outside", "outside D11's scope, which is %s" % " and ".join(top + "/" for top in SCOPE)
+    folders = parts if directory else parts[:-1]
     for prefix, reason in SKIPPED_DIRS.items():
-        if tuple(parts[:len(prefix)]) == prefix:
-            return "skip", reason
-    for part in parts:
-        if part in SKIPPED_NAMES:
-            return "skip", SKIPPED_NAMES[part]
+        size = len(prefix)
+        if len(folders) >= size and folders[0] == prefix[0]:
+            if tuple(folders[:size]) == prefix:
+                return "skip", reason
+            if folders[size - 1] != prefix[-1] and folders[size - 1].lower() == prefix[-1].lower():
+                return "case", "differs from %s only in letter case, so a host that folds case would treat it as %s" % (
+                    "/".join(prefix), "/".join(prefix))
+    for part in folders:
+        for name, reason in SKIPPED_NAMES.items():
+            if part == name:
+                return "skip", reason
+            if part.lower() == name.lower():
+                return "case", "differs from %s only in letter case" % name
     return "inside", ""
 
 
@@ -158,10 +166,15 @@ def verdict_for(rel):
     for suffix, why in SKIPPED_SUFFIXES.items():
         if rel.endswith(suffix):
             return "skip", why
-    found = CLASSES.get(os.path.splitext(rel)[1].lower())
+    found = CLASSES.get(os.path.splitext(rel)[1])
     if found is None:
         return "unknown", "no rules are defined for this type of file; give it a class in validate_gcs.py, or move it"
     return "judge", found
+
+
+def is_link(path):
+    """A symbolic link, or on Windows a directory junction, which os.path.islink does not report."""
+    return os.path.islink(path) or getattr(os.path, "isjunction", lambda _: False)(path)
 
 
 class Selection:
@@ -193,26 +206,34 @@ class Selection:
 
     def walk(self, top):
         """Offers every file under one repository-relative directory, sorted, pruning what is never
-        judged and reporting a link or a case-variant directory rather than following it."""
+        judged and reporting a link, a case-variant directory or one that cannot be listed rather than
+        passing over it."""
         count = 0
-        for here, dirs, names in os.walk(os.path.join(self.root, *top.split("/"))):
+
+        def unlisted(error):
+            where = inside(error.filename, self.root) if error.filename else None
+            self.problem(where or top, "cannot be listed: %s" % error.strerror)
+
+        for here, dirs, names in os.walk(os.path.join(self.root, *top.split("/")), onerror=unlisted):
             base = os.path.relpath(here, self.root).replace(os.sep, "/")
             keep = []
             for name in sorted(dirs):
                 rel = base + "/" + name
-                kind, reason = place(rel.split("/"))
-                if os.path.islink(os.path.join(here, name)):
-                    self.problem(rel, LINK_REASON)
-                elif kind == "case":
+                kind, reason = place(rel.split("/"), directory=True)
+                if kind in ("skip", "exempt", "outside"):
+                    continue
+                if kind == "case":
                     self.problem(rel, reason)
-                elif kind == "inside":
+                elif is_link(os.path.join(here, name)):
+                    self.problem(rel, LINK_REASON)
+                else:
                     keep.append(name)
             dirs[:] = keep
             for name in sorted(names):
                 rel = base + "/" + name
-                if os.path.islink(os.path.join(here, name)):
+                if is_link(os.path.join(here, name)) and verdict_for(rel)[0] in ("judge", "unknown"):
                     self.problem(rel, LINK_REASON)
-                else:
+                elif not is_link(os.path.join(here, name)):
                     count += self.offer(rel)
         return count
 
@@ -220,11 +241,11 @@ class Selection:
         """src/ and tests/, and a problem for whichever of them holds nothing to judge -- a run that
         judged nothing must not read as a pass."""
         for entry in sorted(os.listdir(self.root)):
-            if os.path.isdir(os.path.join(self.root, entry)) and place([entry])[0] == "case":
-                self.problem(entry, place([entry])[1])
+            if os.path.isdir(os.path.join(self.root, entry)) and place([entry], True)[0] == "case":
+                self.problem(entry, place([entry], True)[1])
         for top in SCOPE:
             path = os.path.join(self.root, top)
-            if os.path.islink(path):
+            if is_link(path):
                 self.problem(top, LINK_REASON)
             elif not os.path.isdir(path):
                 self.problem(top, "D11 names this directory and it does not exist")
@@ -240,8 +261,11 @@ class Selection:
         # The parent resolved, the last name kept: the link itself, however the repository was reached --
         # through another link, or on Windows through an 8.3 short name such as RUNNER~1 in %TEMP%.
         nominal = inside(os.path.join(os.path.realpath(os.path.dirname(full)), os.path.basename(full)), self.root)
-        if nominal is not None and os.path.islink(full):
-            self.problem(nominal, LINK_REASON)
+        if nominal is not None and is_link(full):
+            if place(nominal.split("/"), os.path.isdir(full))[0] in ("inside", "case"):
+                self.problem(nominal, LINK_REASON)
+            else:
+                self.notes.append("%s: not judged -- %s" % (nominal, place(nominal.split("/"), os.path.isdir(full))[1]))
             return
         rel = inside(os.path.realpath(full), self.root)
         if rel is None:
@@ -251,7 +275,7 @@ class Selection:
             self.notes.append("%s/: not judged -- %s" % (EXEMPT, EXEMPT_REASON))
             self.default()
             return
-        kind, reason = place(rel.split("/"))
+        kind, reason = place(rel.split("/"), os.path.isdir(full))
         if kind == "case":
             self.problem(rel, reason)
         elif kind != "inside":
@@ -328,12 +352,13 @@ def check_bytes(data, kind):
     return problems
 
 
-def check_width(lines, kind, inner=range(0)):
+def check_width(lines, kind, inner=range(0), directives=None):
     """e2: 150 columns unless splitting is impractical, and 180 whatever. A C++ or Python line may take
     the extra thirty by saying so with r17's own WIDTH-EXEMPT mark, and a C++ line continued with a
-    backslash takes them without one, because clang-format aligns every escaped newline at its 180-column
-    limit (LLVM's AlignEscapedNewlines: Right) and a mark cannot follow the backslash. Project XML is
-    IDE-owned and held to the hard cap alone. The prolog's inner lines are r17's to measure."""
+    backslash takes them without one when it belongs to a preprocessor directive, because clang-format
+    aligns every escaped newline at its 180-column limit (LLVM's AlignEscapedNewlines: Right) and a mark
+    cannot follow the backslash. Project XML is IDE-owned and held to the hard cap alone. The prolog's
+    inner lines are r17's to measure, and its delimiters cannot carry a mark, so theirs is whitespace."""
     problems = []
     mark = WIDTH_MARK.get(kind)
     for index, line in enumerate(lines):
@@ -342,9 +367,13 @@ def check_width(lines, kind, inner=range(0)):
         width = len(line) - (3 if index == 0 and kind == MSBUILD and line.startswith("\xef\xbb\xbf") else 0)
         if width > HARD_WIDTH:
             problems.append((index + 1, "e2", "%d columns is past the hard cap of %d" % (width, HARD_WIDTH)))
-        elif width > SOFT_WIDTH and mark is not None and not line.endswith(mark) and not (kind == CPP and line.endswith("\\")):
-            problems.append((index + 1, "e2", "%d columns; wrap at %d, or end the line with '%s' if it cannot be split"
-                             % (width, SOFT_WIDTH, mark.strip())))
+        elif width > SOFT_WIDTH and mark is not None and not line.endswith(mark):
+            continued = kind == CPP and line.endswith("\\") and directives is not None and directives[index] is not None
+            if kind == CPP and line.strip() in ("/*", "*/"):
+                problems.append((index + 1, "e2", "%d columns of a prolog delimiter; remove its trailing whitespace" % width))
+            elif not continued:
+                problems.append((index + 1, "e2", "%d columns; wrap at %d, or end the line with '%s' if it cannot be split"
+                                 % (width, SOFT_WIDTH, mark.strip())))
     return problems
 
 
@@ -359,9 +388,12 @@ def check_prolog(lines, filename):
     problems = []
     if not lines or not PROLOG_OPEN.match(lines[0]):
         return [(1, "r17", "the file must open with the prolog's '/*' line")], range(0)
-    close = next((index for index in range(1, len(lines)) if PROLOG_CLOSE.match(lines[index])), -1)
+    # C++ ends the comment at the first '*/', whatever surrounds it, so that is where the prolog ends.
+    close = next((index for index in range(1, len(lines)) if "*/" in lines[index]), -1)
     if close < 0:
         return [(1, "r17", "the prolog's closing ' */' line was not found")], range(0)
+    if not PROLOG_CLOSE.match(lines[close]):
+        problems.append((close + 1, "r17", "the prolog closes on a line of its own, ' */' and nothing else"))
 
     fields = []
     current = None
@@ -383,7 +415,7 @@ def check_prolog(lines, filename):
         if not PROLOG_INNER.match(line):
             problems.append((number, "r17", "a prolog line is %d columns; wrap at 150, or end it with '%s' within 180"
                              % (len(line), WIDTH_MARK[CPP].strip())))
-        if line.endswith(WIDTH_MARK[CPP]):
+        if len(line) > SOFT_WIDTH and line.endswith(WIDTH_MARK[CPP]):
             line = line[:-len(WIDTH_MARK[CPP])]
         text = line[3:]
         if re.match(r"\s*History\s*:", text):
@@ -393,9 +425,11 @@ def check_prolog(lines, filename):
         label = next((f for f in FIELDS if text.startswith(f + ":")), None)
         if label is not None:
             value = text[len(label) + 1:]
-            if not value.startswith(" ") or value.startswith("  ") or not value.strip():
+            spaced = value.startswith(" ") and not value.startswith("  ") and value.strip() != ""
+            if not spaced:
                 problems.append((number, "r17", "'%s:' takes one space and then its value" % label))
-            current = {"label": label, "line": number, "column": 3 + len(label) + 2, "value": value.strip(), "more": []}
+            current = {"label": label, "line": number, "column": 3 + len(label) + 2, "value": value.strip(), "more": [],
+                       "spaced": spaced}
             fields.append(current)
         elif text.startswith(" "):
             if current is None or current["label"] not in MULTILINE:
@@ -427,17 +461,25 @@ def check_prolog(lines, filename):
     for field in fields:
         first.setdefault(field["label"], field)
     for field in first.values():
-        problems.extend(check_field(field, lines, filename))
+        # A field whose one space is already reported is not judged again, or the one defect reads as two.
+        if field["spaced"]:
+            problems.extend(check_field(field, lines, filename))
 
-    created = first.get("Created")
-    modified = first.get("Last Modified")
-    if created and modified:
-        try:
-            if datetime.date.fromisoformat(created["value"]) > datetime.date.fromisoformat(modified["value"]):
-                problems.append((modified["line"], "r17", "'Last Modified:' is earlier than 'Created:'"))
-        except ValueError:
-            pass
+    dates = [dated(first.get(label), lines) for label in ("Created", "Last Modified")]
+    if None not in dates and dates[0] > dates[1]:
+        problems.append((first["Last Modified"]["line"], "r17", "'Last Modified:' is earlier than 'Created:'"))
     return problems, range(1, close)
+
+
+def dated(field, lines):
+    """The field's date when its line matched r17's date regex and names a real day, else None. Parsed by
+    hand rather than by fromisoformat, which accepts more spellings from Python 3.11 on."""
+    if field is None or not PROLOG_DATE.match(lines[field["line"] - 1]):
+        return None
+    try:
+        return datetime.date(*(int(part) for part in field["value"].split("-")))
+    except ValueError:
+        return None
 
 
 def check_field(field, lines, filename):
@@ -446,7 +488,7 @@ def check_field(field, lines, filename):
     value = field["value"]
     number = field["line"]
     line = lines[number - 1]
-    if line.endswith(WIDTH_MARK[CPP]):
+    if len(line) > SOFT_WIDTH and line.endswith(WIDTH_MARK[CPP]):
         line = line[:-len(WIDTH_MARK[CPP])]
     problems = []
 
@@ -460,11 +502,8 @@ def check_field(field, lines, filename):
     elif label in ("Created", "Last Modified"):
         if not PROLOG_DATE.match(line):
             fail("'%s:' is a YYYY-MM-DD date and nothing else" % label)
-        else:
-            try:
-                datetime.date.fromisoformat(value)
-            except ValueError:
-                fail("'%s:' is not a calendar date: %s" % (label, value))
+        elif dated(field, lines) is None:
+            fail("'%s:' is not a calendar date: %s" % (label, value))
     elif label == "To Do":
         item = re.match(r"(\d+)\) \S", value)
         if not item or item.group(1) != "1":
@@ -489,9 +528,12 @@ def check_field(field, lines, filename):
                 fail("a '%s:' continuation aligns under the value, at column %d, not %d" % (label, field["column"] + 1, column + 1),
                      at)
         if label == "Dependencies":
-            items = [item.strip() for item in " ".join([value] + [content for _, _, content in field["more"]]).split(",")]
-            if any(not item for item in items) or ("None" in items and len(items) > 1):
-                fail("'Dependencies:' is None or a comma-separated list, with nothing empty between its commas")
+            parts = [value] + [content for _, _, content in field["more"]]
+            broken = any(not part.endswith(",") for part in parts[:-1])
+            items = [item.strip() for item in " ".join(parts).split(",")]
+            if broken or any(not item for item in items) or ("None" in items and len(items) > 1):
+                fail("'Dependencies:' is None or a comma-separated list, with nothing empty between its commas and a comma "
+                     "ending every line but the last")
     elif label == "ISA":
         tokens = value.split(" | ")
         if any(token not in ISA_TOKENS for token in tokens):
@@ -522,13 +564,12 @@ def blank_literals(lines):
     continued = False
     for line in lines:
         directive = None
-        if not in_comment and raw_end is None:
-            if continued:
-                directive = ""
-            else:
-                match = re.match(r"\s*#\s*(\w*)", line)
-                if match:
-                    directive = match.group(1)
+        if continued:
+            directive = ""
+        elif not in_comment and raw_end is None:
+            match = re.match(r"\s*#\s*(\w*)", line)
+            if match:
+                directive = match.group(1)
         out = []
         i = 0
         while i < len(line):
@@ -556,7 +597,9 @@ def blank_literals(lines):
                 i += 2
                 continue
             if c == '"':
-                if re.search(r"(?:^|[^A-Za-z0-9_])(?:u8|u|U|L)?R$", line[:i]):
+                prefix = re.search(r"(?:u8|u|U|L)?R$", line[max(0, i - 3):i])
+                start = i - len(prefix.group()) if prefix else i
+                if prefix and (start == 0 or not (line[start - 1].isalnum() or line[start - 1] == "_")):
                     opening = line.find("(", i)
                     if opening >= 0:
                         raw_end = ")" + line[i + 1:opening] + '"'
@@ -571,7 +614,7 @@ def blank_literals(lines):
             if c == "'":
                 # A digit separator, 1'000 or 0xFF'FF, sits inside a number; L'0' and u8'a' are prefixed
                 # character literals, whose token starts with a letter rather than a digit.
-                token = re.search(r"[A-Za-z0-9_.']*$", line[:i]).group(0)
+                token = re.search(r"[A-Za-z0-9_.']*$", line[max(0, i - 64):i]).group(0)
                 if token[:1].isdigit() and i + 1 < len(line) and line[i + 1].isalnum():
                     i += 1
                     continue
@@ -592,23 +635,30 @@ def blank_literals(lines):
     return code, directives
 
 
-def brace_kind(before, previous_end, inside_initializer):
+def brace_kind(before, previous_end, inside_initializer, owner=""):
     """'init' for a braced initializer, whose rows clang-format aligns rather than indents; 'block'
     for anything whose body is indented one step: a function, a control statement, a struct, an enum, a
-    lambda or a bare scope. clang-format writes a space before a block's brace and none before a braced
-    list, so `S s{` and `TABLE[]{` are lists where `struct S {` and `) {` are blocks."""
+    namespace, a lambda or a bare scope. clang-format writes a space before a block's brace and none
+    before a braced list, so `S s{`, `TABLE[]{` and the compound literal `(P){` are lists where
+    `struct S {` and `) {` are blocks; a keyword that opens a block, or a type or namespace head, opens
+    one whatever the spacing. before is the text ahead of the brace on its line, which a caller may
+    shorten to its last few dozen characters."""
     if inside_initializer:
         return "init"
     text = before.rstrip()
     if not text:
         return "init" if previous_end in ("=", "(", ",", "[", "?") else "block"
+    if re.search(r"(^|[^A-Za-z0-9_])(else|do|try)$", text) or (
+            RECORD_HEAD.match(owner) and "=" not in owner and "(" not in owner):
+        return "block"
     if text[-1] in "=(,[{?" or re.search(r"(^|[^A-Za-z0-9_])return$", text):
         return "init"
-    if before[-1:] and (before[-1].isalnum() or before[-1] in "_>]"):
+    if before[-1].isalnum() or before[-1] in "_>])":
         return "init"
     return "block"
 
 
+RECORD_HEAD = re.compile(r"((typedef|static|extern|inline)\s+)*(struct|class|union|enum|namespace)\b")
 LABEL = re.compile(r"[A-Za-z_]\w*\s*:(?!:)")
 CASE_LABEL = re.compile(r"(case\b.*|default\s*):")
 ACCESS = re.compile(r"(public|private|protected)\s*:")
@@ -629,7 +679,8 @@ def check_indent(lines):
     first branch's state is kept at #endif, so alternative opening lines do not unbalance the braces."""
     problems = []
     code, directives = blank_literals(lines)
-    state = {"stack": [], "depth": 0, "previous": "", "statement": 0, "text": "", "body": None, "carry": None}
+    state = {"stack": [], "depth": 0, "previous": "", "statement": 0, "text": "", "body": None, "carry": None,
+             "pending_else": None}
     conditionals = []
     for index, raw in enumerate(lines):
         directive = directives[index]
@@ -675,13 +726,19 @@ def check_indent(lines):
                 expected = top["indent"]
             elif ACCESS.match(text):
                 expected = top["indent"] + CPP_STEP - 2
-            elif LABEL.match(text) and not CASE_LABEL.match(text):
+            elif LABEL.match(text) and not CASE_LABEL.match(text) and not top["record"]:
                 expected = top["indent"]
+            elif re.match(r"else\b", text) and state["pending_else"] is not None:
+                expected = state["pending_else"]
             else:
                 expected = top["indent"] + CPP_STEP
             if expected is not None and indent != expected:
                 problems.append((index + 1, "r8", "this statement starts at column %d; its block puts it at column %d"
                                  % (indent + 1, expected + 1)))
+            # An if that is itself a brace-less body leaves its else at its own column, not at the block's step.
+            else_at = indent if body is not None and re.match(r"if\s*\(", text) else None
+            if not re.match(r"else\b", text) or else_at is not None:
+                state["pending_else"] = else_at
             state["statement"] = indent
             state["text"] = text
             if CARRIED_HEAD.fullmatch(text) and expected is not None:
@@ -693,13 +750,19 @@ def check_indent(lines):
             elif c in ")]":
                 state["depth"] = max(0, state["depth"] - 1)
             elif c == "{":
-                before = line_code[:position]
-                kind = brace_kind(before, state["previous"], bool(stack) and stack[-1]["kind"] == "init")
+                # Only the last few dozen characters decide a brace, which keeps a long line linear.
+                before = "" if position == first else line_code[max(0, position - 48):position]
                 owner = state["text"]
+                kind = brace_kind(before, state["previous"], bool(stack) and stack[-1]["kind"] == "init", owner)
+                if kind == "block" and state["depth"] > 0 and CONTROL_HEAD.match(owner):
+                    # A lambda inside a condition: clang-format indents it from the condition's continuation,
+                    # which this check does not model, so its body is left unmeasured rather than misjudged.
+                    kind = "init"
                 entry = {"kind": kind, "indent": state["statement"], "saved": None,
                          "switch": kind == "block" and bool(re.match(r"(\}\s*)?switch\s*\(", owner)),
                          "extern": kind == "block" and bool(re.fullmatch(r'extern\s*""', before.strip())),
-                         "enum": kind == "block" and bool(re.match(r"(typedef\s+)?enum\b", owner)) and "(" not in before}
+                         "enum": kind == "block" and bool(re.match(r"(typedef\s+)?enum\b", owner)) and "(" not in owner,
+                         "record": kind == "block" and bool(RECORD_HEAD.match(owner))}
                 if kind == "block" and state["depth"] > 0:
                     # A lambda's body: indented from the line its brace opens on, and outside the parentheses
                     # the call around it left open.
@@ -732,12 +795,13 @@ def check_indent(lines):
 # Python: the tagged deviations, and the four-space step they allow
 
 
-def check_python(data):
+def check_python(data, rel="<file>"):
     """en3: r17's prolog cannot be written in Python, so the file says so on its first line, with a
     reason, instead of deviating silently. r8's exemption is .editorconfig's four spaces, so every
-    indent steps by four. A file whose bytes already broke tc2 or the ASCII rule is not tokenized, because
-    that is where Python releases disagree; one that does not compile is reported under 'syntax', since
-    its indentation cannot be measured."""
+    indent steps by four. A file holding a byte the ASCII rule rejects or a line ending tc2 rejects is not
+    compiled or tokenized, because that is where Python releases disagree; one that does not compile, or
+    that this interpreter cannot compile at all, is reported under 'syntax', since its indentation cannot
+    be measured. Compiling is silent, so a warning neither prints nor, under -W error, becomes a verdict."""
     problems = []
     text = data.decode("latin-1")
     if not PYTHON_TAG.match(text):
@@ -746,17 +810,20 @@ def check_python(data):
         return problems
     source = text.replace("\r\n", "\n")
     try:
-        compile(source, "<file>", "exec")
-    except (SyntaxError, ValueError) as error:
-        problems.append((getattr(error, "lineno", None) or 0, "syntax", "not valid Python, so its indentation cannot be "
-                         "measured: %s" % getattr(error, "msg", error)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            compile(source, rel, "exec")
+    except Exception as error:
+        problems.append((getattr(error, "lineno", None) or 0, "syntax", "not valid Python to this interpreter, so its "
+                         "indentation cannot be measured: %s" % (getattr(error, "msg", None) or type(error).__name__)))
         return problems
     widths = [0]
     try:
         for token in tokenize.generate_tokens(io.StringIO(source).readline):
             if token.type == tokenize.INDENT:
                 width = len(token.string)
-                if width - widths[-1] != PYTHON_STEP:
+                # A tab is r8's to report once, and a line of nothing but a backslash is where 3.11 and 3.12 part.
+                if width - widths[-1] != PYTHON_STEP and "\t" not in token.string and not token.line.strip().startswith("\\"):
                     problems.append((token.start[0], "r8", "this block is indented %d past its parent; Python steps by %d "
                                      "(.editorconfig RULE-DEV:r8)" % (width - widths[-1], PYTHON_STEP)))
                 widths.append(width)
@@ -779,11 +846,11 @@ def check_file(rel, kind, data):
     if kind == CPP:
         prolog, inner = check_prolog(lines, rel.split("/")[-1])
         problems.extend(prolog)
-        problems.extend(check_width(lines, kind, inner))
+        problems.extend(check_width(lines, kind, inner, blank_literals(lines)[1]))
         problems.extend(check_indent(lines))
     elif kind == PYTHON:
         problems.extend(check_width(lines, kind))
-        problems.extend(check_python(data))
+        problems.extend(check_python(data, rel))
     else:
         problems.extend(check_width(lines, kind))
     return sorted(problems, key=lambda p: (p[0], p[1]))
@@ -815,6 +882,7 @@ def format_check(files, exe, root=REPO):
         found = os.path.abspath(exe) if os.path.isfile(exe) else None
     else:
         found = shutil.which(exe)
+        found = os.path.abspath(found) if found else None
     if found is None:
         return [("clang-format", 0, FORMAT_RULE, "%s was not found; pip install clang-format==%s, or pass --clang-format <path>"
                  % (exe, CLANG_FORMAT_VERSION))]
@@ -850,9 +918,10 @@ def format_check(files, exe, root=REPO):
 
 
 def ascii_only(text):
-    """Every message is ASCII, so a report reaches any console whole: a file's own bytes quoted in a
-    message come out as escapes, whatever the output's encoding."""
-    return text.encode("ascii", "backslashreplace").decode("ascii")
+    """Every message is printable ASCII, so a report reaches any console whole: a file's own bytes quoted
+    in a message, a carriage return or an escape sequence among them, come out as escapes."""
+    text = text.encode("ascii", "backslashreplace").decode("ascii")
+    return re.sub(r"[\x00-\x1f\x7f]", lambda match: "\\x%02x" % ord(match.group()), text)
 
 
 def annotate(rel, line, rule, message):
@@ -911,12 +980,11 @@ def parse(argv):
     return options
 
 
-def main(argv):
+def run(options, root=REPO):
+    """One run over parsed options: prints the notes, the problems and a summary, and returns the exit
+    status. main() is this over REPO; the self-test runs it over trees of its own."""
     try:
-        options = parse(argv)
-        if options["self_test"]:
-            return self_test()
-        chosen = select(options["paths"])
+        chosen = select(options["paths"], root)
     except UsageError as error:
         print("validate_gcs: %s" % ascii_only(str(error)))
         print(USAGE)
@@ -926,15 +994,25 @@ def main(argv):
     if options["paths"] and not chosen.files and not chosen.problems:
         print("validate_gcs: nothing to check")
         return 2
-    problems = chosen.problems + check_files(chosen.files)
+    problems = chosen.problems + check_files(chosen.files, root)
     if options["format"]:
-        problems.extend(format_check(chosen.files, options["exe"] or "clang-format"))
+        problems.extend(format_check(chosen.files, options["exe"] or "clang-format", root))
     show(problems)
     touched = len({p[0] for p in problems})
     print("validate_gcs: %d file%s judged, %d problem%s in %d place%s" % (
         len(chosen.files), "" if len(chosen.files) == 1 else "s", len(problems), "" if len(problems) == 1 else "s",
         touched, "" if touched == 1 else "s"))
     return 1 if problems else 0
+
+
+def main(argv):
+    try:
+        options = parse(argv)
+    except UsageError as error:
+        print("validate_gcs: %s" % ascii_only(str(error)))
+        print(USAGE)
+        return 2
+    return self_test() if options["self_test"] else run(options)
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -1010,8 +1088,20 @@ ACCEPTED_SHAPES = [
     ("a goto label", ["void F() {", "   if(x) goto done;", "   G();", "done:", "   H();", "}"]),
     ("a comment opened on a directive", ["#endif /* the floor, which BuildGuards.h enforces for",
                                          "          every unit */", "void F() {", "   G();", "}"]),
-    ("a function returning an enum, wrapped", ["static enum COLOUR Pick(ui32 x) {", "   ui32 first  = 1,",
+    ("a function returning an enum, wrapped", ["enum COLOUR Pick(ui32 x) {", "   ui32 first  = 1,",
                                                "        second = 2;", "   return COLOUR_RED;", "}"]),
+    ("an enum-returning signature, wrapped", ["enum COLOUR Pick(ui32 first,", "                 ui32 second) {",
+                                              "   ui32 a = 1,", "        b = 2;", "   return COLOUR_RED;", "}"]),
+    ("a lambda in a condition", ["void F() {", "   if(AnyOf(a, b, [](si32 x) {", "         G(x);", "         return x > 0;",
+                                 "      })) {", "      H();", "   }", "   G();", "}"]),
+    ("a lambda opening on a continuation line", ["void F() {", "   Sort(", "       first, second,", "       [](si32 x, si32 y) {",
+                                                 "          return x < y;", "       });", "   G();", "}"]),
+    ("a comment on a continued directive", ["#if defined(A) /* one \\", "   two */", "void F() {", "   G();", "}", "#endif"]),
+    ("an unnamed bit-field", ["struct S {", "   ui32 a : 4;", "   ui32 : 4;", "   ui32 b : 24;", "};"]),
+    ("a compound literal", ["void F() {", "   P p = (P){", "       1,", "   };", "   G();", "}"]),
+    ("an if and else that are a loop's body", ["void F() {", "   for(ui32 i = 0; i < n; ++i)", "      if(b) G(i);",
+                                                "      else H(i);", "   J();", "}"]),
+    ("a raw string holding one brace", ["void F() {", "   Call(R\"(})\");", "   G();", "}"]),
     ("two opening lines under #if", ["void F() {", "#if defined(A)", "   if(a) {", "#else", "   if(b) {", "#endif",
                                       "      X();", "   }", "}", "void H();"]),
     ("a bare scope first in its block", ["void F() {", "   {", "      ui32 x = 1;", "   }", "}"]),
@@ -1050,7 +1140,8 @@ def matches(got, wanted):
 
 
 def file_cases():
-    """(name, rel, bytes, wanted): each case breaks one check and names the problem it must produce."""
+    """(name, rel, bytes, wanted): each case either breaks the clean file in one place and names every
+    problem that must follow, or changes it in a way every rule accepts and wants nothing."""
     good = GOOD_PROLOG + GOOD_BODY
     ret = "   return b;"
     lead = "   return b; // "
@@ -1072,6 +1163,13 @@ def file_cases():
         ("modified before it was created", " * Created: 2026-09-25", " * Created: 2026-09-26", "earlier than"),
         ("a version without its v", " * Version: v0.1.0", " * Version: 0.1.0", "vMAJOR.MINOR"),
         ("two spaces after a label", " * Owner: David William Bull", " * Owner:  David William Bull", "takes one space"),
+        ("an empty value", " * Owner: David William Bull", " * Owner: ", "takes one space"),
+        ("no space after a regex-checked label, and only that reported", " * Version: v0.1.0", " * Version:v0.1.0", "takes one space"),
+        ("a short date line marked WIDTH-EXEMPT", " * Created: 2026-09-25", " * Created: 2026-09-25 // WIDTH-EXEMPT", "YYYY-MM-DD"),
+        ("a To Do item with no space", " * To Do: 1) Stay clean.", " * To Do: 1)Stay clean.", "opens with item 1)"),
+        ("None with a continuation", " * Dependencies: typedefs.h, memory management.h,", " * Dependencies: None", "comma-separated"),
+        ("a Dependencies line missing its comma", " * Dependencies: typedefs.h, memory management.h,",
+         " * Dependencies: typedefs.h, memory management.h", "comma-separated"),
         ("no space after a label, and only that reported", " * File: Good.cpp", " * File:Good.cpp", "takes one space"),
         ("None beside a dependency", " * Dependencies: typedefs.h, memory management.h,", " * Dependencies: None, memory management.h,",
          "comma-separated"),
@@ -1144,6 +1242,34 @@ def file_cases():
          [("r8", "statement starts")]),
         ("a line after a template head, indented", "src/Good.cpp", cpp(good + ["template <typename T>", "  T Max(T a, T b);"]),
          [("r8", "statement starts")]),
+        ("a line after an attribute, indented", "src/Good.cpp", cpp(good + ["[[nodiscard]]", "  si32 F(void);"]),
+         [("r8", "statement starts")]),
+        ("an else{ body out of step", "src/Good.cpp", cpp(good + ["void F() {", "   if(x) {", "      G();", "   } else{", " H();", "   }", "}"]),
+         [("r8", "statement starts")]),
+        ("a namespace{ body out of step", "src/Good.cpp", cpp(good + ["namespace n{", "  si32 F(void);", "}"]), [("r8", "statement starts")]),
+        ("a lambda body out of step", "src/Good.cpp", cpp(good + ["void F() {", "   Sort(a, b, [](si32 x, si32 y) {", "        return x < y;",
+                                                                   "   });", "   G();", "}"]), [("r8", "statement starts")]),
+        ("a long backslash line outside a directive", "src/Good.cpp", cpp(replaced(good, ret, lead + "x" * 140 + " \\")),
+         [("e2", "wrap at")]),
+        ("a padded /* line under the cap", "src/Good.cpp", cpp(replaced(good, "/*", "/*" + " " * 158)), [("e2", "delimiter")]),
+        ("a byte of 0x80", "src/Good.cpp", cpp(replaced(good, ret, ret + " // \x80")), [("ascii", "0x80")]),
+        ("a byte of 0x1F", "src/Good.cpp", cpp(replaced(good, ret, ret + " // \x1f")), [("ascii", "0x1F")]),
+        ("a malformed prolog close", "src/Good.cpp", cpp(replaced(good, " */", " **/")), [("r17", "closes on a line")]),
+        ("a prolog line of 180 columns, marked", "src/Good.cpp",
+         cpp(replaced(good, " * Owner: David William Bull", " * Owner: David William Bull " + "x" * 135 + mark)), []),
+        ("a prolog line of 181 columns, marked", "src/Good.cpp",
+         cpp(replaced(good, " * Owner: David William Bull", " * Owner: David William Bull " + "x" * 136 + mark)), [("r17", "wrap at 150")]),
+        ("the other legal prolog values", "src/Good.cpp", cpp(replaced(replaced(replaced(replaced(good, " * Version: v0.1.0", " * Version: v1.2"),
+         " * ISA: Scalar | AVX2", " * ISA: Scalar | SSE4.2 | AVX2 | AVX-512"), " * Thread-safety: Reentrant", " * Thread-safety: MT-safe"),
+         " * Reviewers: David William Bull", " * Reviewers: David William Bull,\r\n *            A. N. Other")), []),
+        ("Thread-safety N/A", "src/Good.cpp", cpp(replaced(good, " * Thread-safety: Reentrant", " * Thread-safety: N/A")), []),
+        ("a Reviewers continuation misaligned", "src/Good.cpp",
+         cpp(replaced(good, " * Reviewers: David William Bull", " * Reviewers: David William Bull,\r\n *           A. N. Other")),
+         [("r17", "aligns under the value")]),
+        ("a Python tab indent, reported once", "tests/good.py", cpp(replaced(py_good, "    return 1", "\treturn 1")), [("r8", "four spaces")]),
+        ("a Python line of only a backslash", "tests/good.py", cpp(py_good + ["x = 1", "  \\", "# note", "y = 2"]), []),
+        ("Python too deep to compile", "tests/good.py", cpp(py_good + ["TOTAL = (1"] + ["    + 1"] * 12000 + [")"]), [("syntax", "not valid")]),
+        ("Python whose compile warns", "tests/good.py", cpp(py_good + ["import re", "DIGITS = re.compile(\"\\d+\")"]), []),
         ("a Python file with its tag", "tests/good.py", cpp(py_good), []),
         ("a Python file without its tag", "tests/good.py", cpp(py_good[1:]), [("en3", "RULE-DEV")]),
         ("a Python tag with no reason", "tests/good.py", cpp(["# RULE-DEV:r17 "] + py_good[1:]), [("en3", "RULE-DEV")]),
@@ -1177,8 +1303,10 @@ def path_cases():
         ("tests/unit/Check.h", "judge"), ("tests/fixtures/minimal/src/word/document.xml", "skip"),
         ("tests/build/minimal.docx", "skip"), ("tests/Build/Probe.cpp", "unknown"), ("tests/x64/Release/DOCXtoMD.Tests.exe", "skip"),
         ("tests/__pycache__/make_fixtures.cpython-311.pyc", "skip"), ("tests/__PyCache__/x.py", "unknown"),
-        ("tests/DOCXtoMD.Tests.vcxproj.user", "skip"), ("tests/notes.txt", "unknown"), ("docs/CONVERSION_REFERENCE.md", "outside"),
-        ("DOCXtoMD.vcxproj", "outside"), ("src/Upper.CPP", "judge"), ("SRC/Ir.h", "unknown"),
+        ("tests/DOCXtoMD.Tests.vcxproj.user", "skip"), ("tests/x64", "unknown"),
+        ("src/__pycache__", "unknown"), ("src/__pycache__/x.pyc", "skip"), ("tests/notes.txt", "unknown"),
+        ("docs/CONVERSION_REFERENCE.md", "outside"),
+        ("DOCXtoMD.vcxproj", "outside"), ("src/Upper.CPP", "unknown"), ("SRC/Ir.h", "unknown"),
     ]
 
 
@@ -1217,7 +1345,7 @@ def tree_cases(root):
     missing = make(os.path.join(root, "missing"), {"tests/ok.py": py})
     results = []
 
-    def run(name, args, base, wanted_files, wanted_problems, wanted_notes=0):
+    def expect(name, args, base, wanted_files, wanted_problems, wanted_notes=0):
         try:
             chosen = select(args, base)
             got = ([rel for rel, _ in chosen.files], [(p[0], p[3]) for p in chosen.problems], len(chosen.notes))
@@ -1227,24 +1355,58 @@ def tree_cases(root):
             got, ok = "usage error: %s" % error, wanted_files is None
         results.append((name, ok, got))
 
-    run("a default run judges src/ and tests/, and fails what has no class", [], full,
+    expect("a default run judges src/ and tests/, and fails what has no class", [], full,
         ["src/Good.cpp", "tests/ok.py"], [("tests/notes.txt", "no rules")])
-    run("a default run over an empty src/ is a problem", [], empty, ["tests/ok.py"], [("src", "nothing here")])
-    run("naming the root is the default run", [full], full, ["src/Good.cpp", "tests/ok.py"], [("tests/notes.txt", "no rules")], 2)
-    run("naming the root keeps the empty-scope problem", [empty], empty, ["tests/ok.py"], [("src", "nothing here")], 2)
-    run("naming include/ judges nothing", [os.path.join(full, "include", "typedefs.h")], full, [], [], 1)
-    run("naming docs/ judges nothing", [os.path.join(full, "docs")], full, [], [], 1)
-    run("naming one file twice reports it once", [os.path.join(full, "tests", "notes.txt")] * 2, full, [], [("tests/notes.txt", "no rules")])
-    run("naming tests/ twice judges it once", [os.path.join(full, "tests")] * 2, full, ["tests/ok.py"], [("tests/notes.txt", "no rules")])
-    run("directories differing from include/ and tests/build/ only in case", [], variant, ["src/Good.cpp", "tests/ok.py"],
+    expect("a default run over an empty src/ is a problem", [], empty, ["tests/ok.py"], [("src", "nothing here")])
+    expect("naming the root is the default run", [full], full, ["src/Good.cpp", "tests/ok.py"], [("tests/notes.txt", "no rules")], 2)
+    expect("naming the root keeps the empty-scope problem", [empty], empty, ["tests/ok.py"], [("src", "nothing here")], 2)
+    expect("naming include/ judges nothing", [os.path.join(full, "include", "typedefs.h")], full, [], [], 1)
+    expect("naming docs/ judges nothing", [os.path.join(full, "docs")], full, [], [], 1)
+    expect("naming one file twice reports it once", [os.path.join(full, "tests", "notes.txt")] * 2, full, [], [("tests/notes.txt", "no rules")])
+    expect("naming tests/ twice judges it once", [os.path.join(full, "tests")] * 2, full, ["tests/ok.py"], [("tests/notes.txt", "no rules")])
+    expect("directories differing from include/ and tests/build/ only in case", [], variant, ["src/Good.cpp", "tests/ok.py"],
         [("Include", "letter case"), ("tests/Build", "letter case")])
-    run("naming a directory that differs only in case", [os.path.join(variant, "tests", "Build")], variant, [],
+    expect("naming a directory that differs only in case", [os.path.join(variant, "tests", "Build")], variant, [],
         [("tests/Build", "letter case")])
-    run("a repository without src/", [], missing, ["tests/ok.py"], [("src", "does not exist")])
-    run("a path outside the repository is a usage error", [root], full, None, [])
-    run("a missing path is a usage error", [os.path.join(full, "src", "Gone.cpp")], full, None, [])
+    expect("a repository without src/", [], missing, ["tests/ok.py"], [("src", "does not exist")])
+    expect("a path outside the repository is a usage error", [root], full, None, [])
+    expect("a missing path is a usage error", [os.path.join(full, "src", "Gone.cpp")], full, None, [])
     unreadable = check_files([("src/Gone.cpp", CPP)], full)
     results.append(("a file that cannot be read is a problem", len(unreadable) == 1 and unreadable[0][2] == "scope", unreadable))
+
+    bad = make(os.path.join(root, "bad"), {"src/Good.cpp": good, "src/Bad.cpp": cpp(["\tsi32 x;"]), "tests/ok.py": py})
+    judged = check_files(select([], bad).files, bad)
+    results.append(("check_files reports a bad file's problems", sorted((p[0], p[2]) for p in judged) ==
+                    [("src/Bad.cpp", "r17"), ("src/Bad.cpp", "r8")], judged))
+    options = {"self_test": False, "format": False, "exe": None, "paths": []}
+    with contextlib.redirect_stdout(io.StringIO()):
+        failing = run(options, bad)
+        os.remove(os.path.join(bad, "src", "Bad.cpp"))
+        passing = run(options, bad)
+    results.append(("a run exits 1 on a problem and 0 without one", (failing, passing) == (1, 0), (failing, passing)))
+
+    listing = os.scandir
+    hidden = os.path.join(full, "src", "hidden")
+    os.makedirs(hidden)
+
+    def refuse(path="."):
+        if os.path.realpath(path) == os.path.realpath(hidden):
+            raise PermissionError(13, "Permission denied", path)
+        return listing(path)
+    os.scandir = refuse
+    try:
+        expect("a directory that cannot be listed is a problem", [], full, ["src/Good.cpp", "tests/ok.py"],
+            [("tests/notes.txt", "no rules"), ("src/hidden", "cannot be listed")])
+    finally:
+        os.scandir = listing
+    global is_link
+    linking = is_link
+    is_link = lambda path: linking(path) or os.path.basename(path) == "hidden"
+    try:
+        expect("a junction under src/ is a link", [], full, ["src/Good.cpp", "tests/ok.py"],
+            [("tests/notes.txt", "no rules"), ("src/hidden", "symbolic link")])
+    finally:
+        is_link = linking
     linked = make(os.path.join(root, "linked"), {"src/Good.cpp": good, "tests/ok.py": py, "include/typedefs.h": b"junk"})
     moved = make(os.path.join(root, "moved"), {"elsewhere/Good.cpp": good, "tests/ok.py": py})
     try:
@@ -1252,17 +1414,19 @@ def tree_cases(root):
         os.symlink("Nowhere.h", os.path.join(linked, "src", "Dangling.h"))
         os.symlink("elsewhere", os.path.join(moved, "src"))
         os.symlink("linked", os.path.join(root, "alias"))
+        os.symlink(os.path.join("..", "src"), os.path.join(linked, "tests", "build"))
     except (OSError, NotImplementedError, AttributeError):
         print("skip  the link cases: this host cannot make a symbolic link")
     else:
-        run("links under src/ are problems, not followed", [], linked, ["src/Good.cpp", "tests/ok.py"],
+        expect("links under src/ are problems, not followed, and a generated directory that is one is skipped", [], linked,
+            ["src/Good.cpp", "tests/ok.py"],
             [("src/inclink", "symbolic link"), ("src/Dangling.h", "symbolic link")])
-        run("a path through a link resolves to where it really is", [os.path.join(linked, "src", "inclink", "typedefs.h")],
+        expect("a path through a link resolves to where it really is", [os.path.join(linked, "src", "inclink", "typedefs.h")],
             linked, [], [], 1)
-        run("naming a link is a problem", [os.path.join(linked, "src", "Dangling.h")], linked, [], [("src/Dangling.h", "symbolic link")])
-        run("naming a link through another name for the repository", [os.path.join(root, "alias", "src", "Dangling.h")],
+        expect("naming a link is a problem", [os.path.join(linked, "src", "Dangling.h")], linked, [], [("src/Dangling.h", "symbolic link")])
+        expect("naming a link through another name for the repository", [os.path.join(root, "alias", "src", "Dangling.h")],
             os.path.join(root, "alias"), [], [("src/Dangling.h", "symbolic link")])
-        run("src/ itself a link", [], moved, ["tests/ok.py"], [("src", "symbolic link")])
+        expect("src/ itself a link", [], moved, ["tests/ok.py"], [("src", "symbolic link")])
     return results
 
 
@@ -1274,7 +1438,10 @@ def self_test():
     fired = set()
     for name, rel, data, wanted in file_cases():
         total += 1
-        got = check_file(rel, verdict_for(rel)[1], data)
+        with warnings.catch_warnings():
+            # As under -W error: a compile warning must not reach the verdict, even when promoted.
+            warnings.simplefilter("error")
+            got = check_file(rel, verdict_for(rel)[1], data)
         fired |= {rule for _, rule, _ in got}
         if matches(got, wanted):
             print("ok    %s" % name)
@@ -1293,6 +1460,7 @@ def self_test():
             print("FAIL  %s: wanted %s, got %s" % (rel, wanted, got))
     for name, got, wanted in [
             ("a quoted byte is escaped", ascii_only("caf\xe9"), "caf\\xe9"),
+            ("a quoted carriage return and escape are escaped", ascii_only("a\rb\x1b[K"), "a\\x0db\\x1b[K"),
             ("an annotation escapes its properties and its message", annotate("a,b.cpp", 3, "r8", "50% done\n"),
              "::error file=a%2Cb.cpp,line=3,title=GCS r8::50%25 done%0A")]:
         total += 1
