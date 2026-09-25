@@ -13,7 +13,7 @@
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
- * License: MIT  Copyright: David William Bull
+ * License: MIT Copyright: David William Bull
  */
 #pragma once
 
