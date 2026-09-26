@@ -8,6 +8,25 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M12, continuous integration, and decision D11's validator.** `.github/workflows/ci.yml` runs on
+  `windows-latest` for every push and pull request, in two jobs. `gcs` runs the validator's self-test,
+  installs clang-format 18.1.3 and runs `python tests/validate_gcs.py --format`. `build` builds
+  `DOCXtoMD.sln` at `Release|x64` with `-warnAsError`, then runs the unit binary, `make_fixtures.py`,
+  `run_container.py` and `run_golden.py`. Its first green run built with **0 warnings, 0 errors** on
+  Visual Studio Enterprise 2026 carrying MSVC 14.44.35207, the v143 toolset, and returned the M11
+  tallies exactly: 1614 unit checks, 118 fixtures, 227 container checks and 154 golden checks. The DoD's
+  red run is run 36164302531, on a commit that deliberately broke `src/Diag.h`'s `License:` spacing and
+  was reverted by the next; the green run on `main` waits for the merge, so the marker is
+  `[done-unverified]`.
+- **`tests/validate_gcs.py`**, the mechanical GCS validator every session since M1 had written in a
+  scratch directory and thrown away. It judges `src/` and `tests/` for the r17 prolog (the standard's
+  regexes and its twelve fields in order), r8's three-space indent over the brace structure and its ban
+  on tabs, e2's 150 and 180 columns, tc2's CRLF and ASCII, with Python held to its tagged deviations and
+  project XML to the rules Visual Studio's own output can meet. `include/` is exempt **inside the
+  script**, for any path that resolves there, which is the part D11 ruled. `--format` pins
+  clang-format to 18.1.3 and refuses any other release; `--self-test` runs 178 checks on Python 3.10
+  to 3.13. Two adversarial review rounds and CI's own Windows run shaped it before it was recorded as done;
+  CLAUDE.md's M12 status says what they found and what survives mutation testing.
 - **M11, hostile-input hardening.** The third milestone running that added **no module**: decision D10's
   answer is a check in `ZipReader`, the producer quirks are rules in `StyleModel`, `NumberingModel` and
   `DocWalker`, and the table and amplification limits are bounds in `Ir`, `DocWalker`, `RunCoalescer`
@@ -433,6 +452,11 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   nothing.
 
 ### Changed
+- `.gitattributes` stores `*.yml` LF and checks it out CRLF, like every other tooling file, so the CI
+  workflow follows tc2 while GitHub reads an LF blob.
+- CLAUDE.md's rule table no longer says CI bans new `f32`/`f64` spellings or checks alias mixing: en2
+  asks for both and M12's CI does neither yet. The Do NOT list's "the two `tests/*.py` scripts" is "the
+  `tests/*.py` scripts" -- there were three before M12 and are four now.
 - **A cell that would start at or past column 256 is skipped whole**, before any of it is stored:
   `DocWalkCell` asks `IrNextColumn` first. It is the cap on cells per row that M9's review asked for, and
   it is `IR_MAX_COLUMNS` rather than a second number, because a cell past the emitted grid is one no reader

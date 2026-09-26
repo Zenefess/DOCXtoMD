@@ -1033,7 +1033,8 @@ below.
     extra `static_assert` D4 ruled out. **The sanctioned lock for the one-thread-per-file worker
     layer** (D6) — not for use inside a single document's conversion.
 - Tooling and process files, all CRLF except `CHANGELOG.md`. The first five landed with M1;
-  `.gitignore` landed with M2, when the project first produced build output worth ignoring:
+  `.gitignore` landed with M2, when the project first produced build output worth ignoring, and the CI
+  workflow with M12:
   - `.clang-format` — `BasedOnStyle: LLVM` first, so anything neither tc1 nor the list below names
     is LLVM's default rather than the GCS's; check that before assuming a rule is covered. Then
     tc1's keys verbatim, and one entry per rule the formatter would otherwise break:
@@ -1080,13 +1081,29 @@ below.
     `/x64/` did not already cover `tests/x64/` and the second entry was needed; `__pycache__/` is
     deliberately not anchored, because it can appear in any directory. Those last two are the only ones
     a Linux session produces.
-  None of the six is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
+  - `.github/workflows/ci.yml` — M12's continuous integration, CRLF and three-space indented like every
+    other tooling file (its YAML is valid at any consistent indent). It runs on `windows-latest` for every
+    push, every pull request and by hand, as two jobs so a style failure and a build failure are reported
+    apart. **`gcs`** installs Python 3.12, runs `python tests/validate_gcs.py --self-test`, installs
+    `clang-format==18.1.3` from PyPI and runs `python tests/validate_gcs.py --format`. **`build`** locates
+    MSBuild with `vswhere`, builds `DOCXtoMD.sln` at `Release|x64` with **`-warnAsError`** -- the global
+    DoD's zero warnings made a command -- then runs the unit binary, `make_fixtures.py`,
+    `run_container.py` and `run_golden.py`. The workflow uses GitHub's own `actions/checkout@v5` and
+    `actions/setup-python@v6` and nothing third-party, and sets `PYTHONUTF8=1` so a Windows runner's ANSI
+    code page cannot turn the exe's UTF-8 into a Python encoding error. It holds no include/ exemption of
+    its own: that lives in the validator, which is D11's ruled part. What `windows-latest` was on
+    2026-09-25 is worth knowing when a run changes: **Visual Studio Enterprise 2026** (MSBuild 18.9.1)
+    carrying **MSVC 14.44.35207, the v143 toolset** the project pins, so CI builds with the owner's
+    compiler under a newer IDE; one side effect is that VS 2026's MSBuild writes the main project's
+    intermediates to `DOCXtoMD\x64\Release\`, which `.gitignore` does not name, while the exe still lands
+    in `x64\Release\`.
+  None of the seven is a `<ClCompile>`/`<ClInclude>` candidate, so the MSBuild file-list rule does
   not reach them and neither project file mentions them.
 - `GDC_GCS_v1_1_4.md`, `CONTRIBUTING.MD`, `docs/CONVERSION_REFERENCE.md`, `LICENSE`
   (MIT, Copyright (c) 2026 David William Bull), this file.
 - Line endings: `.gitattributes` now holds the line, so this no longer needs checking by hand.
   Source and build files (`*.c`, `*.cpp`, `*.h`, `*.hpp`, `*.inl`, `*.sln`, `*.vcxproj`, `*.filters`,
-  `*.props`, `*.py`, and the four tooling dotfiles) are `text eol=crlf`: Git stores LF and materialises
+  `*.props`, `*.py`, `*.yml` since M12, and the four tooling dotfiles) are `text eol=crlf`: Git stores LF and materialises
   **CRLF** in every working tree, on Linux exactly as on Windows, so tc2 cannot drift and a
   line-ending change can never reach a diff. Everything else is `* -text` — byte-for-byte as
   committed, whatever `core.autocrlf` a contributor has set — which is what leaves the Markdown docs
@@ -1099,7 +1116,8 @@ below.
   planned-only any more.
 - `tests/` — the container and package test scaffolding, the golden runner and the unit suite.
   `make_fixtures.py` builds every fixture; `run_container.py` runs the exe over them and checks the exit
-  code and the message; `run_golden.py` converts every golden and byte-compares it. All three
+  code and the message; `run_golden.py` converts every golden and byte-compares it; and, since M12,
+  `validate_gcs.py` is D11's mechanical GCS validator, described in its own bullet below. All four
   are CRLF like the rest of the tree and carry **no shebang**, because a CRLF shebang does not survive on
   a POSIX host — run them as `python tests/<name>.py`. There are **thirty-eight** part trees under
   `fixtures/`: `minimal`, `relocated`, the five M5 golden cases `headings`, `toggles`, `textflow`,
@@ -1293,8 +1311,36 @@ below.
   three blank-line shapes and the setext hazard — be driven without a package. Since M10 a case may
   supply notes parts as literals as well, walked after the body exactly as `Convert.cpp` walks them, and
   `Cited` is the one-line form for the cases about what a single note may hold.
-- **Not yet created** (GCS obligations, see Roadmap): `bench/` and CI. Do not reference them as if they
-  exist. Everything else this section names does exist, `tests/run_golden.py` included.
+- `tests/validate_gcs.py` — **exists** as of M12: decision D11's validator, the one every session since M1
+  had written into a scratch directory and thrown away. Standard-library Python, run as
+  `python tests/validate_gcs.py` from anywhere. With no arguments it judges `src/` and `tests/`; named
+  paths narrow it inside the same scope. **`include/` is exempt inside the script** -- a path that resolves
+  into it is never judged however it is named, through a link included -- which is the part D11 ruled,
+  so a hand run cannot reach a different verdict from CI's. `tests/fixtures/` is input data and
+  `tests/build/`, `tests/x64/` and `__pycache__/` are generated, so none is judged; any other file under
+  the two roots whose type the script has no class for is a **problem**, and so is a symbolic link or a
+  junction, which Git checks out differently on Linux and Windows. Its classes: C and C++ carry every
+  rule -- the **r17 prolog** (the standard's regexes verbatim, plus the twelve fields once each in A-to-L
+  order, `File:` naming the file, real dates with `Last Modified` not before `Created`, To Do numbered from
+  `1)` with continuations aligned under their text, `Dependencies`/`Reviewers` continuations aligned under
+  the value), **r8** (no tabs, and three-space steps checked over the brace structure rather than every
+  line, with the exceptions `.clang-format` itself makes: case and goto labels at their opener, access
+  specifiers one column in, an `extern "C"` block unindented, braced initializers and continuation lines
+  unmeasured), **e2** (150 columns, 180 with r17's own `WIDTH-EXEMPT` mark, and a directive line continued
+  by a backslash may reach 180 unmarked because clang-format aligns escaped newlines there), **tc2**'s
+  CRLF and **ASCII**; Python carries the tagged deviations -- line 1 must be `# RULE-DEV:r17 <why>` (en3),
+  blocks step by four, and source that does not compile is reported under `syntax`; MSBuild XML is
+  IDE-owned, so it is held to CRLF, ASCII after an optional BOM, no tabs and the 180-column cap only.
+  `--format` adds the formatter check, pinned to **clang-format 18.1.3** and refusing any other release,
+  because two releases can format one file two ways; its findings are reported under tc1. `--self-test`
+  runs 178 checks -- every reporting site but the two formatter ones and one defensive fallback is pinned
+  by a case naming the problem it must produce, and a whole scratch tree is run end to end -- and passes
+  identically on Python 3.10 to 3.13. Exit status: 0 clean, 1 at least one problem (a default run that
+  finds nothing to judge included), 2 a usage error or named paths that leave nothing to judge. On a
+  GitHub runner each problem is also written as an `::error` annotation, so it lands on the line in a
+  pull request's diff.
+- **Not yet created** (GCS obligations, see Roadmap): `bench/`. Do not reference it as if it
+  exists. Everything else this section names does exist, `tests/run_golden.py` and CI included.
 
 ## Build & run
 
@@ -1332,6 +1378,18 @@ builds, and all four were confirmed on Windows on 2026-09-24. The three check co
 the shim measures on Linux, and at every milestone since M3 they have been exactly what the real MSVC
 binary then returned. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
 on both platforms -- and is recorded only so a run that builds a different number is noticed.
+The GCS mechanical rules and the formatter are checked by one script, which runs anywhere Python does:
+
+```bat
+python tests\validate_gcs.py                                   :: src\ and tests\ against D11's rules
+python tests\validate_gcs.py --format                          :: and clang-format 18.1.3 must be a no-op
+python tests\validate_gcs.py --self-test                       :: shows every rule firing on a known-bad input
+```
+
+`--format` needs `clang-format` 18.1.3 on `PATH` (`pip install clang-format==18.1.3`) or named with
+`--clang-format <path>`; any other release is refused rather than trusted. CI runs all of the above --
+the validator, the formatter, the build at `Release|x64` with warnings as errors and the four test
+commands -- on `windows-latest` for every push and pull request (`.github/workflows/ci.yml`).
 The unit binary
 is its own runner — it self-asserts and returns an exit code, so there is deliberately no
 `run_unit.py` wrapping it; a wrapper would assert nothing `run_container.py` does not.
@@ -1346,8 +1404,11 @@ platform without a new numbered decision.
 
 **Linux/remote sessions cannot run MSVC — nothing in this project can be compiled or executed there.**
 What you can still verify on Linux: `.vcxproj`/`.filters`/`.sln` XML/text well-formedness and mutual
-sync, GCS mechanical rules (indent, tabs, line width, prolog regexes, CRLF), and any Python
-fixture/golden scripts. A `g++ -std=c++20 -fsyntax-only` smoke check is **not** available for anything
+sync, GCS mechanical rules (`python tests/validate_gcs.py --format`, with clang-format 18.1.3, which is
+what Ubuntu 24.04's `clang-format` package and PyPI's `clang-format==18.1.3` both are), and any Python
+fixture/golden scripts. Since M12 a push also gets the msbuild half from CI, which is the first way a
+Linux session can see the real MSVC build at all -- read the run's log rather than assume it.
+A `g++ -std=c++20 -fsyntax-only` smoke check is **not** available for anything
 touching the shared headers — they are MSVC-specific (`__declspec(align)`, `__vectorcall`, `__int64`,
 `__bfloat16`, `<windows.h>`, `_aligned_malloc`). MSVC v143 is the only supported compiler. **Never
 claim the build passes when you could not run msbuild; state exactly what was and was not verified.**
@@ -1389,10 +1450,10 @@ because standard C++ habits violate nearly all of these. Intentional deviations 
 |---|---|
 | r8 | Indent **3 spaces** in C and C++. Never tabs. (`.editorconfig` exempts `*.py` at 4 — see its bullet.) |
 | e2/r7 | Lines ≤150 columns; hard cap 180. |
-| r1 | Width/sign-encoded scalar aliases only: `ui8 ui16 ui32 ui64`, `si8 si16 si32 si64`, `fl32 fl64`. CI bans new `f32`/`f64` spellings (en2). All live in `typedefs.h`. |
+| r1 | Width/sign-encoded scalar aliases only: `ui8 ui16 ui32 ui64`, `si8 si16 si32 si64`, `fl32 fl64`. en2 asks CI to ban new `f32`/`f64` spellings; M12's CI does not yet. All live in `typedefs.h`. |
 | r2/t2 | const/volatile and indirection live in **typedefs, not identifiers**: `cui32` = `const ui32`, `ui32ptr` = `ui32*`, `cui32ptr` = `const ui32*`, `ui32ptrc` = `ui32* const`, `cui32ptrc` = `const ui32* const`. Leading `c` binds the pointee, trailing `c` binds the pointer, repeat per indirection. `typedefs.h` carries the full lattice including the `void*` family (`ptr`, `cptr`, `vptr`, `ptrc`, `cptrc`, `vptrc`, `ptrptr`, …). |
 | t1 | Vector aliases (`ui256`, `fl32x8`, `fl64x4`, `ui512`, `fl32x16`, `fl64x8`, …) — **live, not dormant**; see the ISA baseline below. |
-| t3 | Never mix alias forms with raw `const T*` style in the same TU (CI-checked, en2). |
+| t3 | Never mix alias forms with raw `const T*` style in the same TU (en2 asks CI to check it; M12's CI does not yet). |
 | m1/m2 | Pointer-array macros `defpa`/`defpa2`/`defp1a1` and casts `refpa`/`refpa2` come from `typedefs.h` — do not re-roll them (`refp1a1` is commented out upstream). |
 | r11 / r12 | Functions **PascalCase**; tables/macros/global constants **UPPER_SNAKE**. |
 | r13 | Control structures: no space before `(`, exactly one space after each `;` — `if(x)`, `for(ui32 i = 0; i < n; ++i)`. |
@@ -1524,7 +1585,7 @@ sessions need to know:
 
 ### Do NOT (anti-habit list)
 
-- No tabs; no 2- or 4-space indent in C or C++ (r8) — the two `tests/*.py` scripts are the one tagged exemption.
+- No tabs; no 2- or 4-space indent in C or C++ (r8) — the `tests/*.py` scripts are the one tagged exemption.
 - No `uint32_t`, `int32_t`, `unsigned`, `float`, `double` in new code — use `ui32`/`si32`/`fl32`/`fl64` (r1).
 - No `{` on its own line after a function signature (r15); no missing space before it.
 - No `const T*` written at use sites — use the alias forms (r2), and never mix styles in a TU (t3).
@@ -1607,12 +1668,13 @@ forbidden; before D6 it was.
   the right choice where SIMD is not faster, never as a shipped fallback build.
 - tc2 mandates **CRLF source files**, and until M1 nothing enforced it. `.gitattributes` now does
   (`text eol=crlf` on every source and build pattern), so a Linux session cannot drift a source file
-  to LF: whatever it writes, the checkout is CRLF. What is still unenforced is tc2's *other* half —
-  no tool checks `indent_size = 3` or `max_line_length = 180`; `.editorconfig` only asks editors
-  nicely, and there is no CI or pre-commit hook to fail a violation. **D11 ruled who fixes this**: M12 commits
-  the mechanical validator and runs it in CI, so this gap has an owner and a milestone rather than being a
-  standing complaint. Until then it stays real — a Linux session cannot drift line endings, but nothing
-  stops it from committing a 4-space indent.
+  to LF: whatever it writes, the checkout is CRLF. tc2's *other* half -- `indent_size = 3` and
+  `max_line_length = 180` -- is enforced since M12 by `tests/validate_gcs.py` in CI, as D11 ruled, so this
+  gap is **closed for `src/` and `tests/`**. What it does not reach is stated rather than hidden: the
+  validator's r8 check measures statement starts and closing braces, never a continuation line; a
+  lambda inside a condition is left unmeasured; and nothing outside `src/` and `tests/` is judged, the
+  root's project files and tooling dotfiles included. There is still no pre-commit hook, so a violation
+  is caught at push rather than at commit.
 - Two shared headers (`SIMD management.h`, `vector structures.h`) still carry the pre-r17 boxed
   banner, `typedefs.h` writes the nonconforming ISA token `AVX512` and un-numbered `To Do:` items,
   `spinlocks.h` declares `ISA: AVX2` although it carries no AVX2 code (its only intrinsics are
@@ -1985,7 +2047,9 @@ tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.m
                          tests/DOCXtoMD.Tests.vcxproj [written at M4, five more suites at M5, a
                          ninth at M6, an eleventh at M7, a twelfth at M8; M9 and M10 added no
                          thirteenth and put their cases in the suites that already own the stages they
-                         touch; M11 added the thirteenth, TestZipReader]
+                         touch; M11 added the thirteenth, TestZipReader]; validate_gcs.py, D11's
+                         mechanical GCS validator [written at M12]
+.github/workflows/       ci.yml, windows-latest CI for every push and pull request [written at M12]
 bench/                   GCS p4 microbenches (create with the first performance claim)
 docs/                    CONVERSION_REFERENCE.md (already here); module guides (d2/d3) still to come
 include/                 the six owner-authored shared headers (already here); on the include path
@@ -2099,8 +2163,9 @@ still accept only one input; what it must not do is assume there will only ever 
   which side is wrong rather than regenerating the file.
 - A milestone's DoD is **commands that pass**, not adjectives. Before claiming any change done:
   1. x64 Release builds with **zero warnings** at `/W3` (on Windows; on Linux say you could not build).
-  2. New/changed files: prolog validates (r17 regexes), 3-space indent, no tabs, lines ≤150/180,
-     CRLF, `Last Modified` bumped.
+  2. New/changed files: `python tests/validate_gcs.py --format` passes (r17 prolog, 3-space indent, no
+     tabs, lines ≤150/180, CRLF, ASCII, clang-format 18.1.3 a no-op), and `Last Modified` is bumped,
+     which no tool checks.
   3. `.vcxproj` + `.filters` updated together for any added file.
   4. Golden/unit tests pass once they exist; new conversion features land **with** a fixture pair.
   5. `CHANGELOG.md` updated — it exists from M1 on, so this is unconditional now.
@@ -3179,7 +3244,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     it is now covered: both configurations build warning-free and every suite returns what the shim
     returned. What stays Linux-only is the other half of the pair, AddressSanitizer and
     UndefinedBehaviorSanitizer, neither of which is switched on in `DOCXtoMD.vcxproj`.
-- **M12 `[todo]` CI** — GitHub Actions `windows-latest`: msbuild x64 Release (the only platform) +
+- **M12 `[done-unverified]` CI** — GitHub Actions `windows-latest`: msbuild x64 Release (the only platform) +
   fixture build + golden runner. **D11 lands here too**: commit the mechanical GCS validator every session since M1
   has written into a scratch directory and thrown away — r17 prolog regexes, 3-space indent, no tabs, ASCII,
   CRLF, the 150/180 widths — and run it in CI over `src/` and `tests/`, with **`include/` exempt**, because a
@@ -3188,6 +3253,43 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   in the validator itself, not only in the CI invocation, so running it by hand cannot produce a different verdict.
   DoD: a red CI run on a deliberately broken prolog, a green one on `main`, and the `.clang-format` no-op check
   alongside it.
+  **Status**: the work landed from Linux on 2026-09-25, and for the first time a milestone's Windows half was
+  run by a machine rather than by the owner: every push to the branch built and tested on `windows-latest`.
+  Two of the three DoD items are **met and recorded**; the third needs a merge, so the marker is
+  `[done-unverified]`, and the one outstanding check is: **CI green on `main` after the merge.**
+  - **The red run**: run 36164302531, on a commit that took one of the two spaces out of `src/Diag.h`'s
+    `License:  Copyright:` gap. The `gcs` job failed with `src/Diag.h:16: r17: 'License:' is an SPDX id,
+    exactly two spaces, then 'Copyright: <holder>'`, written as an error annotation too, and exited 1; the
+    `build` job stayed green, as it must, since a prolog is a comment. The next commit reverted it and run
+    36164665683 went green again. Both commits stay in the branch's history, named for what they are.
+  - **The formatter check alongside it**: the `gcs` job installs clang-format 18.1.3 and runs
+    `validate_gcs.py --format`, which passed on every green run.
+  - **What CI proved beyond the DoD**: every green run's `build` job built `DOCXtoMD.sln` at `Release|x64`
+    with `-warnAsError` and reported **0 warnings, 0 errors**, then returned exactly the M11 tallies the
+    owner verified -- **1614** unit checks, **118** fixtures, **227** container checks and **154** golden
+    checks. That is the global DoD's bullet 1 and bullet 4 met on Windows without the owner. No `src/`
+    file changed at M12, so matching M11's numbers is the expected result, not new evidence about the converter.
+  - **The validator was reviewed adversarially twice before this status was written.** A first round of
+    92 agents over six dimensions raised 38 findings that at least one of two skeptics could not refute -- among them a crash
+    under Python 3.12 on badly encoded bytes, a multi-line `#define` that no layout could make pass both
+    the width rule and clang-format, false r8 reports on code clang-format itself writes, symlink and
+    letter-case paths that let a hand run and CI disagree, and a self-test that compared rule ids only, so
+    twenty reporting sites could be deleted and it still passed. The validator was rewritten against all
+    of them. A second round re-ran the 38 and hunted the rewrite; it hit a session limit with 7 of its 76
+    agents finished and none of its skeptics run, so its findings were verified by hand instead, and
+    every one that reproduced was fixed. CI found one more that neither round had: on the Windows runner
+    `%TEMP%` is an 8.3 short path, and a named link was misplaced through it.
+  - **Mutation-tested**: all 59 reporting sites silenced one at a time, and some seventy logic changes,
+    each run against `--self-test`, on Python 3.12 and, for the first batch, on 3.11 as well.
+    What survives is stated rather than hidden: the two formatter sites and one
+    defensive tokenize fallback, which no self-test can reach; the lambda depth restore and the policy of
+    keeping an `#if`'s first branch at `#endif`, which are equivalent to their mutants for code that is
+    valid in every configuration; and `--clang-format`'s relative-path resolution. Reformatting every file
+    in `src/` and `tests/unit/` at a two- or four-space indent is caught in all 49 files it changes, and the
+    repository's own style reports nothing.
+  - **Verified on Linux, mechanically**: the validator passes itself and the tree under Python 3.10, 3.11,
+    3.12 and 3.13; the committed blobs of the three new or changed files are LF and their checkouts CRLF.
+    No `src/` file changed, so neither project file did.
 - **M13 `[todo]` Multi-file batch + bounded worker pool** *(D6 and D7 both ruled — specifiable)*
   — `Batch` over a list of inputs, threading per D6/D7a, `Diag` made
   `MT-safe` with `include/spinlocks.h`, `--threads` parsing with the virtual-core-count default,
@@ -3226,7 +3328,7 @@ question/recommendation/status shape, and stay `Open — owner call` until the o
 | D8 | Ill-formed UTF-8 inside a part: refuse the input, or substitute U+FFFD and carry on? CLAUDE.md's M4 definition of done says "rejected with a clear message"; `docs/CONVERSION_REFERENCE.md` 5.12 says "replace invalid sequences with U+FFFD rather than aborting". Sub-question: should the answer differ between a structural part (`[Content_Types].xml`, any `.rels`, the main part) and an optional one (`styles.xml`, `settings.xml`, an unreferenced footnote part)? | **Refuse**, as M4 implements, adopting the session recommendation in full. It is testable today as an exit code plus a substring, while U+FFFD substitution is only checkable against a golden `.md` that does not exist until M5; and refuse → replace is a strict relaxation still open later, while replace → refuse would break output users already had. The sub-question goes the same way: a part is a part, structural or optional. *(Consequence: `docs/CONVERSION_REFERENCE.md` 5.12 said the opposite and was corrected to match, which is what the ruling was for. U+FFFD survives only on the console path in `Utf`, where an unrepresentable path should still be reportable.)* | M4 (already implemented; `bad-utf8.docx` and `truncated-utf8.docx` pin it) |
 | D9 | When the `officeDocument` relationship resolves to a part whose content type is **not** one of the four WordprocessingML main-document types, does the tool convert it (trusting the relationship and reporting the disagreement) or refuse it as not a valid DOCX? "Cross-check" in correctness rule 1 is ambiguous between *verify and fail* and *fall back*, and the two readings give opposite exit codes for the same file. | **Trust the relationship and convert**, as M4 implements: the relationship is the specification's discovery mechanism and `[Content_Types].xml` is metadata, and refusing loses documents from producers that omit the Override. The content-type table stays a cross-check in the one case M4 already gives it — a relationship that resolved to a part the archive does not contain. | M4 (already implemented; `content-type-mismatch.docx` pins it, so the choice cannot change silently) |
 | D10 | ZIP **entry** names — not relationship targets — carrying `\`, a leading `/`, `..` or a drive letter. PowerShell's `Compress-Archive` writes `word\document.xml`; `docs/CONVERSION_REFERENCE.md` 5.12 names entry names as a traversal surface, and CLAUDE.md forbids *producing* such fixtures while saying nothing about *consuming* them. Refuse the archive, or normalise while building the part index? | **Leave it as it is until M11** and decide there with the producer-variance corpus in hand. Nothing is exposed meanwhile: part names are only ever compared in memory and no path reaches disk until M7's `MediaExtractor`, which generates its own names. Normalising is defensible; it is a leniency with no measured constituency, and strictness is the reversible direction. | **Answered at M11: refuse.** `ZipCheckEntryName` refuses the archive, exit 3, when any entry name -- referenced or not -- begins with a drive letter, begins with `/`, holds a `\`, holds any other `:`, or has a `.` or `..` segment; the sentence names the rule and the entry. A directory entry's trailing `/` and an empty interior segment are accepted. The corpus the ruling asked for: twenty variants of a real pandoc export put through LibreOffice 24.2.7 and this build, and ten of them through python-docx 1.2 and pandoc 3.9 too. LibreOffice refuses exactly the shapes refused here and accepts exactly the rest; python-docx and pandoc are each inconsistent, reading some refused shapes and refusing others; and none of LibreOffice, pandoc or python-docx writes a refused shape. Nothing argued for leniency, so the strict and reversible direction stands. Six fixtures must be refused -- `entry-backslash`, `entry-absolute`, `entry-dot-prefix`, `entry-traversal`, `entry-drive-letter`, `entry-stream` -- and `directory-entries` and `empty-segment-entry` must convert. *(The answer is the milestone's, as the ruling delegated it; the owner may still overrule it, and relaxing to normalisation would be a change in `ZipCheckEntryName`, in whatever builds the part index from the names it then accepts, in `TestZipReader`'s refusal cases and in those six fixtures.)* |
-| D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | **Yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it earlier would oblige every future file to pass a session-authored checker with no CI behind it. | M12 |
+| D11 | Should the repository carry a committed mechanical GCS validator (r17 prolog regexes, indent, tabs, ASCII, CRLF, width), and would it run over the owner-authored `include/` headers? | **Yes, at M12 with CI, and `include/` exempt.** Every session since M1 has written one in a scratch directory and thrown it away. The exemption is a policy rather than a detail: a validator run over `include/` would fail `typedefs.h`'s `AVX512` token and two pre-r17 banners that this document says to *report, not fix*. Landing it earlier would oblige every future file to pass a session-authored checker with no CI behind it. | **done-unverified at M12**: `tests/validate_gcs.py` holds the exemption in its own path logic -- a path that resolves into `include/` is never judged, however it is named -- and CI runs it over `src/` and `tests/` on every push; the green run on `main` waits for the merge |
 | D12 | GitHub renders `$...$` and `$$...$$` as LaTeX math, and has since 2022. `docs/CONVERSION_REFERENCE.md` 4.1 predates that and does not list `$` among the characters to escape, so today a paragraph reading `costs $5 and $10` is emitted verbatim and github.com renders `5 and ` in math font, losing both dollar signs. Should `$` join the unconditional inline escape set, join it conditionally (only where a closing `$` could pair with it), or stay unescaped? Note the cost of each: unconditional puts a backslash in front of every price in every document, conditional needs a lookahead the line-assembly pass can do but the reference does not describe, and leaving it corrupts a real and common shape on the one renderer this converter names in its own mapping table. The same question reaches `docs/CONVERSION_REFERENCE.md`, which would gain the row either way. | **Escape `$` conditionally**, adopting the session recommendation in full; ruled 2026-08-26. Unconditional escaping is the safe direction but it is visible on every ordinary document, and math is not a CommonMark feature -- it is one renderer's extension, so paying for it everywhere is out of proportion. *(Consequence, session-derived: "conditionally" is implemented as **at most one unescaped `$` per assembled line** -- a line holding two or more has every one of them escaped, a line holding one keeps it bare. A span needs two delimiters under every renderer's reading, so a count is safe without reproducing GitHub's exact opener and closer conditions, which this project cannot verify. All-or-none was preferred over leaving one bare per line because it also narrows the one residual: a line that pairs internally contributes no live dollar to the next line.)* | **done** (the rule, the reference row and `tests/fixtures/dollars` landed 2026-08-26, after M5's verification) |
 | D13 | `--stdout` and the media files. `--stdout` is single-input only (D7d) and writes the document to a pipe; M7 gives a document pictures, which are files and cannot go down a pipe. Three readings are available. **Extract anyway**, into the media directory beside where the `.md` *would* have gone, so the piped document and a written one are the same bytes and the pictures are on disk for whatever consumes the pipe. **Extract nothing**, on the reading that `--stdout` means "write no files", which makes the piped document name pictures that do not exist unless the reader also passes `--no-images`. **Refuse the combination**, which is the strictest and costs the shell pipeline that wants both. Note what the second and third cost beyond the obvious: `tests/run_golden.py` converts every fixture twice, once to a file and once through `--stdout`, and byte-compares both against one `expected.md` -- that is the check that has caught a `--stdout`-only defect before, and either of them ends it. | **Recommendation (not yet ruled): extract anyway.** `--stdout` is about where the *document* goes, and the media directory is derived from `-o` or from the input either way, so nothing about it is ambiguous. It is also the only reading under which the two output paths produce the same document, which is the property the golden runner exists to prove. The strict direction stays open: extract-anyway to refuse is a change a user notices, but so is every other pair, and no producer or consumer has a stake in this one yet. | **Implemented as recommended at M7**, and `tests/run_golden.py` compares the two paths byte for byte. If the owner rules otherwise, the change is in `ConvertFile` alone -- the pipeline below it does not know which path it is on. |
 | D14 | A heading whose **style** carries italic. Mapping row 1 rules that heading text is never additionally bolded, and the walker clears the bold bit on a heading's spans; it clears nothing else, so a heading style set italic comes out wrapped in `*…*`. That is not a hypothetical: LibreOffice 24.2's own `Heading 2` is bold and italic, so every second-level heading it exports reads `## *A list*` -- which `tests/fixtures/libreoffice` now pins -- and `tests/fixtures/quotes`, verified on Windows, pins `## *A heading beats a quote*` from a heading style based on an italic quote style. A heading's look is its template's business in the same way its boldness is, and GitHub renders every heading in its own face. Should italic that a heading gets from its **paragraph style chain** be dropped the way bold is, keeping italic that comes from the run's own `w:rPr` or its character style? And should strikethrough, which a style may also carry, go the same way? | **Recommendation (not yet ruled): drop style-borne italic from a heading, keep run-level italic, and leave strikethrough alone.** The rule would mirror row 1's reasoning exactly: what the template says about how headings look is not something the author said about these words, while a run the author italicised inside a heading is. Strikethrough is not a typographic default any template sets on a heading, so a heading struck through was struck by someone. The cost: two goldens change, both of them owner-verified, and `StyleResolveRun` has to report which layer an italic came from, which it does not today. | **Open — owner call.** The code keeps the existing behaviour meanwhile, because the recommendation would change `tests/fixtures/quotes` and `tests/fixtures/libreoffice`, both of which the owner verified; if ruled as recommended, the change is in `DocWalker`'s heading rule and `StyleModel`'s run resolution, plus both goldens. |
