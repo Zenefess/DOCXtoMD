@@ -3459,19 +3459,21 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     fixture -- 118, with an unopenable input, a refused claim and two repeats placed among them, 122
     operands in all -- file by file and as one batch, and compares the two trees: 79 files, byte for byte.
     (2) The same batch runs at `--threads 1` and three times at the smaller of 8 and the core count:
-    every run writes the same tree, exits 6, writes the same console lines once sorted and ends with the
-    same failure list, and its workers note says the pool held 1 and then 4 workers. (3) The batch mixes
+    every run writes the same tree, exits 6, writes the same console lines once sorted -- all but the
+    workers note, which differs on purpose -- and ends with the same failure list, and its workers note
+    says the pool held 1 and then 4 workers. (3) The batch mixes
     66 valid inputs with 56 failing ones -- 53 fixtures that are not usable DOCX, the unopenable input,
     the refused claim and a repeat of a failing fixture -- exits 6, converts every valid input, 60 of them
     to their own `expected.md`, and ends by naming all 56 in argument order. (4) `--stdout` with two inputs
-    exits 1, in the output-options section M5 wrote.
+    exits 1, in the golden runner's output-options section.
   - **CI's runs.** Run 36310955956 on the first commit and run 36319881192 on the review's fixes, both
     green: `DOCXtoMD.sln` at `Release|x64` with `-warnAsError`, **0 warnings and 0 errors** on MSVC
     14.44.35207; the unit suite 1732 and then **1723**, because the pre-flight's cases moved from
     `TestConvert` to `TestBatch` when `BatchPlan` took them over; **118** fixtures; **229** container
     checks; and 296 and then **304** golden checks, the Windows-only trailing-dot case among them. The
-    stem-spellings case came after, so the golden count this file records, 305, is the documentation
-    commit's own run.
+    stem-spellings case came after, and run 36320420500, on the commit that recorded this status, returned
+    exactly the counts "Build & run" gives: 0 warnings, **1723** unit, **118** fixtures, **229** container and
+    **305** golden checks.
   - **Verified on Linux, mechanically**: `validate_gcs.py --format` judges 63 files clean, the three new
     ones included; both project-file pairs are well-formed and name the same files in the same order, and
     every file they name exists; `USAGE_TEXT` did not change.
