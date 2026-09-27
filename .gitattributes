@@ -32,3 +32,6 @@
 .editorconfig  text eol=crlf
 .gitattributes text eol=crlf
 .gitignore     text eol=crlf
+
+# Continuous integration (M12). GitHub reads the stored blob, which is LF like every other text file here.
+*.yml          text eol=crlf
