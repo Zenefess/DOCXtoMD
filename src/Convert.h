@@ -3,13 +3,12 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-27
  * Description: The per-file conversion pipeline and the output-path derivation D7b's operand grammar needs.
- * To Do: 1) Hand this whole function to a worker when M13 adds the bounded pool (D6/D7a).
- *        2) Say so when -o named an existing directory and one input made it a file name, which today
+ * To Do: 1) Say so when -o named an existing directory and one input made it a file name, which today
  *           reports only that the file could not be created.
- *        3) Pre-flight a --media-dir shared by several inputs, the way ConvertTargetTaken pre-flights
- *           a shared output name; the architecture note gives both to Batch at M13.
+ *        2) Compare an output path with the inputs by file identity once it exists, which would catch a
+ *           link or a short name that a normalised string cannot.
  * Dependencies: CliOptions.h, Diag.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -36,6 +35,8 @@ enum CONVERT_TARGET : si32 {
    CONVERT_TARGET_FREE,     ///< Nothing else in the run needs that path
    CONVERT_TARGET_IS_INPUT, ///< The derived output is another input of this run, and would destroy it
    CONVERT_TARGET_CLAIMED,  ///< An earlier input derives the same output, so this one would overwrite it
+   CONVERT_TARGET_REPEATED, ///< The same input was named earlier: one document, which is converted once
+   CONVERT_TARGET_IS_SELF,  ///< The derived output is the input itself, spelled another way
    CONVERT_TARGET_COUNT
 };
 
@@ -45,15 +46,16 @@ typedef const CONVERT_TARGET cCONVERT_TARGET;
 //== Entry points
 
 /// Converts one input file and writes its Markdown.
-/// @param options    The parsed command line. It is read and never written, so several workers may share
-///                   one of these by const reference from M13 (D6).
+/// @param options    The parsed command line. It is read and never written, so Batch's workers share one
+///                   of these by const reference (D6).
 /// @param inputPath  The input, as wmain received it. Paths stay UTF-16 until Win32 or Diag.
 /// @return EXIT_ALL_CONVERTED, or the per-file verdict: 2 when the input cannot be opened, 3 when it is
 ///         not a usable DOCX, 4 when the output cannot be written, 5 for this program's own failures.
 ///         Every failure has already been reported.
 /// @note This is the whole pipeline for one document: container, package, styles, numbering, walk,
-///       notes, resolve, emit, write. At M13 it is what one worker runs, which is why it takes no shared
-///       state and returns a verdict rather than setting one.
+///       notes, resolve, emit, write. It is what one of Batch's workers runs (D6), which is why it takes
+///       no shared state and returns a verdict rather than setting one: two calls on two threads share
+///       nothing but options, which neither writes, and Diag, which locks.
 /// @note The footnotes are walked after the body and the endnotes after the footnotes, and only the
 ///       notes something already walked references are read: an endnote cited from a footnote is found,
 ///       and a malformed notes part nothing cites costs the document nothing.
@@ -68,19 +70,25 @@ typedef const CONVERT_TARGET cCONVERT_TARGET;
 cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath);
 
 /// Whether converting one input would destroy something the rest of the run still needs.
-/// @param options  The parsed command line.
+/// @param options  The parsed command line. Batch hands in a copy whose paths it has normalised, so that
+///                 two spellings of one file compare equal; the comparison here is literal either way.
 /// @param index    Which input to test, as an index into options->inputs.
-/// @return CONVERT_TARGET_FREE when the input may be converted; otherwise why it may not be.
+/// @param other    Receives the other input the answer is about -- the one this input repeats, the one
+///                 it would destroy, or the earlier one that claims its output -- or index itself when
+///                 the answer is CONVERT_TARGET_FREE or CONVERT_TARGET_IS_SELF. May be null.
+/// @return CONVERT_TARGET_FREE when the input may be converted; otherwise why it may not be converted by
+///         a worker of its own.
 /// @note D7b derives every output name from an input's own leaf, so two inputs with the same leaf
 ///       name in different directories both target one .md, and without this check the second
 ///       silently overwrites the first -- two documents converted, one destroyed, exit 0. Argument
 ///       order decides: the first input to name a path keeps it and the later ones are refused, so
-///       a run converts what it can and names what it could not. The architecture note that
-///       recommends this pre-flight gives it to Batch at M13; the loop in main.cpp is what Batch
-///       replaces, so it is done there until then.
+///       a run converts what it can and names what it could not.
+/// @note One input named twice is not a collision but it is not two conversions either: two workers
+///       writing one output file at once race for it, so a repeat is reported first, whatever else is
+///       true of it, and Batch gives it the verdict of the earliest spelling rather than a worker.
 /// @note Pure: it touches no file and allocates nothing. It is O(index) in derivations, which is
 ///       O(n^2) over a whole run -- a command line cannot hold enough operands for that to matter.
-cCONVERT_TARGET ConvertTargetTaken(cCLI_OPTIONSptr options, cui32 index);
+cCONVERT_TARGET ConvertTargetTaken(cCLI_OPTIONSptr options, cui32 index, ui32ptr other);
 
 /// Derives the output path for one input.
 /// @param inputPath         The input path as given.

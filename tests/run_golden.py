@@ -14,9 +14,15 @@ and only comparing both proves the document does not depend on which one was tak
 
 tests/run_container.py stays with the container and package layers, where the assertion is an exit code
 and a sentence rather than a document; this file is where the document itself is the assertion.
+
+Since M13 it also converts every fixture as one batch -- valid and corrupt inputs together -- and compares
+the tree that writes against the tree the same inputs write one at a time, at --threads 1 and at the widest
+count the machine allows up to 8, which is M13's definition of done.
 """
 
 import os
+import re
+import shutil
 import subprocess
 import sys
 
@@ -374,6 +380,257 @@ def check_output_option(exe, failures):
     return checks
 
 
+# -- M13: the batch
+
+# The phrase Diag gives each per-input verdict in the failure list, which is user-facing text and so is
+# pinned here as well as in the unit suite.
+VERDICT_TEXT = {2: "the input could not be read", 3: "not a valid DOCX", 4: "the output could not be written",
+                5: "an internal error"}
+
+# An input no fixture is called, so that the batch carries an unopenable file as well as unusable ones.
+ABSENT = "no-such-input.docx"
+
+# How many times the many-thread batch is repeated. A race shows up as a difference between two runs of
+# the same command line, and one repeat is a small sample of the orders a scheduler can choose.
+REPEATS = 3
+
+
+def tree_of(root):
+    """Every file under root, keyed by its path relative to root with forward slashes."""
+    found = {}
+    for folder, dirs, files in os.walk(root):
+        for leaf in files:
+            path = os.path.join(folder, leaf)
+            with open(path, "rb") as handle:
+                found[os.path.relpath(path, root).replace(os.sep, "/")] = handle.read()
+    return found
+
+
+def fresh_dir(path):
+    shutil.rmtree(path, ignore_errors=True)
+    os.makedirs(path)
+
+
+def widest_threads(exe):
+    """The exe's own ceiling for --threads, which is the virtual core count the machine reports.
+
+    It is read from the sentence the exe refuses a larger count with, so the runner and the exe cannot
+    disagree about how many cores there are.
+    """
+    code, out, err = run(exe, ["--threads", "4294967295", ABSENT])
+    found = re.search(r"--threads must be 1 to (\d+),", err)
+    return code, (int(found.group(1)) if found else None)
+
+
+def summary_of(err, failed, total):
+    """The failure list is the last thing a run writes: a heading and one line per failed input."""
+    lines = err.splitlines()
+    return lines[-(failed + 1):] if failed and len(lines) > failed else []
+
+
+def diff_trees(label, left, right, failures, why):
+    """Reports the first difference between two trees; returns whether they were identical."""
+    if left == right:
+        return True
+    only_left = sorted(set(left) - set(right))
+    only_right = sorted(set(right) - set(left))
+    differ = sorted(path for path in set(left) & set(right) if left[path] != right[path])
+    failures.append((label, why, "trees differ"))
+    print("FAIL  %-28s %s" % (label, why))
+    for name, paths in (("only in the first", only_left), ("only in the second", only_right), ("bytes differ", differ)):
+        if paths:
+            print("      %s: %s" % (name, ", ".join(paths[:6]) + (" ..." if len(paths) > 6 else "")))
+    return False
+
+
+def check_batch(exe, failures):
+    """M13's definition of done: one batch against the same inputs one at a time, at 1 thread and at many."""
+    checks = 0
+    exe = os.path.abspath(exe)
+    build = make_fixtures.BUILD
+    rows = make_fixtures.EXPECTATIONS # main() has built them; the table is every fixture and its exit code
+    if os.path.exists(os.path.join(build, ABSENT)):
+        os.remove(os.path.join(build, ABSENT))
+
+    # Every fixture, in the table's order, with the unopenable input among them rather than at an end.
+    names = [row["name"] for row in rows]
+    names.insert(len(names) // 3, ABSENT)
+    wanted = dict((row["name"], row["code"]) for row in rows)
+    wanted[ABSENT] = 2
+    failed = [name for name in names if wanted[name] != 0]
+    goldens = dict((row["name"], row["expected"]) for row in make_fixtures.GOLDENS)
+
+    code, cores = widest_threads(exe)
+    checks += 1
+    if code != 1 or not cores:
+        failures.append(("--threads", "exit %s" % code, "core count"))
+        print("FAIL  %-28s a --threads count above the core count is exit %s and names no ceiling" % "--threads")
+        return checks
+    many = min(8, cores)
+    print("ok    %-28s --threads above %d is a usage error, so the many-thread runs use %d" % ("--threads", cores, many))
+    if many < 2:
+        print("note  %-28s this machine reports one core, so no run here converts two inputs at once" % "--threads")
+
+    # One at a time, each with -o naming its own file, so the pictures land beside it exactly as a batch
+    # with -o naming the directory puts them.
+    single = os.path.join(build, "batch-single")
+    fresh_dir(single)
+    for name in names:
+        code, out, err = run(exe, ["-o", os.path.join("batch-single", name[:-5] + ".md"), name], cwd=build)
+        checks += 1
+        if code != wanted[name]:
+            failures.append((name, "exit %s, expected %s" % (code, wanted[name]), "one at a time"))
+            print("FAIL  %-28s converted alone, exit %s, expected %s" % (name, code, wanted[name]))
+    one_by_one = tree_of(single)
+    print("ok    %-28s %d inputs converted one at a time wrote %d files" % ("one at a time", len(names), len(one_by_one)))
+
+    # The same inputs as one batch at --threads 1, and then at the widest count, more than once.
+    batch = os.path.join(build, "batch-run")
+    header = "DOCXtoMD: error: %d of %d inputs failed:" % (len(failed), len(names))
+    listed = [header] + ["DOCXtoMD: error: failed (exit %d, %s): %s" % (wanted[name], VERDICT_TEXT[wanted[name]], name)
+                         for name in failed]
+    runs = []
+    for threads in [1] + [many] * REPEATS:
+        fresh_dir(batch)
+        code, out, err = run(exe, ["--threads", str(threads), "-o", "batch-run" + os.sep] + names, cwd=build)
+        runs.append((threads, code, err, tree_of(batch)))
+
+    first_threads, first_code, first_err, first_tree = runs[0]
+    for threads, code, err, tree in runs:
+        label = "batch --threads %d" % threads
+        checks += 1
+        if code != 6:
+            failures.append((label, "exit %s, expected 6" % code, "mixed batch"))
+            print("FAIL  %-28s a batch of valid and corrupt inputs is exit %s, expected 6" % (label, code))
+        else:
+            print("ok    %-28s a batch of %d valid and %d failing inputs is exit 6" % (label, len(names) - len(failed), len(failed)))
+        checks += 1
+        if diff_trees(label, one_by_one, tree, failures, "the batch did not write what one-at-a-time wrote"):
+            print("ok    %-28s the batch wrote the same %d files, byte for byte, as one at a time" % (label, len(tree)))
+        checks += 1
+        if summary_of(err, len(failed), len(names)) != listed:
+            failures.append((label, "failure list", "mixed batch"))
+            print("FAIL  %-28s the run did not end by listing every failed input in argument order" % label)
+            for line in summary_of(err, len(failed), len(names))[:4]:
+                print("      %s" % line)
+        else:
+            print("ok    %-28s the run ends by listing all %d failed inputs, in argument order" % (label, len(failed)))
+        # Every line a worker writes is written whole, so the lines of two runs are the same lines, only
+        # perhaps in another order -- and the list at the end is in the same order in both.
+        checks += 1
+        if sorted(err.splitlines()) != sorted(first_err.splitlines()):
+            failures.append((label, "stderr lines", "mixed batch"))
+            print("FAIL  %-28s the console lines differ from the --threads 1 run's, beyond their order" % label)
+        else:
+            print("ok    %-28s the same %d console lines as --threads 1, each one whole" % (label, len(err.splitlines())))
+
+    # What the batch wrote, against the documents themselves: every valid input converted, every golden to
+    # its expected.md, and nothing at all for an input that failed.
+    checks += 1
+    missing = [name for name in names if wanted[name] == 0 and name[:-5] + ".md" not in first_tree]
+    stray = [name for name in failed if name[:-5] + ".md" in first_tree]
+    wrong = []
+    for name in names:
+        if name in goldens and name[:-5] + ".md" in first_tree:
+            with open(goldens[name], "rb") as handle:
+                if first_tree[name[:-5] + ".md"] != handle.read():
+                    wrong.append(name)
+    if missing or stray or wrong:
+        failures.append(("batch outputs", "missing %s stray %s wrong %s" % (missing, stray, wrong), "mixed batch"))
+        print("FAIL  %-28s missing %s, written for a failed input %s, differing from expected.md %s"
+              % ("batch outputs", missing[:3], stray[:3], wrong[:3]))
+    else:
+        print("ok    %-28s every valid input converted, %d of them to their expected.md, and no failed one"
+              % ("batch outputs", len([name for name in names if name in goldens])))
+
+    # The valid inputs alone are a run with nothing to list.
+    valid = [name for name in names if wanted[name] == 0]
+    fresh_dir(batch)
+    code, out, err = run(exe, ["--threads", str(many), "-o", "batch-run" + os.sep] + valid, cwd=build)
+    tree = tree_of(batch)
+    checks += 1
+    if code != 0 or "inputs failed" in err or tree != first_tree:
+        failures.append(("valid batch", "exit %s" % code, "all converted"))
+        print("FAIL  %-28s the valid inputs alone are exit %s, or listed failures, or wrote other bytes" % ("valid batch", code))
+    else:
+        print("ok    %-28s the %d valid inputs alone are exit 0, list nothing and write the same files" % ("valid batch", len(valid)))
+
+    checks += check_batch_preflight(exe, many, failures)
+    return checks
+
+
+def check_batch_preflight(exe, many, failures):
+    """What the pre-flight refuses, and what it keeps to one conversion, before any worker starts."""
+    checks = 0
+    build = make_fixtures.BUILD
+    source = make_fixtures.GOLDENS[0]
+    with open(source["expected"], "rb") as handle:
+        first = handle.read()
+
+    # One input named twice, in two spellings of one path, is one document: converted once, exit 0.
+    target = os.path.join(build, "batch-repeat")
+    fresh_dir(target)
+    twice = [source["name"], os.path.join(".", source["name"])]
+    code, out, err = run(exe, ["--threads", str(many), "-o", "batch-repeat" + os.sep] + twice, cwd=build)
+    tree = tree_of(target)
+    checks += 1
+    if code != 0 or list(tree) != [source["name"][:-5] + ".md"] or "so converted once" not in err:
+        failures.append(("repeat", "exit %s" % code, "one input twice"))
+        print("FAIL  %-28s one input named twice is exit %s, or wrote %s" % ("repeat", code, sorted(tree)))
+    else:
+        print("ok    %-28s one input named in two spellings is converted once, exit 0" % "repeat")
+
+    # Two inputs with one leaf name in two directories both target one .md under -o: the first keeps it.
+    # The second is a different document under the first one's name, so which of them won is visible.
+    unlike = next(row for row in make_fixtures.GOLDENS if row["expected"] != source["expected"])
+    other = os.path.join(build, "batch-leaf")
+    fresh_dir(other)
+    shutil.copyfile(os.path.join(build, unlike["name"]), os.path.join(other, source["name"]))
+    target = os.path.join(build, "batch-claimed")
+    fresh_dir(target)
+    second = os.path.join("batch-leaf", source["name"])
+    code, out, err = run(exe, ["--threads", str(many), "-o", "batch-claimed" + os.sep, source["name"], second], cwd=build)
+    tree = tree_of(target)
+    checks += 1
+    if (code != 6 or tree.get(source["name"][:-5] + ".md") != first
+            or "an earlier input already writes that output file: " + second not in err):
+        failures.append(("claimed", "exit %s" % code, "same leaf twice"))
+        print("FAIL  %-28s two inputs with one leaf name are exit %s, or the first lost its output" % ("claimed", code))
+    else:
+        print("ok    %-28s the first of two inputs with one leaf name keeps the output, the second is refused" % "claimed")
+
+    # A --media-dir named with several inputs is one directory, which the first input converted owns.
+    shared = os.path.join(build, "batch-pics")
+    target = os.path.join(build, "batch-media")
+    shutil.rmtree(shared, ignore_errors=True)
+    fresh_dir(target)
+    code, out, err = run(exe, ["--threads", str(many), "--media-dir", "batch-pics", "-o", "batch-media" + os.sep,
+                               "images.docx", "footnotes.docx"], cwd=build)
+    tree = tree_of(target)
+    pictures = tree_of(shared) if os.path.isdir(shared) else {}
+    owned = dict(next(row["files"] for row in make_fixtures.MEDIA if row["name"] == "images.docx"))
+    checks += 1
+    if (code != 6 or list(tree) != ["images.md"] or pictures != owned
+            or "already extracts its pictures into that --media-dir: footnotes.docx" not in err):
+        failures.append(("--media-dir x2", "exit %s" % code, "shared media directory"))
+        print("FAIL  %-28s a shared --media-dir is exit %s, wrote %s, or holds other pictures" % ("--media-dir x2", code, sorted(tree)))
+    else:
+        print("ok    %-28s a shared --media-dir belongs to the first input; the second is refused" % "--media-dir x2")
+
+    # --no-images writes no picture, so the same command line shares nothing and converts both.
+    fresh_dir(target)
+    shutil.rmtree(shared, ignore_errors=True)
+    code, out, err = run(exe, ["--threads", str(many), "--no-images", "--media-dir", "batch-pics", "-o", "batch-media" + os.sep,
+                               "images.docx", "footnotes.docx"], cwd=build)
+    checks += 1
+    if code != 0 or sorted(tree_of(target)) != ["footnotes.md", "images.md"] or os.path.isdir(shared):
+        failures.append(("--media-dir --no-images", "exit %s" % code, "nothing shared"))
+        print("FAIL  %-28s --no-images with a --media-dir and two inputs is exit %s" % ("--media-dir no-img", code))
+    else:
+        print("ok    %-28s --no-images shares no directory, so both inputs convert" % "--media-dir no-img")
+    return checks
+
+
 def main(argv):
     exe = DEFAULT_EXE
     if "--exe" in argv:
@@ -397,6 +654,10 @@ def main(argv):
     total += check_output_option(exe, failures)
     total += check_media_options(exe, failures)
     total += check_table_option(exe, failures)
+
+    print()
+    print("the batch (M13)")
+    total += check_batch(exe, failures)
 
     print()
     if failures:

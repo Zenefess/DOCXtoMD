@@ -30,6 +30,10 @@ CLI_CASES = [
     (["--version"], 0, ["DOCXtoMD "], "--version reports and stops"),
     (["--help"], 0, ["Usage: DOCXtoMD"], "--help reports and stops"),
     (["--nonsense"], 1, ["unrecognised option"], "an unknown option is a usage error"),
+    # M13 sizes its worker pool by --threads, so the count it refuses is part of the surface too; the
+    # ceiling, which depends on the machine, is run_golden.py's to read.
+    (["--threads", "0", "x.docx"], 1, ["--threads takes a whole number of at least 1"], "--threads 0 is a usage error"),
+    (["-j", "two", "x.docx"], 1, ["--threads takes a whole number"], "a --threads count must be a number"),
 ]
 
 

@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-27
  * Description: One document end to end: container, package, styles, walk, notes, resolve, emit and write.
  * To Do: 1) Report the offset UtfValidate found, which the package records and nothing prints yet.
  *        2) Write through a temporary file and rename over the target, once a partial write costs more.
@@ -140,20 +140,12 @@ cbool ConvertOutputPath(cwchptr inputPath, cwchptr outputPath, cbool outputIsDir
    return true;
 }
 
-// Whether two paths are the same string, folding ASCII case the way a Windows file system does. This is
-// a literal comparison and not an identity test: ".\a.md" and "a.md" name one file and do not match here.
-static cbool ConvertSamePath(cwchptr a, cwchptr b) {
-   ui64 index = 0;
-
-   for(;;) {
-      cwchar left  = (a[index] >= L'A' && a[index] <= L'Z' ? wchar(a[index] - L'A' + L'a') : a[index]);
-      cwchar right = (b[index] >= L'A' && b[index] <= L'Z' ? wchar(b[index] - L'A' + L'a') : b[index]);
-
-      if(left != right) return false;
-      if(!left) return true;
-      ++index;
-   }
-}
+// Whether two paths are the same string, folding case the way a Windows file system does: by the system's
+// own upper-case table, which is what CompareStringOrdinal's ignore-case form reads, so "Ete.md" and "ete.md"
+// match and so do the accented and Cyrillic pairs NTFS folds, where folding A to Z alone would miss them.
+// It is a string comparison and not an identity test: ".\a.md" and "a.md" name one file and match only
+// once Batch has normalised both, and a link or a short name is not seen at all.
+static cbool ConvertSamePath(cwchptr a, cwchptr b) { return CompareStringOrdinal(a, -1, b, -1, TRUE) == CSTR_EQUAL; }
 
 //-- The media directory
 
@@ -419,33 +411,54 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
 
 //== Entry points
 
-cCONVERT_TARGET ConvertTargetTaken(cCLI_OPTIONSptr options, cui32 index) {
+cCONVERT_TARGET ConvertTargetTaken(cCLI_OPTIONSptr options, cui32 index, ui32ptr other) {
    wchar mine[CONVERT_MAX_PATH];
    wchar theirs[CONVERT_MAX_PATH];
+   ui32  unused = 0;
+   // A null other is the caller saying it does not want to know, so it is pointed somewhere harmless.
+   ui32ptrc about = (other ? other : &unused);
 
+   *about = index;
    // --stdout writes no file, and a run that cannot derive a path fails on its own in ConvertFile.
    if(!options || options->toStdout || index >= options->inputCount) return CONVERT_TARGET_FREE;
+   // A repeat is settled before anything else, because it is the same document rather than another one:
+   // whatever the earliest spelling's output path collides with, this one's collides with too, and the
+   // earliest spelling is what reports it.
+   for(ui32 earlier = 0; earlier < index; ++earlier) {
+      if(ConvertSamePath(options->inputs[index], options->inputs[earlier])) {
+         *about = earlier;
+         return CONVERT_TARGET_REPEATED;
+      }
+   }
 
    cbool several = options->inputCount > 1u;
 
    if(!ConvertOutputPath(options->inputs[index], options->outputPath, several, mine, CONVERT_MAX_PATH)) {
       return CONVERT_TARGET_FREE;
    }
-   for(ui32 other = 0; other < options->inputCount; ++other) {
-      // An input that is its own output is ConvertFile's case and carries ConvertFile's message.
-      if(other != index && ConvertSamePath(mine, options->inputs[other])) return CONVERT_TARGET_IS_INPUT;
-      if(other >= index) continue;
-      // One input named twice is not a collision: the second conversion writes the same bytes over
-      // its own, which loses nothing. Only two different inputs claiming one output destroy a document.
-      if(ConvertSamePath(options->inputs[index], options->inputs[other])) continue;
-      if(!ConvertOutputPath(options->inputs[other], options->outputPath, several, theirs, CONVERT_MAX_PATH)) {
-         continue;
+   // An output that is the input itself would be written over the document being read. ConvertFile checks
+   // the spellings as given; this is where two spellings of one file are caught, once Batch has normalised them.
+   if(ConvertSamePath(mine, options->inputs[index])) return CONVERT_TARGET_IS_SELF;
+   for(ui32 at = 0; at < options->inputCount; ++at) {
+      if(at != index && ConvertSamePath(mine, options->inputs[at])) {
+         *about = at;
+         return CONVERT_TARGET_IS_INPUT;
       }
-      if(ConvertSamePath(mine, theirs)) return CONVERT_TARGET_CLAIMED;
+      if(at >= index) continue;
+      // No earlier input is a spelling of this one -- the loop above returned if one was -- so an earlier
+      // input deriving the same output is a different document, and converting this one would destroy it.
+      if(!ConvertOutputPath(options->inputs[at], options->outputPath, several, theirs, CONVERT_MAX_PATH)) continue;
+      if(ConvertSamePath(mine, theirs)) {
+         *about = at;
+         return CONVERT_TARGET_CLAIMED;
+      }
    }
    return CONVERT_TARGET_FREE;
 }
 
+// RULE-DEV:a2 single-threaded by owner ruling (D5, narrowed by D6): one document is converted start to
+// finish on the thread that called this. The concurrency is Batch's, one input per worker, and nothing
+// below shares state with another worker, which is why none of it locks.
 cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
    wchar outputPath[CONVERT_MAX_PATH];
 

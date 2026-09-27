@@ -3,10 +3,9 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-27
  * Description: Parsed command line, the hard-break policy, and the usage and version writers.
- * To Do: 1) Hand the input list and --threads count to Batch when M13 adds the bounded worker pool (D7a).
- *        2) Add the remaining policy switches CONVERSION_REFERENCE.md 6.3 lists, once their stages exist.
+ * To Do: 1) Add the remaining policy switches CONVERSION_REFERENCE.md 6.3 lists, once their stages exist.
  * Dependencies: Diag.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -49,8 +48,8 @@ typedef const TABLE_MODE cTABLE_MODE;
 /// One parsed command line. Filled by CliParse, read-only afterwards.
 /// @note D7b: every operand is an input and there is no positional output, so the inputs are a list from
 ///       the first commit. -o names a file when there is exactly one input, a directory when several.
-/// @note From M13 the workers share one of these by const reference, so nothing may mutate it once
-///       CliParse returns (D6).
+/// @note Batch's workers share one of these by const reference, so nothing may mutate it once CliParse
+///       returns (D6).
 struct CLI_OPTIONS {
    cwchptrptr inputs;      ///< Input paths in command-line order; allocated by CliParse, freed by CliFree
    cwchptr    outputPath;  ///< -o/--output; null when absent
