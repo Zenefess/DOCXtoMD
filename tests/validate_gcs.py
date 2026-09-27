@@ -1268,7 +1268,6 @@ def file_cases():
          [("r17", "aligns under the value")]),
         ("a Python tab indent, reported once", "tests/good.py", cpp(replaced(py_good, "    return 1", "\treturn 1")), [("r8", "four spaces")]),
         ("a Python line of only a backslash", "tests/good.py", cpp(py_good + ["x = 1", "  \\", "# note", "y = 2"]), []),
-        ("Python too deep to compile", "tests/good.py", cpp(py_good + ["TOTAL = (1"] + ["    + 1"] * 12000 + [")"]), [("syntax", "not valid")]),
         ("Python whose compile warns", "tests/good.py", cpp(py_good + ["import re", "DIGITS = re.compile(\"\\d+\")"]), []),
         ("a Python file with its tag", "tests/good.py", cpp(py_good), []),
         ("a Python file without its tag", "tests/good.py", cpp(py_good[1:]), [("en3", "RULE-DEV")]),
@@ -1294,6 +1293,32 @@ def file_cases():
     for name, shape in ACCEPTED_SHAPES:
         cases.append(("accepts " + name, "src/Good.cpp", cpp(good + shape), []))
     return cases
+
+
+def compile_cases():
+    """(name, ok, got) for check_python's handler, which is as broad as Exception because compile() gives up on source
+    too deep or too large for this interpreter by raising RecursionError or MemoryError, and neither carries a msg or a
+    lineno, so the message falls back to the type's name and the line to 0. No source found reaches the handler on every
+    host: a sum of 12,000 terms raises RecursionError on 3.10 to 3.13 and crashes them outright on a 256 KiB stack, while
+    3.14 and 3.15 measure the stack instead of counting and compile it on Windows' 3 MB and Linux's 8 MB. So compile(),
+    as check_python sees it, raises each error in turn instead, the way tree_cases makes a directory unlistable. The
+    source has no RULE-DEV tag, so en3 is reported beside the syntax problem and a line that is not a number fails the sort."""
+    source = cpp(["x = 1"])
+    got = {}
+    global compile
+    for error in (RecursionError("maximum recursion depth exceeded during compilation"), MemoryError()):
+        def give_up(*args, error=error, **kwargs):
+            raise error
+        compile = give_up
+        try:
+            got[type(error).__name__] = check_file("tests/good.py", PYTHON, source)
+        except Exception as escaped:
+            got[type(error).__name__] = "escaped check_file as %s" % type(escaped).__name__
+        finally:
+            del compile
+    ok = all(isinstance(problems, list) and matches(problems, [("en3", "RULE-DEV"), ("syntax", "measured: " + name)])
+             and (0, "syntax") in [problem[:2] for problem in problems] for name, problems in got.items())
+    return [("Python this interpreter cannot compile", ok, got)]
 
 
 def path_cases():
@@ -1432,7 +1457,8 @@ def tree_cases(root):
 
 def self_test():
     """Every check_file case names the problems it must produce, so deleting any report fails a case;
-    the path and tree cases do the same for choosing what to judge."""
+    the compile case does it for the failures no source reaches on every host, and the path and tree
+    cases do the same for choosing what to judge."""
     failures = 0
     total = 0
     fired = set()
@@ -1450,6 +1476,14 @@ def self_test():
             print("FAIL  %s: wanted %s" % (name, wanted or "nothing"))
             for line, rule, message in got:
                 print("        %d: %s: %s" % (line, rule, message))
+    for name, ok, got in compile_cases():
+        total += 1
+        fired |= {rule for problems in got.values() if isinstance(problems, list) for _, rule, _ in problems}
+        if ok:
+            print("ok    %s" % name)
+        else:
+            failures += 1
+            print("FAIL  %s: got %s" % (name, got))
     for rel, wanted in path_cases():
         total += 1
         got = verdict_for(rel)[0]

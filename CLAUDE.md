@@ -1084,8 +1084,10 @@ below.
   - `.github/workflows/ci.yml` — M12's continuous integration, CRLF and three-space indented like every
     other tooling file (its YAML is valid at any consistent indent). It runs on `windows-latest` for every
     push, every pull request and by hand, as two jobs so a style failure and a build failure are reported
-    apart. **`gcs`** installs Python 3.12, runs `python tests/validate_gcs.py --self-test`, installs
-    `clang-format==18.1.3` from PyPI and runs `python tests/validate_gcs.py --format`. **`build`** locates
+    apart. **`gcs`** installs Python 3.12 and 3.14, runs `python tests/validate_gcs.py --self-test` under
+    each -- 3.14 because its `compile()` gives up where the stack runs out rather than at a count, which a
+    3.12-only run cannot see -- then installs `clang-format==18.1.3` from PyPI and runs
+    `python tests/validate_gcs.py --format` under 3.12. **`build`** locates
     MSBuild with `vswhere`, builds `DOCXtoMD.sln` at `Release|x64` with **`-warnAsError`** -- the global
     DoD's zero warnings made a command -- then runs the unit binary, `make_fixtures.py`,
     `run_container.py` and `run_golden.py`. The workflow uses GitHub's own `actions/checkout@v5` and
@@ -1333,9 +1335,13 @@ below.
   IDE-owned, so it is held to CRLF, ASCII after an optional BOM, no tabs and the 180-column cap only.
   `--format` adds the formatter check, pinned to **clang-format 18.1.3** and refusing any other release,
   because two releases can format one file two ways; its findings are reported under tc1. `--self-test`
-  runs 178 checks -- every reporting site but the two formatter ones and one defensive fallback is pinned
-  by a case naming the problem it must produce, and a whole scratch tree is run end to end -- and passes
-  identically on Python 3.10 to 3.13. Exit status: 0 clean, 1 at least one problem (a default run that
+  runs 178 checks, or 173 on a host that cannot make a symbolic link, where it skips the five link cases
+  and says so -- every reporting site but the two formatter ones and one defensive fallback is pinned by a
+  case naming the problem it must produce, and a whole scratch tree is run end to end -- and passes
+  identically on Python 3.10 to 3.15.0rc2: measured on Linux at every stack from 128 KiB to unlimited, and
+  with the official Windows builds of 3.12.10, 3.13.15, 3.14.7 and 3.15.0rc2 run under Wine. `compile()`
+  giving up is injected rather than provoked, because from 3.14 where it gives up is a measurement of the
+  host's stack rather than a count. Exit status: 0 clean, 1 at least one problem (a default run that
   finds nothing to judge included), 2 a usage error or named paths that leave nothing to judge. On a
   GitHub runner each problem is also written as an `::error` annotation, so it lands on the line in a
   pull request's diff.
@@ -3269,6 +3275,20 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     owner verified -- **1614** unit checks, **118** fixtures, **227** container checks and **154** golden
     checks. That is the global DoD's bullet 1 and bullet 4 met on Windows without the owner. No `src/`
     file changed at M12, so matching M11's numbers is the expected result, not new evidence about the converter.
+  - **The owner's Windows run**, reported on 2026-09-27, on Python 3.14: both x64 configurations build with
+    zero warnings and zero errors; `make_fixtures.py` builds **118** fixtures, `run_container.py` passes all
+    **227** checks against `x64\Release` and all **227** against `x64\Debug`, `run_golden.py` all **154** and
+    the unit binary all **1614**; and `validate_gcs.py` and `validate_gcs.py --format` each judge **60** files
+    and find nothing. That discharges the global DoD's bullets 1, 2 and 4 on the owner's machine, Debug
+    included, which CI does not build. It does **not** discharge the milestone's outstanding item, which only
+    a CI run on `main` can. `--self-test` failed **1 of 173** checks. The count was 173 because that host
+    cannot make a symbolic link, so the five link cases were skipped. The failure was a defect in the
+    self-test itself: the case fed `compile()` a sum of 12,000 terms to reach `check_python`'s handler, which
+    3.10 to 3.13 refuse by counting and 3.14 and 3.15 compile because they measure the C stack instead. The
+    official Windows builds of 3.14.7 and 3.15.0rc2, run under Wine, print the owner's line exactly, and those
+    of 3.12.10 and 3.13.15 pass it; that is why CI, pinned to 3.12, never saw it. The case now injects the
+    failure, as CHANGELOG.md's Fixed entry describes, and the `gcs` job now runs the self-test under 3.14 as
+    well as 3.12. The fix has not yet been run on the owner's machine.
   - **The validator was reviewed adversarially twice before this status was written.** A first round of
     92 agents over six dimensions raised 38 findings that at least one of two skeptics could not refute -- among them a crash
     under Python 3.12 on badly encoded bytes, a multi-line `#define` that no layout could make pass both
@@ -3286,7 +3306,9 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     keeping an `#if`'s first branch at `#endif`, which are equivalent to their mutants for code that is
     valid in every configuration; and `--clang-format`'s relative-path resolution. Reformatting every file
     in `src/` and `tests/unit/` at a two- or four-space indent is caught in all 49 files it changes, and the
-    repository's own style reports nothing.
+    repository's own style reports nothing. Two more survive and were found after it: widening
+    `check_python`'s handler to `BaseException`, and dropping the `.msg` half of its message, which no case
+    reads.
   - **Verified on Linux, mechanically**: the validator passes itself and the tree under Python 3.10, 3.11,
     3.12 and 3.13; the committed blobs of the three new or changed files are LF and their checkouts CRLF.
     No `src/` file changed, so neither project file did.

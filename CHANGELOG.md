@@ -9,10 +9,11 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 
 ### Added
 - **M12, continuous integration, and decision D11's validator.** `.github/workflows/ci.yml` runs on
-  `windows-latest` for every push and pull request, in two jobs. `gcs` runs the validator's self-test,
-  installs clang-format 18.1.3 and runs `python tests/validate_gcs.py --format`. `build` builds
-  `DOCXtoMD.sln` at `Release|x64` with `-warnAsError`, then runs the unit binary, `make_fixtures.py`,
-  `run_container.py` and `run_golden.py`. Its first green run built with **0 warnings, 0 errors** on
+  `windows-latest` for every push and pull request, in two jobs. `gcs` runs the validator's self-test
+  under Python 3.12 and 3.14, installs clang-format 18.1.3 and runs
+  `python tests/validate_gcs.py --format`. `build` builds `DOCXtoMD.sln` at `Release|x64` with
+  `-warnAsError`, then runs the unit binary, `make_fixtures.py`, `run_container.py` and `run_golden.py`.
+  Its first green run built with **0 warnings, 0 errors** on
   Visual Studio Enterprise 2026 carrying MSVC 14.44.35207, the v143 toolset, and returned the M11
   tallies exactly: 1614 unit checks, 118 fixtures, 227 container checks and 154 golden checks. The DoD's
   red run is run 36164302531, on a commit that deliberately broke `src/Diag.h`'s `License:` spacing and
@@ -24,9 +25,10 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   on tabs, e2's 150 and 180 columns, tc2's CRLF and ASCII, with Python held to its tagged deviations and
   project XML to the rules Visual Studio's own output can meet. `include/` is exempt **inside the
   script**, for any path that resolves there, which is the part D11 ruled. `--format` pins
-  clang-format to 18.1.3 and refuses any other release; `--self-test` runs 178 checks on Python 3.10
-  to 3.13. Two adversarial review rounds and CI's own Windows run shaped it before it was recorded as done;
-  CLAUDE.md's M12 status says what they found and what survives mutation testing.
+  clang-format to 18.1.3 and refuses any other release; `--self-test` runs 178 checks, or 173 on a host
+  that cannot make a symbolic link, on Python 3.10 to 3.15.0rc2. Two adversarial review rounds and CI's
+  own Windows run shaped it before it was recorded as done; CLAUDE.md's M12 status says what they found
+  and what survives mutation testing.
 - **M11, hostile-input hardening.** The third milestone running that added **no module**: decision D10's
   answer is a check in `ZipReader`, the producer quirks are rules in `StyleModel`, `NumberingModel` and
   `DocWalker`, and the table and amplification limits are bounds in `Ir`, `DocWalker`, `RunCoalescer`
@@ -717,6 +719,16 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- **`validate_gcs.py --self-test` failed on Python 3.14 and later.** Its case for `check_python`'s broad
+  handler fed `compile()` a sum of 12,000 terms and relied on the interpreter giving up with
+  `RecursionError`. 3.10 to 3.13 do, by counting; 3.14 and 3.15 measure the C stack instead, and compile the
+  sum on the 3 MB stack `python.exe` has on Windows and on Linux's default 8 MB, so the owner's Windows run
+  reported `1 of 173 self-test checks failed`. The same source crashed 3.10 to 3.13 outright on a 256 KiB
+  stack. The case now makes `compile()`, as `check_python` sees it, raise `RecursionError` and then
+  `MemoryError`, the way `tree_cases` makes a directory unlistable, and requires the type-name message and
+  the line 0 that a real one yields. That also catches three mutations the old case let through on 3.10 to
+  3.13: dropping the type-name fallback, dropping the line fallback, and changing it to 1. The tally is
+  unchanged: 178 checks, or 173 on a host that cannot make a symbolic link.
 - **Fifty-five statements about M11 that were wrong.** A read-only audit put every M11 claim in CLAUDE.md,
   this file, `docs/CONVERSION_REFERENCE.md` and the comments of `src/` and `tests/` against the repository.
   Among what it corrected: four comments that described the opposite of the code (a blank-marker level is not
