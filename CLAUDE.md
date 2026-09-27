@@ -3288,7 +3288,8 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     official Windows builds of 3.14.7 and 3.15.0rc2, run under Wine, print the owner's line exactly, and those
     of 3.12.10 and 3.13.15 pass it; that is why CI, pinned to 3.12, never saw it. The case now injects the
     failure, as CHANGELOG.md's Fixed entry describes, and the `gcs` job now runs the self-test under 3.14 as
-    well as 3.12. The fix has not yet been run on the owner's machine.
+    well as 3.12. With the fix, CI run 36307638024 passed all 178 checks under Python 3.14.7 and 3.12.10 on
+    `windows-latest`, and the owner's rerun passed all 173.
   - **The validator was reviewed adversarially twice before this status was written.** A first round of
     92 agents over six dimensions raised 38 findings that at least one of two skeptics could not refute -- among them a crash
     under Python 3.12 on badly encoded bytes, a multi-line `#define` that no layout could make pass both
