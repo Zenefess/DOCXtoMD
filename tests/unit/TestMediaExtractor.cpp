@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-27
- * Last Modified: 2026-08-27
+ * Last Modified: 2026-09-27
  * Description: The content-type extension table and the media-directory derivation, from string literals.
  * To Do: 1) Drive MediaPlan itself once a package can be built without an archive.
  *        2) Add the audio and video types once anything in the converter emits one.
@@ -103,6 +103,9 @@ void TestMediaExtractor(void) {
    CHECK(SitesAt(L"report.md", L"../shared", L"../shared", "../shared"));
    // A name that is nothing but an extension keeps its whole name, exactly as the output path does.
    CHECK(SitesAt(L".docx", nullptr, L".docx_media", ".docx_media"));
+   // A drive-relative document keeps its drive in the directory and out of the link: "C:report_media/..." in
+   // the Markdown would be a URL whose scheme is "c:", and the picture would not be found.
+   CHECK(SitesAt(L"C:report.md", nullptr, L"C:report_media", "report_media"));
    // A trailing separator is how a person spells "a directory", and every path built from the prefix
    // joins with a separator of its own -- so keeping it writes "pics//image1.png" into the document.
    CHECK(SitesAt(L"report.md", L"pics\\", L"pics", "pics"));

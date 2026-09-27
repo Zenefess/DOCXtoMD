@@ -4,7 +4,7 @@
  * Owner: David William Bull
  * Created: 2026-08-25
  * Last Modified: 2026-09-27
- * Description: Unit tests for the output-path derivation D7b's operand grammar rests on.
+ * Description: Unit tests for the output-path derivation D7b's operand grammar rests on, and the name comparison.
  * To Do: 1) Take the media-directory cases back from TestMediaExtractor if a reader ever looks for them
  *           here: ConvertMediaDir is Convert's, but what it derives is the media layer's business.
  * Dependencies: BuildGuards.h, Check.h, Convert.h, typedefs.h
@@ -32,28 +32,6 @@ static cbool DerivesTo(cwchptr input, cwchptr output, cbool directory, cwchptr w
    if(!derived) return false;
    while(produced[index] && produced[index] == wanted[index]) ++index;
    return produced[index] == wanted[index];
-}
-
-// Runs the duplicate-target pre-flight over a whole input list and reports one input's verdict.
-static cCONVERT_TARGET TargetOf(cwchptrptr inputs, cui32 count, cwchptr output, cui32 index) {
-   CLI_OPTIONS options = {};
-
-   options.inputs     = inputs;
-   options.inputCount = count;
-   options.outputPath = output;
-   return ConvertTargetTaken(&options, index, nullptr);
-}
-
-// The same, reporting which other input the verdict is about instead of the verdict.
-static cui32 TargetAbout(cwchptrptr inputs, cui32 count, cwchptr output, cui32 index) {
-   CLI_OPTIONS options = {};
-   ui32        other   = 0xFFFFFFFFu;
-
-   options.inputs     = inputs;
-   options.inputCount = count;
-   options.outputPath = output;
-   ConvertTargetTaken(&options, index, &other);
-   return other;
 }
 
 //== The suite
@@ -110,77 +88,26 @@ void TestConvert(void) {
    CHECK(!ConvertOutputPath(L"report.docx", nullptr, false, produced, 1u));
    CHECK(ConvertOutputPath(L"a.docx", nullptr, false, produced, 8u));
 
-   CheckGroup("Convert: two inputs that would write one output file");
-   // D7b derives every name from an input's own leaf, so two report.docx in two directories both
-   // target one report.md. Argument order decides: the first keeps the path, the later ones are
-   // refused, because converting both and keeping the second is silent data loss reported as success.
-   cwchptr SAME_LEAF[]  = {L"p\\report.docx", L"q\\report.docx"};
-   cwchptr DISTINCT[]   = {L"p\\report.docx", L"q\\summary.docx"};
-   cwchptr OUTPUT_IN[]  = {L"c.docx", L"c.md"};
-   cwchptr THREE_SAME[] = {L"a\\r.docx", L"b\\r.docx", L"c\\r.docx"};
+   CheckGroup("Convert: a drive letter's colon ends the directory part");
+   // "C:report.docx" is report.docx in C:'s current directory, so -o naming a directory gains "report.md":
+   // a colon in the leaf would be an NTFS alternate data stream on a file called "C".
+   CHECK(DerivesTo(L"C:report.docx", L"out", true, L"out\\report.md"));
+   CHECK(DerivesTo(L"c:sub\\report.docx", L"out", true, L"out\\report.md"));
+   CHECK(DerivesTo(L"C:report.docx", nullptr, false, L"C:report.md"));
+   // A name that is nothing but an extension still keeps it, drive or not.
+   CHECK(DerivesTo(L"C:.docx", L"out", true, L"out\\.docx.md"));
+   // Only a letter before the colon is a drive: anything else is part of the name.
+   CHECK(DerivesTo(L"1:report.docx", L"out", true, L"out\\1:report.md"));
 
-   CHECK(TargetOf(SAME_LEAF, 2u, L"dst\\", 0) == CONVERT_TARGET_FREE);
-   CHECK(TargetOf(SAME_LEAF, 2u, L"dst\\", 1) == CONVERT_TARGET_CLAIMED);
-   CHECK(TargetOf(DISTINCT, 2u, L"dst\\", 0) == CONVERT_TARGET_FREE);
-   CHECK(TargetOf(DISTINCT, 2u, L"dst\\", 1) == CONVERT_TARGET_FREE);
-   // Only the first of three keeps the path; the second and third are both refused, not just one.
-   CHECK(TargetOf(THREE_SAME, 3u, L"dst\\", 0) == CONVERT_TARGET_FREE);
-   CHECK(TargetOf(THREE_SAME, 3u, L"dst\\", 1) == CONVERT_TARGET_CLAIMED);
-   CHECK(TargetOf(THREE_SAME, 3u, L"dst\\", 2) == CONVERT_TARGET_CLAIMED);
-   // c.docx derives c.md, which the run also lists as an input: converting it would destroy that
-   // file before it is read, so the conversion is refused rather than the file lost.
-   CHECK(TargetOf(OUTPUT_IN, 2u, nullptr, 0) == CONVERT_TARGET_IS_INPUT);
-   // An input's own derived output is not its input unless -o names that file: nothing else is refused.
-   CHECK(TargetOf(DISTINCT, 1u, nullptr, 0) == CONVERT_TARGET_FREE);
-   CHECK(ConvertTargetTaken(nullptr, 0, nullptr) == CONVERT_TARGET_FREE);
-   CHECK(TargetOf(SAME_LEAF, 2u, L"dst\\", 9) == CONVERT_TARGET_FREE);
-
-   CheckGroup("Convert: the other input a pre-flight verdict is about");
-   // Batch names the claimant, gives a repeat its earliest spelling's verdict and a refused input's
-   // media directory to the next one, so the index reported is as much the contract as the reason.
-   CHECK(TargetAbout(SAME_LEAF, 2u, L"dst\\", 1) == 0u);
-   CHECK(TargetAbout(THREE_SAME, 3u, L"dst\\", 2) == 0u);
-   CHECK(TargetAbout(OUTPUT_IN, 2u, nullptr, 0) == 1u);
-   CHECK(TargetAbout(DISTINCT, 2u, L"dst\\", 1) == 1u);
-   CHECK(TargetAbout(SAME_LEAF, 2u, L"dst\\", 9) == 9u);
-
-   CheckGroup("Convert: one input named twice is one document, converted once");
-   // Not a collision -- the second conversion would write the same bytes -- but not a second conversion
-   // either, because two workers writing one output file at once race for it. The earliest spelling is
-   // the one converted, and ASCII case is folded as a Windows file system folds it.
-   cwchptr TWICE[]        = {L"p\\report.docx", L"p\\report.docx"};
-   cwchptr CASED[]        = {L"a.docx", L"b.docx", L"A.DOCX"};
-   cwchptr REPEAT_FIRST[] = {L"c.docx", L"c.md", L"C.docx"};
-
-   CHECK(TargetOf(TWICE, 2u, L"dst\\", 1) == CONVERT_TARGET_REPEATED);
-   CHECK(TargetOf(TWICE, 2u, nullptr, 1) == CONVERT_TARGET_REPEATED);
-   CHECK(TargetOf(TWICE, 2u, nullptr, 0) == CONVERT_TARGET_FREE);
-   CHECK(TargetOf(CASED, 3u, nullptr, 2) == CONVERT_TARGET_REPEATED);
-   CHECK(TargetAbout(CASED, 3u, nullptr, 2) == 0u);
-   // A repeat is reported before anything else true of it: the earliest spelling carries the refusal.
-   CHECK(TargetOf(REPEAT_FIRST, 3u, nullptr, 0) == CONVERT_TARGET_IS_INPUT);
-   CHECK(TargetOf(REPEAT_FIRST, 3u, nullptr, 2) == CONVERT_TARGET_REPEATED);
-   CHECK(TargetAbout(REPEAT_FIRST, 3u, nullptr, 2) == 0u);
-
-   CheckGroup("Convert: an output path that is the input itself");
-   // -o naming the input would write the Markdown over the document it is read from. Batch normalises
-   // both spellings first, so ".\a.docx" against "a.docx" is caught as well as the literal case.
-   cwchptr ALONE[] = {L"p\\report.docx"};
-
-   CHECK(TargetOf(ALONE, 1u, L"p\\report.docx", 0) == CONVERT_TARGET_IS_SELF);
-   CHECK(TargetOf(ALONE, 1u, L"P\\REPORT.DOCX", 0) == CONVERT_TARGET_IS_SELF);
-   CHECK(TargetAbout(ALONE, 1u, L"p\\report.docx", 0) == 0u);
-   CHECK(TargetOf(ALONE, 1u, L"p\\report.md", 0) == CONVERT_TARGET_FREE);
-
-   CheckGroup("Convert: case is folded beyond ASCII, as NTFS folds it");
+   CheckGroup("Convert: two paths are one name when they fold together as NTFS folds them");
    // CompareStringOrdinal's ignore-case form reads the system's upper-case table, so an accented or a
-   // Cyrillic name differing only in case is one file -- which folding A to Z alone would miss, leaving
-   // two workers to write it at once.
-   cwchptr ACCENTED[] = {L"\u00C9t\u00E9.docx", L"\u00E9t\u00C9.docx"};
-   cwchptr CYRILLIC[] = {L"a\\\u041E\u0442\u0447\u0451\u0442.docx", L"b\\\u043E\u0442\u0447\u0401\u0442.docx"};
-   cwchptr UNLIKE[]   = {L"\u00E9.docx", L"\u00E8.docx"};
-
-   CHECK(TargetOf(ACCENTED, 2u, nullptr, 1) == CONVERT_TARGET_REPEATED);
-   CHECK(TargetOf(CYRILLIC, 2u, L"dst\\", 1) == CONVERT_TARGET_CLAIMED);
-   CHECK(TargetOf(UNLIKE, 2u, L"dst\\", 1) == CONVERT_TARGET_FREE);
+   // Cyrillic name differing only in case is one name -- which folding A to Z alone would miss.
+   CHECK(ConvertSamePath(L"p\\Report.MD", L"P\\report.md"));
+   CHECK(ConvertSamePath(L"\u00C9t\u00E9.md", L"\u00E9t\u00C9.md"));
+   CHECK(ConvertSamePath(L"\u041E\u0442\u0447\u0451\u0442.md", L"\u043E\u0442\u0447\u0401\u0442.md"));
+   CHECK(!ConvertSamePath(L"\u00E9.md", L"\u00E8.md"));
+   CHECK(!ConvertSamePath(L"a.md", L"a.md.md"));
+   // A string comparison, not an identity test: two spellings of one file are two names until normalised.
+   CHECK(!ConvertSamePath(L".\\a.md", L"a.md"));
+   CHECK(!ConvertSamePath(L"a\\b.md", L"a/b.md"));
 }

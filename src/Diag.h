@@ -86,6 +86,11 @@ void DiagError(cchptr message);
 /// @note The argument is transcoded before the lock is taken, so the lock is held only for the writes.
 void DiagErrorText(cchptr message, cwchptr text);
 
+/// Writes one progress line to stderr: "DOCXtoMD: note: <message>".
+/// @param message  NUL-terminated UTF-8 sentence fragment, without a trailing newline.
+/// @note -q suppresses notes, and until this module owns that flag the caller is what decides not to call.
+void DiagNote(cchptr message);
+
 /// Writes one progress line to stderr naming a wide argument: "DOCXtoMD: note: <message>: <text>".
 /// @param message  NUL-terminated UTF-8 sentence fragment, without a trailing newline.
 /// @param text     Wide text -- a path or an option -- transcoded to UTF-8 for the console.

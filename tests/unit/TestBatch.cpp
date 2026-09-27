@@ -7,7 +7,7 @@
  * Description: Unit tests for the worker pool, the run plan, the exit-code fold and the exit-code phrases.
  * To Do: 1) Drive BatchRun itself once the suite may open files; tests/run_golden.py is what drives it today.
  *        2) Measure the widest a pool ever runs against the cores the machine has, once bench/ exists.
- * Dependencies: BuildGuards.h, Batch.h, Check.h, CliOptions.h, Diag.h, typedefs.h, windows.h, intrin.h
+ * Dependencies: BuildGuards.h, Batch.h, Check.h, CliOptions.h, Convert.h, Diag.h, typedefs.h, windows.h, intrin.h
  * ISA: Scalar
  * Thread-safety: Reentrant
  * Reviewers: David William Bull
@@ -22,6 +22,7 @@
 #include "typedefs.h"
 #include "Check.h"
 #include "CliOptions.h"
+#include "Convert.h"
 #include "Diag.h"
 #include "Batch.h"
 
@@ -99,8 +100,11 @@ static cEXIT_CODE PoolJob(cptr context, cui32 item) {
    if(slot < POOL_MAX_ITEMS) trace->order[slot] = LONG(item);
    trace->thread[item] = GetCurrentThreadId();
    PoolRaise(ui32(_InterlockedIncrement(&trace->inside)));
-   // Two seconds at the least, in 1 ms sleeps; a pool that meets never comes near it.
-   for(ui32 wait = 0; trace->meet > 1u && ui32(PoolRead(&trace->widest)) < trace->meet && wait < 2000u; ++wait) Sleep(1);
+   // Five seconds by the clock rather than a count of sleeps, because Sleep(1) lasts a whole 15.6 ms timer
+   // tick on Windows: a pool that meets never comes near the bound, and one that cannot fails in seconds.
+   cui64 deadline = GetTickCount64() + 5000u;
+
+   while(trace->meet > 1u && ui32(PoolRead(&trace->widest)) < trace->meet && GetTickCount64() < deadline) Sleep(1);
    _InterlockedDecrement(&trace->inside);
    return PoolVerdictOf(item);
 }
@@ -136,21 +140,36 @@ static cbool PoolComplete(cui32 items, cEXIT_CODEptr verdicts) {
 
 //-- What a plan decided
 
-// The most inputs a plan case names.
+// The most inputs a plan case names, and the longest output one derives.
 constexpr cui32 PLAN_MAX_INPUTS = 8u;
+constexpr cui64 PLAN_MAX_PATH   = 256u;
 
-// Plans a command line and compares every input's plan and source with the expected ones.
-static cbool PlansTo(cwchptrptr inputs, cui32 count, cwchptr output, cwchptr mediaDir, cbool images, cBATCH_PLANptr plans, cui32ptr sources) {
-   CLI_OPTIONS options = {};
+// Plans a command line and compares every input's plan and source with the expected ones. The spellings
+// are compared as given -- BatchRun normalises them first -- and what the files on disk are is supplied by
+// the case: selves and targets give, for each input, the file its input and its output reach, 0 for a path
+// that reaches nothing and any other number standing for one file. Null for either means nothing exists.
+static cbool PlansTo(cwchptrptr inputs, cui32 count, cwchptr output, cbool shared, cui32ptr selves, cui32ptr targets, // The case
+                     cBATCH_PLANptr plans, cui32ptr sources) {                                                        // Its answer
+   BATCH_INPUT entries[PLAN_MAX_INPUTS] = {};
+   wchar       derived[PLAN_MAX_INPUTS][PLAN_MAX_PATH];
    BATCH_PLAN  planned[PLAN_MAX_INPUTS];
    ui32        from[PLAN_MAX_INPUTS];
 
-   options.inputs     = inputs;
-   options.inputCount = count;
-   options.outputPath = output;
-   options.mediaDir   = mediaDir;
-   options.emitImages = images;
-   BatchPlan(&options, planned, from);
+   for(ui32 index = 0; index < count; ++index) {
+      cui32 self   = (selves ? selves[index] : 0u);
+      cui32 target = (targets ? targets[index] : 0u);
+
+      entries[index].input        = inputs[index];
+      entries[index].output       = (ConvertOutputPath(inputs[index], output, count > 1u, derived[index], PLAN_MAX_PATH) ? derived[index] : nullptr);
+      entries[index].self.volume  = 1u;
+      entries[index].self.low     = self;
+      entries[index].self.high    = 0;
+      entries[index].self.known   = self != 0u;
+      entries[index].target       = entries[index].self;
+      entries[index].target.low   = target;
+      entries[index].target.known = target != 0u;
+   }
+   BatchPlan(entries, count, shared, planned, from);
    for(ui32 index = 0; index < count; ++index) {
       if(planned[index] != plans[index] || from[index] != sources[index]) return false;
    }
@@ -251,6 +270,7 @@ void TestBatch(void) {
    CHECK(PoolSame(DiagExitCodeText(EXIT_CODE(-1)), "an unknown verdict"));
 
    CheckGroup("Batch: the plan converts distinct inputs and keeps a repeat to one conversion");
+   // Where no file exists the normalised spellings decide, folding case as NTFS does.
    cwchptr     DISTINCT[]      = {L"a.docx", L"b.docx", L"c.docx"};
    cBATCH_PLAN ALL_CONVERT[]   = {BATCH_PLAN_CONVERT, BATCH_PLAN_CONVERT, BATCH_PLAN_CONVERT};
    cui32       OWN[]           = {0u, 1u, 2u};
@@ -258,13 +278,16 @@ void TestBatch(void) {
    cBATCH_PLAN REPEAT_PLAN[]   = {BATCH_PLAN_CONVERT, BATCH_PLAN_CONVERT, BATCH_PLAN_REPEAT};
    cui32       REPEAT_SOURCE[] = {0u, 1u, 0u};
 
-   CHECK(PlansTo(DISTINCT, 3u, nullptr, nullptr, true, ALL_CONVERT, OWN));
-   CHECK(PlansTo(REPEATED, 3u, nullptr, nullptr, true, REPEAT_PLAN, REPEAT_SOURCE));
+   CHECK(PlansTo(DISTINCT, 3u, nullptr, false, nullptr, nullptr, ALL_CONVERT, OWN));
+   CHECK(PlansTo(REPEATED, 3u, nullptr, false, nullptr, nullptr, REPEAT_PLAN, REPEAT_SOURCE));
 
    CheckGroup("Batch: the plan refuses an input that would destroy another or overwrite its output");
    cwchptr     SAME_LEAF[]    = {L"p\\report.docx", L"q\\report.docx"};
    cBATCH_PLAN CLAIM_PLAN[]   = {BATCH_PLAN_CONVERT, BATCH_PLAN_CLAIMED};
    cui32       CLAIM_SOURCE[] = {0u, 0u};
+   cwchptr     THREE_SAME[]   = {L"a\\r.docx", L"b\\r.docx", L"c\\r.docx"};
+   cBATCH_PLAN THREE_PLAN[]   = {BATCH_PLAN_CONVERT, BATCH_PLAN_CLAIMED, BATCH_PLAN_CLAIMED};
+   cui32       THREE_SOURCE[] = {0u, 0u, 0u};
    // c.docx would write c.md, which is the second input -- and c.md, whose stem is c, would write itself.
    cwchptr     OUTPUT_IN[]    = {L"c.docx", L"c.md"};
    cBATCH_PLAN INPUT_PLAN[]   = {BATCH_PLAN_IS_INPUT, BATCH_PLAN_IS_SELF};
@@ -274,16 +297,59 @@ void TestBatch(void) {
    cBATCH_PLAN TWICE_PLAN[]    = {BATCH_PLAN_IS_INPUT, BATCH_PLAN_IS_SELF, BATCH_PLAN_REPEAT};
    cui32       TWICE_SOURCE[]  = {1u, 1u, 0u};
 
-   CHECK(PlansTo(SAME_LEAF, 2u, L"dst\\", nullptr, true, CLAIM_PLAN, CLAIM_SOURCE));
-   CHECK(PlansTo(OUTPUT_IN, 2u, nullptr, nullptr, true, INPUT_PLAN, INPUT_SOURCE));
-   CHECK(PlansTo(REFUSED_TWICE, 3u, nullptr, nullptr, true, TWICE_PLAN, TWICE_SOURCE));
-   // -o naming the one input would write the Markdown over the document it is read from.
+   CHECK(PlansTo(SAME_LEAF, 2u, L"dst\\", false, nullptr, nullptr, CLAIM_PLAN, CLAIM_SOURCE));
+   // Only the first of three keeps the path; the second and third are both refused, and both name it.
+   CHECK(PlansTo(THREE_SAME, 3u, L"dst\\", false, nullptr, nullptr, THREE_PLAN, THREE_SOURCE));
+   CHECK(PlansTo(OUTPUT_IN, 2u, nullptr, false, nullptr, nullptr, INPUT_PLAN, INPUT_SOURCE));
+   CHECK(PlansTo(REFUSED_TWICE, 3u, nullptr, false, nullptr, nullptr, TWICE_PLAN, TWICE_SOURCE));
+   // -o naming the one input would write the Markdown over the document it is read from -- and so would
+   // the identical spelling, which the pre-flight catches before ConvertFile's own check sees it.
    cwchptr     SELF[]        = {L"a.docx"};
    cBATCH_PLAN SELF_PLAN[]   = {BATCH_PLAN_IS_SELF};
    cui32       SELF_SOURCE[] = {0u};
 
-   CHECK(PlansTo(SELF, 1u, L"A.docx", nullptr, true, SELF_PLAN, SELF_SOURCE));
-   CHECK(PlansTo(SELF, 1u, L"a.md", nullptr, true, ALL_CONVERT, OWN));
+   CHECK(PlansTo(SELF, 1u, L"a.docx", false, nullptr, nullptr, SELF_PLAN, SELF_SOURCE));
+   CHECK(PlansTo(SELF, 1u, L"A.docx", false, nullptr, nullptr, SELF_PLAN, SELF_SOURCE));
+   CHECK(PlansTo(SELF, 1u, L"a.md", false, nullptr, nullptr, ALL_CONVERT, OWN));
+
+   CheckGroup("Batch: a file that exists is judged by its identity, not by its spelling");
+   // Two spellings of one file a string cannot unify -- a short name, a link, a \\?\ prefix -- are one input.
+   cwchptr     ALIASES[]      = {L"C:\\w\\a.docx", L"\\\\?\\C:\\w\\a.docx"};
+   cui32       ONE_FILE[]     = {7u, 7u};
+   cBATCH_PLAN ALIAS_PLAN[]   = {BATCH_PLAN_CONVERT, BATCH_PLAN_REPEAT};
+   cui32       ALIAS_SOURCE[] = {0u, 0u};
+   // Two files a case-sensitive directory holds under names differing only in case are two inputs -- and
+   // since neither output exists yet, the outputs they would write fold together and the second is refused,
+   // loudly, rather than silently dropped as a repeat of the first.
+   cwchptr     CASED[]       = {L"Report.docx", L"report.docx"};
+   cui32       TWO_FILES[]   = {7u, 8u};
+   cui32       TWO_OUTPUTS[] = {9u, 10u};
+   cBATCH_PLAN CASED_PLAN[]  = {BATCH_PLAN_CONVERT, BATCH_PLAN_CLAIMED};
+   // A path to a file that exists and one to nothing are two files, whatever their spellings.
+   cui32 HALF_THERE[] = {7u, 0u};
+
+   CHECK(PlansTo(ALIASES, 2u, nullptr, false, ONE_FILE, nullptr, ALIAS_PLAN, ALIAS_SOURCE));
+   CHECK(PlansTo(CASED, 2u, nullptr, false, TWO_FILES, nullptr, CASED_PLAN, CLAIM_SOURCE));
+   // Two outputs that both exist, as two files, are two outputs.
+   CHECK(PlansTo(CASED, 2u, nullptr, false, TWO_FILES, TWO_OUTPUTS, ALL_CONVERT, OWN));
+   CHECK(PlansTo(CASED, 2u, nullptr, false, HALF_THERE, nullptr, CASED_PLAN, CLAIM_SOURCE));
+   // -o spelling the input another way is the input, because the output already exists and is that file.
+   cwchptr ALONE[]   = {L"a.docx"};
+   cui32   IT[]      = {7u};
+   cui32   OTHER[]   = {8u};
+   cui32   NOTHING[] = {0u};
+
+   CHECK(PlansTo(ALONE, 1u, L"\\\\?\\C:\\w\\a.docx", false, IT, IT, SELF_PLAN, SELF_SOURCE));
+   // -o naming a different file that folds to the input's name is not the input: a case-sensitive directory.
+   CHECK(PlansTo(ALONE, 1u, L"A.docx", false, IT, OTHER, ALL_CONVERT, OWN));
+   // -o naming nothing that exists cannot be an input that does.
+   CHECK(PlansTo(ALONE, 1u, L"A.docx", false, IT, NOTHING, ALL_CONVERT, OWN));
+   // An output that is another input under another name destroys it.
+   cwchptr LINKED[]       = {L"c.docx", L"x.md"};
+   cui32   LINK_SELVES[]  = {7u, 8u};
+   cui32   LINK_TARGETS[] = {8u, 8u};
+
+   CHECK(PlansTo(LINKED, 2u, nullptr, false, LINK_SELVES, LINK_TARGETS, INPUT_PLAN, INPUT_SOURCE));
 
    CheckGroup("Batch: a --media-dir shared by several inputs belongs to the first one converted (D15)");
    cBATCH_PLAN MEDIA_PLAN[]   = {BATCH_PLAN_CONVERT, BATCH_PLAN_MEDIA, BATCH_PLAN_MEDIA};
@@ -297,10 +363,9 @@ void TestBatch(void) {
    cBATCH_PLAN SHARED_PLAN[]   = {BATCH_PLAN_CONVERT, BATCH_PLAN_REPEAT, BATCH_PLAN_MEDIA};
    cui32       SHARED_SOURCE[] = {0u, 0u, 0u};
 
-   CHECK(PlansTo(DISTINCT, 3u, nullptr, L"pics", true, MEDIA_PLAN, MEDIA_SOURCE));
-   CHECK(PlansTo(FIRST_REFUSED, 4u, nullptr, L"pics", true, OWNED_PLAN, OWNED_SOURCE));
-   CHECK(PlansTo(REPEAT_FIRST, 3u, nullptr, L"pics", true, SHARED_PLAN, SHARED_SOURCE));
-   // --no-images writes no picture, so there is no directory to share; one input shares with nothing.
-   CHECK(PlansTo(DISTINCT, 3u, nullptr, L"pics", false, ALL_CONVERT, OWN));
-   CHECK(PlansTo(DISTINCT, 1u, nullptr, L"pics", true, ALL_CONVERT, OWN));
+   CHECK(PlansTo(DISTINCT, 3u, nullptr, true, nullptr, nullptr, MEDIA_PLAN, MEDIA_SOURCE));
+   CHECK(PlansTo(FIRST_REFUSED, 4u, nullptr, true, nullptr, nullptr, OWNED_PLAN, OWNED_SOURCE));
+   CHECK(PlansTo(REPEAT_FIRST, 3u, nullptr, true, nullptr, nullptr, SHARED_PLAN, SHARED_SOURCE));
+   // Nothing is shared when BatchRun says nothing is: --no-images, or one input.
+   CHECK(PlansTo(DISTINCT, 3u, nullptr, false, nullptr, nullptr, ALL_CONVERT, OWN));
 }

@@ -4,9 +4,11 @@
  * Owner: David William Bull
  * Created: 2026-09-27
  * Last Modified: 2026-09-27
- * Description: The input list on a bounded pool of worker threads, one file per worker at a time, and the exit-code fold.
+ * Description: Inputs on a bounded worker pool, one file per worker; no lock: one interlocked cursor, verdicts read after the join.
  * To Do: 1) Say which input a claimed output or --media-dir belongs to, which the plan knows and the message omits.
  *        2) Give a shared --media-dir its per-input subdirectories if decision D15 is ruled that way.
+ *        3) Tell apart two outputs that do not exist yet but alias one file -- a short name, a link, a subst
+ *           drive -- which only a string comparison can judge before either is written.
  * Dependencies: CliOptions.h, Diag.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: MT-safe
@@ -31,11 +33,11 @@ typedef cEXIT_CODE (*BATCH_JOB)(cptr context, cui32 item);
 /// What the pre-flight decided for one input, before any worker starts.
 enum BATCH_PLAN : ui8 {
    BATCH_PLAN_CONVERT = 0, ///< A worker converts it
-   BATCH_PLAN_REPEAT,      ///< Named earlier on the line: not converted again, and given that input's verdict
+   BATCH_PLAN_REPEAT,      ///< The same file as an earlier input: not converted again, and given that input's verdict
    BATCH_PLAN_IS_INPUT,    ///< Refused: its output path is another input of the run, which it would destroy
    BATCH_PLAN_CLAIMED,     ///< Refused: an earlier input writes the same output file
-   BATCH_PLAN_MEDIA,       ///< Refused: an earlier input already extracts its pictures into the one --media-dir
-   BATCH_PLAN_IS_SELF,     ///< Refused: its output path is the input itself, spelled another way
+   BATCH_PLAN_MEDIA,       ///< Refused: an earlier input converted in this run owns the one --media-dir (D15)
+   BATCH_PLAN_IS_SELF,     ///< Refused: its output path is the input file itself, however it is spelled
    BATCH_PLAN_COUNT
 };
 
@@ -45,6 +47,31 @@ typedef const BATCH_PLAN *cBATCH_PLANptr;
 typedef BATCH_PLAN *const BATCH_PLANptrc;
 typedef const BATCH_PLAN  cBATCH_PLAN;
 
+/// Which file on disk a path reaches: two spellings of one file -- a short name, a link, a "\\?\" prefix, a
+/// second drive letter for one volume -- share it, and two files a case-sensitive directory holds under
+/// names that differ only in case do not.
+struct BATCH_ID {
+   ui64 volume; ///< The volume's serial number
+   ui64 low;    ///< The low 64 bits of the file's ID on that volume
+   ui64 high;   ///< The high 64 bits, which ReFS uses and NTFS leaves 0
+   bool known;  ///< false when the path could not be opened, which includes a file that does not exist yet
+};
+
+/// Constant pointer alias for BATCH_ID, spelled per GCS r2/t2.
+typedef const BATCH_ID *cBATCH_IDptr;
+
+/// One input as the pre-flight compares it. BatchRun fills these; a unit test may fill them from literals.
+struct BATCH_INPUT {
+   cwchptr  input;  ///< The input, normalised
+   cwchptr  output; ///< The output its worker writes, derived from the input as typed and then normalised; null for none
+   BATCH_ID self;   ///< The input file's identity
+   BATCH_ID target; ///< The output file's identity, when a file already stands there
+};
+
+/// Pointer aliases for BATCH_INPUT, spelled per GCS r2/t2.
+typedef BATCH_INPUT       *BATCH_INPUTptr;
+typedef const BATCH_INPUT *cBATCH_INPUTptr;
+
 //== Entry points
 
 /// Converts every input the command line names and folds their verdicts into the process exit code.
@@ -52,33 +79,44 @@ typedef const BATCH_PLAN  cBATCH_PLAN;
 /// @return EXIT_ALL_CONVERTED when every input converted, EXIT_PARTIAL when at least one converted and at
 ///         least one did not, and otherwise the highest per-input verdict (D7c). EXIT_INTERNAL, having said
 ///         so, when the run could not be planned for want of memory.
-/// @note The pre-flight runs first, on the calling thread and in argument order, over a copy of the paths
-///       normalised by GetFullPathNameW, so ".\a.docx" and "a.docx" are one input and "out\" and "out/"
-///       one directory. Its refusals are reported before any worker starts. It is deterministic by
-///       construction, which is what lets the same command line produce the same bytes and the same exit
-///       code at every --threads count. A single input goes through it too, because "-o .\a.docx a.docx"
-///       would otherwise write the Markdown over the document it came from.
+/// @note The pre-flight runs first, on the calling thread and in argument order, before any worker starts.
+///       Each output is derived from the input as typed -- the spelling its worker will use -- and then
+///       normalised by GetFullPathNameW; each input is normalised the same way; and a path naming a file
+///       that already exists is identified by its volume and file ID, so ".\a.docx" and "a.docx" are one
+///       input and so are a short name and its long form. What the pre-flight refuses it reports then, in
+///       argument order. It is deterministic by construction, which is what lets the same command line
+///       produce the same bytes and the same exit code at every --threads count -- for as long as memory
+///       holds out, because each worker holds a whole document and the ZIP caps are per document. A single
+///       input goes through it too, because "-o .\a.docx a.docx" would otherwise write the Markdown over the
+///       document it came from.
 /// @note A worker is a thread converting one input at a time until none is left; there are at most
 ///       --threads of them, the calling thread included, so --threads 1 and a single input start no
 ///       thread at all and convert in argument order exactly as the loop this replaced did.
-/// @note With more than one input and at least one failure, every failed input is listed once more after
-///       the last worker has finished, in argument order with its own verdict, so exit code 6 is always a
-///       summary and never the only diagnosis (D7c). The per-input messages themselves are written as each
-///       worker reaches them, one whole line at a time, in no promised order.
+/// @note With more than one input it ends with a note saying how many inputs converted and how many workers
+///       the pool held -- which -q suppresses -- and, when anything failed, with every failed input listed
+///       once more in argument order with its own verdict, so exit code 6 is always a summary and never the
+///       only diagnosis (D7c). The per-input messages themselves are written as each worker reaches them,
+///       one whole line at a time, in no promised order.
 cEXIT_CODE BatchRun(cCLI_OPTIONSptr options);
 
 /// Decides, for every input, whether a worker converts it -- the pure half of BatchRun's pre-flight.
-/// @param options  The command line, with its paths already normalised when normalising matters.
-/// @param plans    Receives one plan per input.
-/// @param sources  Receives one index per input: the input a repeat repeats, the input a refusal is about,
-///                 and the input's own index for BATCH_PLAN_CONVERT.
-/// @note A shared --media-dir -- one named with several inputs and pictures not turned off -- belongs to the
-///       first input planned for conversion, and every later one is refused, because each document names
-///       its pictures image1, image2 and so on and two of them in one directory overwrite each other's.
-///       That is the strict half of decision D15, which is open; the lenient half would give each input a
-///       directory of its own under the named one.
+/// @param inputs       One entry per input, in argument order.
+/// @param count        How many.
+/// @param sharedMedia  Whether one --media-dir is shared by every input, which is so when one was named, with
+///                     several inputs, and pictures were not turned off.
+/// @param plans        Receives one plan per input.
+/// @param sources      Receives one index per input: the input a repeat repeats, the input a refusal is about,
+///                     and the input's own index for BATCH_PLAN_CONVERT and BATCH_PLAN_IS_SELF.
+/// @note Two paths are one file when both files exist and share an identity; when one exists and the other
+///       does not they are two; and when neither exists -- two outputs not yet written, or a missing input --
+///       their normalised spellings are compared, folding case as NTFS does.
+/// @note A shared --media-dir belongs to the first input planned for conversion, and every later one is
+///       refused, because each document names its pictures image1, image2 and so on and two of them in one
+///       directory overwrite each other's. It is decided before any document is read, so it holds even when
+///       that first input draws no picture or fails. That is the strict half of decision D15, which is open;
+///       the lenient half would give each input a directory of its own under the named one.
 /// @note Pure: it touches no file and allocates nothing.
-void BatchPlan(cCLI_OPTIONSptr options, BATCH_PLANptrc plans, ui32ptrc sources);
+void BatchPlan(cBATCH_INPUTptr inputs, cui32 count, cbool sharedMedia, BATCH_PLANptrc plans, ui32ptrc sources);
 
 /// Runs a job once for each item on a bounded pool of threads, the calling thread included.
 /// @param job          The work.
@@ -86,11 +124,13 @@ void BatchPlan(cCLI_OPTIONSptr options, BATCH_PLANptrc plans, ui32ptrc sources);
 /// @param itemCount    How many items; below 2^31, which a command line cannot approach.
 /// @param threadCount  The most threads that may run jobs at once, the calling thread included; 0 reads as 1.
 /// @param verdicts     Receives job's verdict for each item, at the item's own index.
-/// @return How many threads ran jobs, the calling thread included: the smaller of threadCount and itemCount,
-///         fewer when a thread could not be started, and 0 when there were no items.
+/// @return How many threads the pool held, the calling thread included: the smaller of threadCount and
+///         itemCount, fewer when a thread could not be started, and 0 when there were no items. A thread
+///         counted here may find every item already taken and run none.
 /// @note Items are handed out in item order through one interlocked cursor, so a thread that finishes early
 ///       takes the next item rather than waiting for a share decided up front. A thread that cannot be
-///       started leaves a smaller pool rather than a failed run: the calling thread alone completes the work.
+///       started leaves a smaller pool rather than a failed run: the threads already started, the calling
+///       thread among them, complete the work.
 /// @note Memory order: starting a thread and waiting for one to finish are both full barriers on Windows,
 ///       and taking an item is an _InterlockedIncrement, which is one too. So whatever the caller wrote
 ///       before the call is seen by every job, and every verdict a job returns is seen by the caller once

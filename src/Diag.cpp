@@ -171,6 +171,15 @@ void DiagError(cchptr message) {
 
 void DiagErrorText(cchptr message, cwchptr text) { DiagLineWide("DOCXtoMD: error: ", message, text); }
 
+void DiagNote(cchptr message) {
+   SpinLockMin(&DIAG_LOCK.flag);
+   fflush(stdout);
+   fputs("DOCXtoMD: note: ", stderr);
+   if(message) fputs(message, stderr);
+   fputc('\n', stderr);
+   SpinUnlock(&DIAG_LOCK.flag);
+}
+
 void DiagNoteText(cchptr message, cwchptr text) { DiagLineWide("DOCXtoMD: note: ", message, text); }
 
 //== Names

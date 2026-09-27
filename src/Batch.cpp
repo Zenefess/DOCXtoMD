@@ -4,9 +4,10 @@
  * Owner: David William Bull
  * Created: 2026-09-27
  * Last Modified: 2026-09-27
- * Description: Worker pool, run plan, failure list and exit-code fold; the only module in the tree that starts a thread.
- * To Do: 1) Tell a -q-less run when fewer workers started than --threads asked for, once Diag has a note that names no path.
- *        2) Measure the pool against the sequential loop in bench/ before anything here claims a speed-up (bd1/bd2).
+ * Description: Worker pool, run plan, failure list and exit-code fold; no lock: one interlocked cursor, verdicts read after the join.
+ * To Do: 1) Measure the pool against the sequential loop in bench/ before anything here claims a speed-up (bd1/bd2).
+ *        2) Bound the pool by memory as well as by --threads, once a process-wide budget is ruled on: each worker holds
+ *           a whole document, and the ZIP caps are per document.
  * Dependencies: BuildGuards.h, Batch.h, CliOptions.h, Convert.h, Diag.h, typedefs.h, memory management.h,
  *               windows.h, process.h, intrin.h, stdio.h
  * ISA: Scalar
@@ -44,6 +45,10 @@ struct al64 BATCH_CURSOR {
    vLONG next; ///< How many items have been taken, or tried for, so far
 };
 
+// Pointer aliases for the pre-flight's records, spelled per r2.
+typedef BATCH_ID *const    BATCH_IDptrc;
+typedef BATCH_INPUT *const BATCH_INPUTptrc;
+
 // Everything a worker reads. It lives on the stack of the thread that called BatchPool, which outlives
 // every worker because it waits for all of them before it returns.
 struct BATCH_POOL {
@@ -67,13 +72,14 @@ typedef const BATCH_WORK *cBATCH_WORKptr;
 
 //-- Messages
 
-// Why the pre-flight refused an input. Named constants, because each is written from a switch whose
-// lines would not fit inside e2's 150 columns with the sentence inline.
+// What the pre-flight says about an input it does not hand a worker, kept together so that every refusal
+// sentence can be read in one place. The repeat's note claims no outcome, because the earliest spelling's
+// is not known when it is written -- that spelling may be refused, or fail.
 constexpr cchptr TAKEN_BY_SELF    = "the output path is the input file";
 constexpr cchptr TAKEN_BY_INPUT   = "the output path is another input of this run";
 constexpr cchptr TAKEN_BY_EARLIER = "an earlier input already writes that output file";
-constexpr cchptr TAKEN_MEDIA_DIR  = "an earlier input already extracts its pictures into that --media-dir";
-constexpr cchptr NAMED_TWICE      = "named earlier in this run, so converted once";
+constexpr cchptr TAKEN_MEDIA_DIR  = "an earlier input of this run already uses that --media-dir";
+constexpr cchptr NAMED_TWICE      = "the same file as an earlier input, so it takes that input's result";
 
 //-- Workers
 
@@ -131,37 +137,100 @@ static wchptr BatchFullPath(cwchptr path, wchptrc dest, cui64 chars) {
    return dest + written + 1u;
 }
 
-// Fills view with a copy of the command line whose inputs and output path are normalised, for the
-// pre-flight's comparisons and for nothing else: a worker converts, and every message names, the spelling
-// the user typed. Returns the heap block holding the normalised strings, which the caller releases, or
-// null when it could not be allocated. GetFullPathNameW reads the current directory, which is process-wide
-// state, so this runs before any worker starts; nothing in this program changes the directory, so the
-// answer is the one every conversion then sees.
-static wchptr BatchNormalise(cCLI_OPTIONSptr options, CLI_OPTIONSptrc view, cwchptrptr inputs) {
-   ui64 chars = (options->outputPath ? BatchFullChars(options->outputPath) : 0u);
+// Which file a path reaches, when it reaches one. FILE_READ_ATTRIBUTES is all the handle needs and every
+// share mode is granted, so this cannot get in the way of anything; backup semantics lets a directory be
+// opened too. FileIdInfo is the full 128-bit ID ReFS needs; a file system that cannot report it falls back
+// to the 64-bit index, which is unique on NTFS and FAT for as long as the file exists.
+static void BatchIdentify(cwchptr path, BATCH_IDptrc id) {
+   id->volume = 0;
+   id->low    = 0;
+   id->high   = 0;
+   id->known  = false;
+   if(!path) return;
 
-   for(ui32 index = 0; index < options->inputCount; ++index) chars += BatchFullChars(options->inputs[index]);
+   cDWORD  shared = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+   cHANDLE file   = CreateFileW(path, FILE_READ_ATTRIBUTES, shared, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 
-   wchptr arena = (wchptr)amalloc(sizeof(wchar) * size_t(chars), 16u);
+   if(file == INVALID_HANDLE_VALUE) return;
+
+   FILE_ID_INFO               wide;
+   BY_HANDLE_FILE_INFORMATION narrow;
+
+   if(GetFileInformationByHandleEx(file, FileIdInfo, &wide, sizeof(wide))) {
+      id->volume = ui64(wide.VolumeSerialNumber);
+      for(ui32 at = 0; at < 8u; ++at) {
+         id->low |= ui64(wide.FileId.Identifier[at]) << (8u * at);
+         id->high |= ui64(wide.FileId.Identifier[at + 8u]) << (8u * at);
+      }
+      id->known = true;
+   } else if(GetFileInformationByHandle(file, &narrow)) {
+      id->volume = ui64(narrow.dwVolumeSerialNumber);
+      id->low    = (ui64(narrow.nFileIndexHigh) << 32) | ui64(narrow.nFileIndexLow);
+      id->known  = true;
+   }
+   CloseHandle(file);
+}
+
+// Gathers what the pre-flight compares, into entries and one arena of normalised strings the caller
+// releases; null when the arena could not be allocated. Each output is derived from the input as typed,
+// because that is the spelling ConvertFile derives from, and only then normalised: normalising the input
+// first can change its stem -- Win32 drops a trailing dot, so "a.docx." opens a.docx but derives
+// a.docx.md -- and the plan would judge a path no worker writes. GetFullPathNameW reads the current
+// directory, which is process-wide state, so this runs before any worker starts; nothing in this program
+// changes the directory, so the answer is the one every conversion then sees.
+static wchptr BatchGather(cCLI_OPTIONSptr options, BATCH_INPUTptrc entries) {
+   wchar derived[CONVERT_MAX_PATH];
+   cbool several = options->inputCount > 1u;
+   ui64  chars   = 0;
+
+   // Measured first and filled second, so that the arena is one allocation of the size it needs.
+   for(ui32 index = 0; index < options->inputCount; ++index) {
+      chars += BatchFullChars(options->inputs[index]);
+      if(options->toStdout) continue;
+      if(ConvertOutputPath(options->inputs[index], options->outputPath, several, derived, CONVERT_MAX_PATH)) chars += BatchFullChars(derived);
+   }
+
+   wchptr arena = (wchptr)amalloc(sizeof(wchar) * size_t(chars ? chars : 1u), 16u);
 
    if(!arena) return nullptr;
 
    wchptr at = arena;
 
-   *view = *options;
-   if(options->outputPath) {
-      view->outputPath = at;
-      at               = BatchFullPath(options->outputPath, at, BatchFullChars(options->outputPath));
-   }
    for(ui32 index = 0; index < options->inputCount; ++index) {
-      inputs[index] = at;
+      BATCH_INPUTptrc entry = entries + index;
+
+      entry->input  = at;
       at            = BatchFullPath(options->inputs[index], at, BatchFullChars(options->inputs[index]));
+      entry->output = nullptr;
+      BatchIdentify(options->inputs[index], &entry->self);
+      BatchIdentify(nullptr, &entry->target);
+      // --stdout writes no file, and an output that cannot be derived fails in ConvertFile on its own.
+      if(options->toStdout) continue;
+      if(!ConvertOutputPath(options->inputs[index], options->outputPath, several, derived, CONVERT_MAX_PATH)) continue;
+      entry->output = at;
+      at            = BatchFullPath(derived, at, BatchFullChars(derived));
+      BatchIdentify(derived, &entry->target);
    }
-   view->inputs = inputs;
    return arena;
 }
 
-//-- The failure list
+// Whether two paths reach one file, by the rule BatchPlan's header states.
+static cbool BatchSameFile(cwchptr a, cBATCH_IDptr aId, cwchptr b, cBATCH_IDptr bId) {
+   if(aId->known && bId->known) return aId->volume == bId->volume && aId->low == bId->low && aId->high == bId->high;
+   if(aId->known || bId->known) return false; // One file exists and the other does not, so they are two
+   return a && b && ConvertSamePath(a, b);
+}
+
+//-- What a run of several inputs says at its end
+
+// How many inputs converted and how many workers the pool held -- the one line of output that shows the
+// pool was as wide as --threads asked, since every byte a worker writes is the same at any width.
+static void BatchNoteWorkers(cui32 converted, cui32 count, cui32 workers) {
+   char line[128];
+
+   snprintf(line, sizeof(line), "%u of %u inputs converted by %u worker%s", converted, count, workers, (workers == 1u ? "" : "s"));
+   DiagNote(line);
+}
 
 // D7c: every input that failed, once more, in argument order and with its own verdict, after the last
 // worker has finished -- so that a run whose per-input messages arrived interleaved still ends with one
@@ -219,30 +288,51 @@ cui32 BatchPool(BATCH_JOB job, cptr context, cui32 itemCount, cui32 threadCount,
    return started + 1u;
 }
 
-void BatchPlan(cCLI_OPTIONSptr options, BATCH_PLANptrc plans, ui32ptrc sources) {
-   // One --media-dir named with several inputs is one directory for all of them.
-   cbool shared  = options->mediaDir && options->emitImages && !options->toStdout && options->inputCount > 1u;
-   bool  claimed = false;
-   ui32  owner   = 0;
+void BatchPlan(cBATCH_INPUTptr inputs, cui32 count, cbool sharedMedia, BATCH_PLANptrc plans, ui32ptrc sources) {
+   bool claimed = false;
+   ui32 owner   = 0;
 
-   for(ui32 index = 0; index < options->inputCount; ++index) {
-      ui32            other  = index;
-      cCONVERT_TARGET target = ConvertTargetTaken(options, index, &other);
+   for(ui32 index = 0; index < count; ++index) {
+      cBATCH_INPUTptr mine  = inputs + index;
+      BATCH_PLAN      plan  = BATCH_PLAN_CONVERT;
+      ui32            other = index;
 
-      sources[index] = other;
-      if(target == CONVERT_TARGET_REPEATED) plans[index] = BATCH_PLAN_REPEAT;
-      else if(target == CONVERT_TARGET_IS_INPUT) plans[index] = BATCH_PLAN_IS_INPUT;
-      else if(target == CONVERT_TARGET_CLAIMED) plans[index] = BATCH_PLAN_CLAIMED;
-      else if(target == CONVERT_TARGET_IS_SELF) plans[index] = BATCH_PLAN_IS_SELF;
-      else if(shared && claimed) {
-         // Decision D15's strict half: the first input a worker converts owns the directory.
-         plans[index]   = BATCH_PLAN_MEDIA;
-         sources[index] = owner;
-      } else {
-         plans[index] = BATCH_PLAN_CONVERT;
-         if(!claimed) owner = index;
-         claimed = true;
+      // A repeat is settled first, because it is the same document rather than another one: whatever the
+      // earliest spelling's output collides with, this one's collides with too, and the earliest spelling
+      // is what reports it. It is the earliest, so a repeat's source is never itself a repeat.
+      for(ui32 at = 0; plan == BATCH_PLAN_CONVERT && at < index; ++at) {
+         if(!BatchSameFile(mine->input, &mine->self, inputs[at].input, &inputs[at].self)) continue;
+         plan  = BATCH_PLAN_REPEAT;
+         other = at;
       }
+      // An output that is the input itself would be written over the document being read.
+      if(plan == BATCH_PLAN_CONVERT && mine->output && BatchSameFile(mine->output, &mine->target, mine->input, &mine->self)) {
+         plan = BATCH_PLAN_IS_SELF;
+      }
+      // Then another input it would destroy, anywhere on the line, or an earlier input's output it would
+      // overwrite -- D7b derives every name from an input's own leaf, so two report.docx in two directories
+      // both target one report.md. The first input to name a path keeps it, whatever becomes of that input.
+      for(ui32 at = 0; plan == BATCH_PLAN_CONVERT && mine->output && at < count; ++at) {
+         cBATCH_INPUTptr theirs = inputs + at;
+
+         if(at != index && BatchSameFile(mine->output, &mine->target, theirs->input, &theirs->self)) plan = BATCH_PLAN_IS_INPUT;
+         else if(at < index && theirs->output && BatchSameFile(mine->output, &mine->target, theirs->output, &theirs->target)) {
+            plan = BATCH_PLAN_CLAIMED;
+         }
+         if(plan != BATCH_PLAN_CONVERT) other = at;
+      }
+      if(plan == BATCH_PLAN_CONVERT && sharedMedia) {
+         // Decision D15's strict half: the first input planned for conversion owns the directory.
+         if(claimed) {
+            plan  = BATCH_PLAN_MEDIA;
+            other = owner;
+         } else {
+            claimed = true;
+            owner   = index;
+         }
+      }
+      plans[index]   = plan;
+      sources[index] = other;
    }
 }
 
@@ -274,30 +364,30 @@ cEXIT_CODE BatchRun(cCLI_OPTIONSptr options) {
 
    csize_t slots = size_t(count);
    // One slot per input in each of six arrays: the verdicts; the plan and each input's source; the queue of
-   // inputs a worker converts and the verdicts the pool hands back for them; and the normalised spellings
-   // the pre-flight compares. Every one of them, and the strings, is released on the one path out.
-   EXIT_CODEptr  verdicts = (EXIT_CODEptr)amalloc(sizeof(EXIT_CODE) * slots, 16u);
-   EXIT_CODEptr  results  = (EXIT_CODEptr)amalloc(sizeof(EXIT_CODE) * slots, 16u);
-   BATCH_PLANptr plans    = (BATCH_PLANptr)amalloc(sizeof(BATCH_PLAN) * slots, 16u);
-   ui32ptr       sources  = (ui32ptr)amalloc(sizeof(ui32) * slots, 16u);
-   ui32ptr       queue    = (ui32ptr)amalloc(sizeof(ui32) * slots, 16u);
-   cwchptrptr    spelled  = (cwchptrptr)amalloc(sizeof(cwchptr) * slots, 16u);
-   CLI_OPTIONS   view     = *options;
-   wchptr        arena    = nullptr;
-   bool          ready    = verdicts && results && plans && sources && queue && spelled;
-   EXIT_CODE     folded   = EXIT_INTERNAL;
+   // inputs a worker converts and the verdicts the pool hands back for them; and what the pre-flight
+   // compares. Every one of them, and the arena of strings, is released on the one path out.
+   EXIT_CODEptr   verdicts = (EXIT_CODEptr)amalloc(sizeof(EXIT_CODE) * slots, 16u);
+   EXIT_CODEptr   results  = (EXIT_CODEptr)amalloc(sizeof(EXIT_CODE) * slots, 16u);
+   BATCH_PLANptr  plans    = (BATCH_PLANptr)amalloc(sizeof(BATCH_PLAN) * slots, 16u);
+   ui32ptr        sources  = (ui32ptr)amalloc(sizeof(ui32) * slots, 16u);
+   ui32ptr        queue    = (ui32ptr)amalloc(sizeof(ui32) * slots, 16u);
+   BATCH_INPUTptr entries  = (BATCH_INPUTptr)amalloc(sizeof(BATCH_INPUT) * slots, 16u);
+   wchptr         arena    = nullptr;
+   bool           ready    = verdicts && results && plans && sources && queue && entries;
+   EXIT_CODE      folded   = EXIT_INTERNAL;
 
    if(ready) {
-      arena = BatchNormalise(options, &view, spelled);
+      arena = BatchGather(options, entries);
       ready = (arena != nullptr);
    }
    if(!ready) DiagError("not enough memory to plan the run");
    if(ready) {
       // The pre-flight, in argument order and before any worker starts, so that what it refuses and what
       // it reports are the same at every --threads count.
-      ui32 queued = 0;
+      cbool shared = options->mediaDir && options->emitImages && !options->toStdout && count > 1u;
+      ui32  queued = 0;
 
-      BatchPlan(&view, plans, sources);
+      BatchPlan(entries, count, shared, plans, sources);
       for(ui32 index = 0; index < count; ++index) {
          verdicts[index] = EXIT_ALL_CONVERTED;
          if(plans[index] == BATCH_PLAN_CONVERT) {
@@ -320,26 +410,27 @@ cEXIT_CODE BatchRun(cCLI_OPTIONSptr options) {
 
       // The pool hands back each verdict at the input's place in the queue, and the queue says where that
       // input stands on the command line.
-      BATCH_WORK work = {options, queue};
+      BATCH_WORK work    = {options, queue};
+      cui32      workers = BatchPool(BatchConvertOne, &work, queued, options->threadCount, results);
 
-      BatchPool(BatchConvertOne, &work, queued, options->threadCount, results);
       for(ui32 item = 0; item < queued; ++item) verdicts[queue[item]] = results[item];
-      // A repeat takes the verdict of its earliest spelling, which is never itself a repeat: the pre-flight
-      // names the first earlier input with the same path, and an earlier one still would have been found.
+      // A repeat takes the verdict of its earliest spelling, which BatchPlan guarantees is not a repeat.
       for(ui32 index = 0; index < count; ++index) {
          if(plans[index] == BATCH_PLAN_REPEAT) verdicts[index] = verdicts[sources[index]];
       }
       folded = BatchFold(verdicts, count);
-      // A single input's own message is the whole of what its failure says; a list of one would repeat it.
-      if(count > 1u && folded != EXIT_ALL_CONVERTED) {
+      // A single input's own message is the whole of what its outcome says; a note or a list of one would
+      // only repeat it. With several, the note is the one line that says the pool was as wide as asked.
+      if(count > 1u) {
          ui32 failed = 0;
 
          for(ui32 index = 0; index < count; ++index) failed += (verdicts[index] != EXIT_ALL_CONVERTED ? 1u : 0u);
-         BatchListFailures(options, verdicts, failed);
+         if(!options->quiet) BatchNoteWorkers(count - failed, count, workers);
+         if(failed) BatchListFailures(options, verdicts, failed);
       }
    }
    if(arena) mdealloc(arena);
-   if(spelled) mdealloc(spelled);
+   if(entries) mdealloc(entries);
    if(queue) mdealloc(queue);
    if(sources) mdealloc(sources);
    if(plans) mdealloc(plans);
