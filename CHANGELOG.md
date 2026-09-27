@@ -17,8 +17,8 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   Visual Studio Enterprise 2026 carrying MSVC 14.44.35207, the v143 toolset, and returned the M11
   tallies exactly: 1614 unit checks, 118 fixtures, 227 container checks and 154 golden checks. The DoD's
   red run is run 36164302531, on a commit that deliberately broke `src/Diag.h`'s `License:` spacing and
-  was reverted by the next; the green run on `main` waits for the merge, so the marker is
-  `[done-unverified]`.
+  was reverted by the next; the green run on `main` is run 36308437415, after the merge, so the marker is
+  `[done]`.
 - **`tests/validate_gcs.py`**, the mechanical GCS validator every session since M1 had written in a
   scratch directory and thrown away. It judges `src/` and `tests/` for the r17 prolog (the standard's
   regexes and its twelve fields in order), r8's three-space indent over the brace structure and its ban
