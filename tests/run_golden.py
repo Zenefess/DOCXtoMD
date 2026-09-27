@@ -648,6 +648,24 @@ def check_batch_preflight(exe, many, failures):
     else:
         print("ok    %-28s the first of two inputs with one leaf name keeps the output, the second is refused" % "claimed")
 
+    # Two documents whose outputs are one file not written yet, spelled two ways -- stem.docx and .\stem.doc
+    # both derive stem.md -- are told apart only by normalising the spellings, since no file stands there to
+    # be identified. The first keeps the output and the second is refused.
+    stems = os.path.join(build, "batch-stem")
+    fresh_dir(stems)
+    shutil.copyfile(os.path.join(build, source["name"]), os.path.join(stems, "stem.docx"))
+    shutil.copyfile(os.path.join(build, unlike["name"]), os.path.join(stems, "stem.doc"))
+    stem_second = os.path.join(".", "stem.doc")
+    code, out, err = run(exe, ["--threads", str(many), "stem.docx", stem_second], cwd=stems)
+    checks += 1
+    written = tree_of(stems)
+    if (code != 6 or written.get("stem.md") != first
+            or "an earlier input already writes that output file: " + stem_second not in err):
+        failures.append(("stem spellings", "exit %s" % code, "normalised outputs"))
+        print("FAIL  %-28s two spellings of one unwritten output are exit %s, or the first lost it" % ("stem spellings", code))
+    else:
+        print("ok    %-28s two spellings of one unwritten output are one output: the second is refused" % "stem spellings")
+
     # -o naming the input under another spelling would write the Markdown over the document; and one input's
     # output that is another input, spelled another way, would destroy that input. Both are refused, and
     # both files keep their bytes. M12 compared the spellings as typed and would have overwritten the second.

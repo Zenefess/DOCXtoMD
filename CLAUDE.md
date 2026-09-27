@@ -26,11 +26,11 @@ below.
 
 - `src/` — **exists** and holds the CLI skeleton (M2), the container layer (M3), the XML and package
   layer (M4), the converter (M5/M6), M7's reference resolution, M8's lists, M9's tables, M10's fields,
-  notes and tracked changes, and M11's hostile-input hardening — none of the last three needed a module
-  of its own: thirty-eight files, all
+  notes and tracked changes, M11's hostile-input hardening — none of those three needed a module of its
+  own — and M13's batch layer, which did: forty files, all
   CRLF, tab-free, ASCII-only, none over 150 columns, each carrying a validated r17 prolog at `v0.1.0`
   with `ISA: Scalar`. Unlike
-  `include/`, `src/` is **not** exempt from the repository style, and all thirty-eight are committed in
+  `include/`, `src/` is **not** exempt from the repository style, and all forty are committed in
   the shape `.clang-format` produces — running the formatter over them is a verified no-op, so a
   format-on-save cannot manufacture a diff. Keep it that way: format after editing, then re-check the
   r17 prolog, since the formatter has no opinion about it. Two shapes are worth copying because they
@@ -47,9 +47,11 @@ below.
     include path because MSVC searches the including file's own directory for a quoted include, so
     `src\` is deliberately **not** in `<AdditionalIncludeDirectories>`.
   - `Diag.h`/`Diag.cpp` — the diagnostic sink. Exports `EXIT_CODE` (all seven exit codes as one named
-    enum, so the stable API lives in code rather than only in this file) and six writers:
-    `DiagWriteOut`, `DiagWriteOutBytes`, `DiagWriteErr`, `DiagError`, `DiagErrorText` and
-    `DiagNoteText`. `DiagWriteOutBytes` is the only one that returns anything, because it is the only
+    enum, so the stable API lives in code rather than only in this file) with its pointer aliases, seven
+    writers — `DiagWriteOut`, `DiagWriteOutBytes`, `DiagWriteErr`, `DiagError`, `DiagErrorText`,
+    `DiagNote` and `DiagNoteText` — and, since M13, `DiagExitCodeText`, the short phrase per exit code that
+    `Batch`'s failure list prints, whose table a `static_assert` ties to the enum and `TestBatch` pins row by
+    row. `DiagWriteOutBytes` is the only writer that returns anything, because it is the only
     one whose failure loses a document rather than a message. Notes go to
     **stderr**, not stdout, so `--stdout` can hand a document to a pipe uncontaminated; `-q` suppresses
     them, and until this module owns that flag it is the caller that decides not to call.
@@ -57,9 +59,16 @@ below.
     convert — around an `amalloc`/`mdealloc` buffer (p2). That is the Win32 boundary, and `Utf` has
     owned it since M4 replaced this module's own `WideCharToMultiByte` call; there is no longer a
     `WideCharToMultiByte` anywhere in `src/`.
-    `Thread-safety: Reentrant`: it holds no state and takes no lock, because at M2 nothing is shared.
-    **M13 makes it `MT-safe` with `include/spinlocks.h`** (D6); do not read today's `Reentrant` as a
-    promise that survives that.
+    **`Thread-safety: MT-safe` since M13** (D6), and the one module besides `Batch` that is. Every writer
+    holds one process-wide spin lock — `SpinLockMin` from `include/spinlocks.h`, because each write is a
+    console or pipe syscall that can block for milliseconds on a redirected handle, which `SpinLock` would
+    spend spinning — for exactly one call, so a line from one worker is never torn by another's. A wide
+    argument is transcoded before the lock is taken, so the lock covers writes and nothing else. The flag
+    sits in a `DIAG_LOCK_LINE` padded to a cache line of its own, because `spinlocks.h` has no padded lock
+    type yet (its To Do 3). The lock is not reentrant and no writer calls another while holding it;
+    `DiagWriteOutBytes` holds it for a whole document, which `--stdout`'s single input makes harmless.
+    Which of two workers' lines comes first is not promised, and the golden runner compares a threaded
+    run's console lines with a sequential run's only after sorting them.
   - `CliOptions.h`/`CliOptions.cpp` — `CLI_OPTIONS` plus `CliParse`, `CliFree`, `CliWriteUsage` and
     `CliWriteVersion`, over a `USAGE_TEXT` constant kept **byte-identical** to the Target CLI block
     below. The whole documented surface parses; only `--help`, `--version`, `--threads` validation and
@@ -74,7 +83,8 @@ below.
     `--help` and `--version` are answered the moment they are seen, so they beat anything later on the
     line; a bad option *earlier* on the line still wins. `CliParse` returns an `EXIT_CODE`, not a bool,
     so `main` can tell a usage error (1, and print the usage text) from a failed allocation (5, and do
-    not — the command line was fine).
+    not — the command line was fine). Since M13 `--threads` sizes `Batch`'s pool, and M13 changed nothing
+    else here: the whole surface it needed was parsed from M2 on, which is what D7b's list asked M2 for.
   - `Crc32.h`/`Crc32.cpp` — ZIP's CRC-32: IEEE 802.3, **reflected polynomial `0xEDB88320`**, over a
     256-entry table built by a `constexpr` function, so there is no run-time initialiser for a worker to
     race. `Crc32Update` folds one range into a running value and `Crc32` does a whole buffer; the
@@ -880,9 +890,10 @@ below.
     numbering, walk, notes, coalesce, resolve, plan the media, number the items, emit, write, extract. M9
     added no stage to it: a table needs no part of its own, and its cells' blocks go through every pass
     already there. This is
-    the function one worker runs when M13
-    adds the bounded pool, which is why it
-    is a module and not a lump of `main.cpp`. The styles, numbering, footnotes and endnotes parts are all
+    the function each of `Batch`'s workers runs, which is why it
+    is a module and not a lump of `main.cpp`: two calls on two threads share nothing but the read-only
+    options and `Diag`, which locks, and `ConvertFile` carries the `RULE-DEV:a2` tag D5 asks for, because
+    one document's conversion is sequential by ruling. The styles, numbering, footnotes and endnotes parts are all
     resolved through the main part's relationships, by `ConvertRelatedPart` over their four
     `OPC_REL_*` kinds -- all four looked up at once, straight after the main part's own relationships
     are loaded, each coming back as a part index -- and an absent one is legal. Since M10 the notes are
@@ -913,17 +924,54 @@ below.
     second-guessing a path they typed would be worse than honouring it.
     The output file is written with `CreateFileW`/`WriteFile` and **deleted again if the write does not
     finish** — a half-written `.md` that looks converted is worse than none. A derived path equal to
-    the input is refused rather than overwritten, and `ConvertTargetTaken` is the pre-flight over the
-    whole input list: D7b derives every name from an input's own leaf, so two inputs called
-    `report.docx` in two directories both target one `report.md`, and left alone the second silently
-    destroys the first. The first input to name a path keeps it; a later one, and any input whose
-    derived output is another input of the same run, are refused into D7c's failure list. One input
-    named twice is not a collision, because it writes the same bytes over its own output. The
-    architecture note gives that pre-flight to `Batch` at M13; `main.cpp`'s loop is what `Batch`
-    replaces, so it lives there until then.
-  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, option handling, the input loop and the
-    exit-code fold. There is no positional output operand (D7b) and no literal part name anywhere.
-  - **What the binary does at M11**: `--help`/`--version` exit 0, a usage error exits 1 after printing
+    the input is refused rather than overwritten; since M13 that literal check is a backstop, because
+    `Batch`'s pre-flight catches the same thing first, by file identity, however the input is spelled.
+    The pre-flight over the whole input list lived here as `ConvertTargetTaken` until M13 moved it to
+    `Batch`, as the architecture note planned. What stays is the derivation it compares and
+    `ConvertSamePath`, the comparison it falls back on where no file exists, public since M13 and done
+    through `CompareStringOrdinal`'s ignore-case form: that reads the system's own upper-case table, so the
+    accented and Cyrillic pairs NTFS folds compare equal, where folding A to Z did not. Since M13
+    `ConvertSplitPath` also treats a leading drive letter's colon as the end of the directory part, a
+    pre-existing defect the M13 review found: `C:report.docx` under `-o` had derived `out\C:report.md`,
+    which NTFS reads as an alternate data stream on an empty file `out\C`, and its media link had been
+    `C:report_media/...`, a URL whose scheme is `c:`.
+  - `Batch.h`/`Batch.cpp` — M13's module, and the only one in the tree that starts a thread. `BatchRun`
+    is the whole run after `CliParse`: a pre-flight, a pool, a note, a failure list and the fold.
+    **The pre-flight** runs on the calling thread, in argument order, before any worker starts, which is
+    what makes it the same at every `--threads` count. `BatchGather` derives each input's output from the
+    spelling **as typed** — the one `ConvertFile` derives from — and only then normalises it with
+    `GetFullPathNameW`; it normalises the input the same way; and it identifies every path that names an
+    existing file by its volume and file ID (`FileIdInfo`, falling back to the 64-bit index where a file
+    system cannot report the 128-bit ID ReFS needs). The order is a correctness rule and the M13 review
+    found it: normalising first let `a.docx. a.docx.docx` overwrite a document with exit 0 on Windows,
+    because Win32 drops the trailing dot while the worker derives `a.docx.md` from it. `BatchPlan` is the
+    pure half, and what the unit suite drives: two paths are one file when both exist and share an
+    identity, two files when one exists and the other does not, and otherwise their normalised spellings
+    decide through `ConvertSamePath`. Identity is what sees through a short name, a link, a `\\?\` prefix or
+    a second drive letter for one volume, and it is also what keeps apart two files a case-sensitive
+    directory holds under names differing only in case — a case-folded string match dropped the second
+    silently, with exit 0. Per input and in this order, a **repeat** of an earlier input is not converted
+    again and takes that input's verdict, with a note that claims no outcome; an output that is the input
+    itself (**IS_SELF**), another input (**IS_INPUT**) or an earlier input's output (**CLAIMED**) is
+    refused with exit 4; and with one `--media-dir` shared by several inputs, every input after the first
+    one planned for conversion is refused (**MEDIA**), which is decision D15's strict half.
+    **The pool** is `BatchPool`, generic over a `BATCH_JOB` so that `TestBatch` can drive it with real
+    threads and no files. It starts `min(--threads, queued) - 1` threads with `_beginthreadex` — the
+    calling thread is the first worker, so a pool of one starts nothing — and hands items out through one
+    `_InterlockedIncrement` cursor on a cache line of its own; each verdict lands in a slot one worker owns
+    and is read after `WaitForSingleObject` on that worker, which is a full barrier. There is no lock and
+    no exit-code accumulator: the fold runs over a verdict array after the join. A thread that cannot be
+    started leaves a smaller pool rather than a failed run. **The end of a run of several inputs** is a
+    note — `N of M inputs converted by K workers`, the one line whose content depends on the pool's width
+    and so the one that shows `--threads` reached it — and, when anything failed, D7c's list: a heading
+    and one `failed (exit n, phrase): input` line per failed input in argument order, repeats included. A
+    single input writes neither, because its own message is the whole of what its outcome says.
+    `BatchFold` gives 0 when everything converted, 6 when something did and something did not, and the
+    highest verdict when nothing did.
+  - `main.cpp` — `wmain`, `SetConsoleOutputCP(CP_UTF8)`, option handling and the hand-over to
+    `BatchRun`, which since M13 owns the input loop and the exit-code fold. There is no positional output
+    operand (D7b) and no literal part name anywhere.
+  - **What the binary does at M13**: `--help`/`--version` exit 0, a usage error exits 1 after printing
     the message and the usage text to stderr, an input that cannot be opened exits 2 and is named, an
     input that is not a usable DOCX exits **3** with a sentence saying which rule it broke **and, for most refusals that one part or one entry
     name causes, which one**, an output that cannot be written exits 4, and a sound package is **converted** and
@@ -950,7 +998,19 @@ below.
     sentence naming the rule and the entry — `not a valid DOCX; an entry name uses a backslash as a path
     separator, which ZIP forbids, in _rels\.rels`. A styles or numbering part whose root is wrong or which
     declares more than its cap is refused as it was before M11, and its sentence now names the part, as the
-    sentence for a malformed one already did.
+    sentence for a malformed one already did. **M13 adds no option and no exit code** — `-j`/`--threads`
+    has parsed since M2 — but a run of several inputs now converts them on a pool of up to `--threads`
+    workers, and says more. Before any worker starts it refuses, with exit 4 for that input, an input whose
+    output would be the input file itself, another input, or an earlier input's output — however each is
+    spelled, since a file that exists is identified rather than compared by name — and, with one
+    `--media-dir` shared by several inputs, every input after the first one converted (D15). An input
+    named twice is converted once and takes the first spelling's verdict, with a note. The run ends with
+    `N of M inputs converted by K workers`, which `-q` suppresses, and when anything failed with every
+    failed input listed once more, in argument order with its own verdict. Four things M12 did differently,
+    each deliberate: it converted an input named twice twice; it wrote over an input `-o` named under
+    another spelling; it let two inputs sharing a `--media-dir` overwrite each other's pictures; and it
+    converted both of two inputs whose names differ only in case in a case-sensitive directory, where M13
+    refuses the second because their outputs fold together — see Known gaps.
   - **What M11 converts and what it does not**: paragraphs, headings, hard breaks, tabs, hyphens and the
     escaping that keeps all of it from being re-read as markup; bold, italic,
     strikethrough, superscript, subscript, inline code, fenced code blocks, blockquotes and the
@@ -991,10 +1051,12 @@ below.
   and both build clean at `/W3`. No OutDir override. Both configs also define
   `WIN32_LEAN_AND_MEAN;NOMINMAX` — added at M2, when `<windows.h>` first entered the project; neither
   hides a header this project needs, because `winnls.h` (`WideCharToMultiByte`) and `wincon.h`
-  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`. Nineteen
-  `<ClCompile>`s, all `src\…`, and twenty-five `<ClInclude>`s: the six `include\…` headers and nineteen
+  (`SetConsoleOutputCP`) sit outside the `WIN32_LEAN_AND_MEAN` guard in `windows.h`, and neither does
+  anything M13 calls — `GetFullPathNameW`, `GetFileInformationByHandleEx`, `CompareStringOrdinal`,
+  `_beginthreadex`, `WaitForSingleObject` — as CI's warning-free build of it shows. Twenty
+  `<ClCompile>`s, all `src\…`, and twenty-six `<ClInclude>`s: the six `include\…` headers and twenty
   `src\…` ones.
-- `DOCXtoMD.vcxproj.filters` — lists the nineteen `src\*.cpp` files under Source Files and all twenty-five
+- `DOCXtoMD.vcxproj.filters` — lists the twenty `src\*.cpp` files under Source Files and all twenty-six
   headers under Header Files, in the same order as the `.vcxproj`. Every `<ClCompile Include="…">` and
   `<ClInclude Include="…">` path matches the `.vcxproj` character-for-character; keep it that way, or
   the IDE tree stops reflecting the build. The tree is deliberately flat — there is no `src` filter
@@ -1009,7 +1071,7 @@ below.
   because MSBuild's default is `$(SolutionDir)`-relative: without the pin the test binary lands in
   `x64\Release\` when the solution is built and in `tests\x64\Release\` when the project is, and a
   definition-of-done command cannot name a path that moves. The main project still sets no OutDir. It
-  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the sixteen files in
+  compiles every `src\*.cpp` except `main.cpp`, which owns `wmain`, plus the seventeen files in
   `tests\unit\`.
 - Shared headers in `include/` — all six listed as `<ClInclude>` in the `.vcxproj` and under Header
   Files in the `.filters`, all CRLF, all tab-free, none exceeding 150 columns:
@@ -1251,14 +1313,21 @@ below.
   suites that already own the stages it touches — and M10 added none either, for the same reason. **M11
   added the thirteenth**, `TestZipReader.cpp`, because D10's rules are the first part of `ZipReader` that
   is pure enough to drive from a literal; it runs first, as the container is the first stage a document
-  meets:
+  meets. **M13 added the fourteenth**, `TestBatch.cpp`, which runs last because `Batch` is the last stage,
+  and which is the first suite to start a thread: it drives `BatchPool` with real threads — every item run
+  exactly once with its verdict at its own index, a pool of one on the calling thread and in item order,
+  and a rendezvous only a pool as wide as it was asked to be can meet, bounded by `GetTickCount64` rather
+  than by a count of 15.6 ms sleeps — and `BatchPlan`, `BatchFold` and `DiagExitCodeText` from literals,
+  with file identities supplied by the case so that aliases and case-sensitive directories are driven
+  without a file system. `CHECK` is still called only from the main thread, once the pool has joined, and
+  `Check.cpp` now says so rather than calling the suite single-threaded:
   `Check.h`/`Check.cpp` (one `CHECK` macro, a
   group heading and a pass/fail summary, over `typedefs.h` and `<stdio.h>` and nothing else — the header
   itself needs only `typedefs.h`, so a suite that includes it pulls in no I/O), `TestMain.cpp`, and one
   suite per module — `TestZipReader.cpp`, `TestUtf.cpp`, `TestXmlPull.cpp`, `TestOpcPackage.cpp`, `TestStyleModel.cpp`,
   `TestNumberingModel.cpp`, `TestDocWalker.cpp`, `TestRunCoalescer.cpp`, `TestLinkResolver.cpp`,
   `TestMediaExtractor.cpp`, `TestMdEscape.cpp`, `TestMdEmitter.cpp`,
-  `TestConvert.cpp`. Every case is driven from a string literal;
+  `TestConvert.cpp`, `TestBatch.cpp`. Every case is driven from a string literal;
   nothing here opens a file, so the binary needs no working directory and no fixture path. `TestXmlPull`
   works by tokenizing a literal into a compact trace — `(name` opens, `)name` closes, `[text]` is
   character data, `$` is the end and `!n` is refusal *n* — so one string per case reads better than ten
@@ -1364,7 +1433,8 @@ The solution builds **two** exes since M4. The main project overrides no output 
 `x64\Release\DOCXtoMD.exe` and `x64\Debug\DOCXtoMD.exe`; the test project pins its own, so it lands at
 `tests\x64\Release\DOCXtoMD.Tests.exe` whether the solution or the project was built.
 Since M2 the binary has a real command line, since M3 it reads the container, since M4 it resolves the
-package and since M5 it **converts**: `--help` and
+package, since M5 it **converts** and since M13 it converts a list of inputs on a pool of up to
+`--threads` workers: `--help` and
 `--version` exit 0, a usage error exits 1, an unopenable input exits 2, an input that is not a usable
 DOCX exits 3 and is told which rule it broke and which part broke it, an output that cannot be written
 exits 4, a sound package is converted and exits 0, and a run that both converted and failed exits 6.
@@ -1379,11 +1449,17 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 ```
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough. At
-M11 they return **227**, **154** and **1614** checks, over the **118** fixtures `make_fixtures.py`
-builds, and all four were confirmed on Windows on 2026-09-24. The three check counts are the interesting ones: they are what
+M13 they return **229**, **305** and **1723** checks, over the **118** fixtures `make_fixtures.py`
+builds, all four confirmed on `windows-latest` by CI on 2026-09-27. The three check counts are the interesting ones: they are what
 the shim measures on Linux, and at every milestone since M3 they have been exactly what the real MSVC
-binary then returned. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
+binary then returned -- with one exception M13 introduced on purpose: the golden runner returns **304** on
+Linux, because its trailing-dot case exercises Win32's own path trimming and runs only where `os.name` is
+`nt`. The fixture count is not evidence of that -- `make_fixtures.py` is the same Python
 on both platforms -- and is recorded only so a run that builds a different number is noticed.
+`run_golden.py`'s M13 section runs its many-thread batches at the smaller of 8 and the machine's core
+count, which it reads from the exe's own refusal of a larger `--threads` and checks against
+`os.cpu_count()`: a count above the core count is a usage error by design, so a 4-core runner runs the
+definition of done's `--threads 8` at 4.
 The GCS mechanical rules and the formatter are checked by one script, which runs anywhere Python does:
 
 ```bat
@@ -1513,7 +1589,9 @@ per input file** (D6). Together they settle into five operative rules:
      which is a weaker promise than thread-safety and must not be mistaken for one. A buffer must
      never travel between workers.
    - **lock only what is genuinely compound.** The work-list cursor and the exit-code accumulator
-     are single scalars: an `_Interlocked*` increment or CAS covers them with no lock at all, and
+     are single scalars: an `_Interlocked*` increment or CAS covers them with no lock at all (M13 needed
+     only the first: its cursor is one `_InterlockedIncrement`, and its verdicts are an array of per-input
+     slots folded after the join, so there is no accumulator at all), and
      `memory management.h` already ships `LockedCopy`/`LockedSwap`/`LockedMoveAndClear` for small
      interlocked moves. That leaves the diagnostics/console sink as the one thing needing
      `include/spinlocks.h`, the primitive D6 put in scope. Match the profile to the hold time:
@@ -1537,20 +1615,24 @@ per input file** (D6). Together they settle into five operative rules:
    - **start workers with `_beginthreadex`, not `CreateThread`.** Every worker calls CRT code —
      `_aligned_malloc` through `amalloc`, and file I/O — and a raw `CreateThread` leaks the
      per-thread CRT block. `std::thread` is CRT-correct and is not third-party (D1/D2 bar vendored
-     libraries, not the standard library), so it is also fine; pick one at M13 and say which.
+     libraries, not the standard library), so it is also fine. **M13 picked `_beginthreadex`**: it is
+     C-shaped like the rest of the tree and reports failure as a return value rather than as an
+     exception, which is what lets `BatchPool` treat a thread that cannot start as a smaller pool rather
+     than a failed run.
    - **read the default worker count with `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`.** D7's
      default is the system's virtual core count, and the obvious ways to ask — `GetSystemInfo`'s
      `dwNumberOfProcessors` and `std::thread::hardware_concurrency()` — report only the calling
      thread's processor group, capping at 64 on large machines. Clamp the result to at least 1, and
      treat `--threads 0` or a value above the core count as a usage error rather than silently
      coercing it.
-   D5's a2 exception is **still live**, not spent: threading only arrives at M13, so every binary
-   from M2 through M12 is strictly single-threaded, and even after M13 a single document's
+   D5's a2 exception is **still live**, not spent: threading arrived at M13, so every binary
+   from M2 through M12 was strictly single-threaded, and even now a single document's
    conversion is deliberately sequential — which is exactly the a2 deviation D5 was granted for.
    Keep writing `// RULE-DEV:a2 single-threaded by owner ruling (D5)` where a reader would expect
    threading inside the per-file pipeline; what D6 removed is the reason to write it on the
-   file-list loop, which is now threaded on purpose. p3's "expose thread status via atomics;
-   document memory order" is only partly discharged here — see Known gaps.
+   file-list loop, which is now threaded on purpose. M13 moved the tag from `main.cpp`'s loop to
+   `ConvertFile`, which is where a reader of a threaded program asks the question. p3's "expose thread
+   status via atomics; document memory order" is only partly discharged here — see Known gaps.
 
 MSVC macro trap: MSVC defines `__AVX__`/`__AVX2__`/`__AVX512*__` but **never** `__FMA__` or
 `__BMI2__`. Guard on `__AVX2__` alone — that is why the `defined(__FMA__) || defined(__AVX2__)` tests
@@ -1562,7 +1644,7 @@ check, or raise a decision to widen the baseline — do not just assume it.
 
 They live in `include/` and are owner-authored library files shared with other projects, not
 repo-local code. **Do not reformat, refactor, or re-version them**; if one needs a change, raise it
-as a numbered decision (D15+) the way D1–D14 were raised. `include/.clang-format` enforces that
+as a numbered decision (D16+) the way D1–D15 were raised. `include/.clang-format` enforces that
 mechanically — `DisableFormat: true`, so a stray "Format Document" in the IDE is a no-op there. What
 sessions need to know:
 
@@ -1711,7 +1793,32 @@ forbidden; before D6 it was.
   by D6. `spinlocks.h` is the sanctioned primitive and it uses `_Interlocked*` intrinsics over
   `volatile ui32` with unconditional full barriers — there is no `std::atomic` and no memory-order
   argument to document. Record the locking contract in the prolog instead; adopting `std::atomic`
-  anywhere would need a new decision.
+  anywhere would need a new decision. M13 did both halves as far as those primitives allow: `Diag`'s and
+  `Batch`'s prologs state their contracts, `Batch.h` documents the memory order its pool relies on —
+  starting a thread, taking an item through `_InterlockedIncrement` and waiting for a thread are all full
+  barriers, so every verdict is read after its writer finished — and the thread status exposed is the
+  one number that shows the pool's width, the workers note.
+- **M13's determinism holds while memory does.** Each worker holds a whole document, and every ZIP cap
+  is per document, so a batch peaks at roughly the number of workers times one document's peak — and the
+  default `--threads` is the core count. Under memory exhaustion a batch that converts at `--threads 1`
+  can exit 6 at a higher count, with which inputs fail depending on scheduling: the M13 review reproduced
+  it on the shim under `ulimit -v`, four 19 MB break-heavy parts converting at `-j 1` and `-j 2` and
+  failing a different pair each run at `-j 4`. Nothing crashes. A process-wide memory budget would be
+  shared state the design otherwise has none of, so it waits for a decision; `Batch.cpp`'s To Do 2 names it.
+- **The pre-flight can only compare strings for outputs that do not exist yet.** Identity sees through
+  every alias of a file that is there, but two outputs that are not written yet and alias one file — a
+  short name, a link, a `subst` drive — look like two paths, and on Windows their two workers then race:
+  one gets a sharing violation and exits 4, or at `--threads 1` the second overwrites the first. The
+  string fallback also folds case, so two inputs whose names differ only in case, in a case-sensitive
+  directory, are two files and two inputs but their outputs fold together, and the second is refused
+  loudly with exit 6 where M12 converted both. `Batch.h`'s To Do 3 names it.
+- **MSVC ships no thread sanitizer**, as the M13 roadmap entry foresaw: ThreadSanitizer has passed every
+  suite, and repeated threaded batches, on the Linux shim only, over a `spinlocks.h` whose spin-wait
+  reads the shim's build makes atomic loads so that the tool can see them. What Windows proves is the
+  determinism the golden runner compares and the rendezvous `TestBatch` meets.
+- **On Windows 10 and Server 2019, new threads start in the process's own processor group**, so a machine
+  with more than 64 logical processors runs the default `--threads` — every group's cores — oversubscribed
+  on one group. That is slower, not wrong; Windows 11 and Server 2022 spread threads across groups.
 - **M4's coverage gap is closed by M10, at the golden level only.** The claim `OpcFindRelById` exists to
   support -- that relationship ids are scoped per part, so `rId3` in `document.xml` and `rId3` in
   `footnotes.xml` are unrelated -- is now tested: `tests/fixtures/footnotes` gives `rId5` and `rId2`
@@ -1937,7 +2044,7 @@ implementation session must respect:
 | A picture inside a fenced code block | Its alt text, as literal text of the fence, and no file extracted. A fence emits its text and nothing else, so an extracted picture would be one no line of the document refers to. Session-derived at M7 |
 | `#`, `%` or `?` in a **generated** media path | Percent-encoded. The three bytes `MD_CONTEXT_LINK_DEST` leaves alone in a producer's own target, because that target arrives already encoded far more often than it arrives holding a literal one — which is not true of a name derived from `draft #2.docx` |
 
-## Planned architecture (`docs/`, `include/`, `tests/` and twenty `src/` modules exist — build the rest by Roadmap)
+## Planned architecture (`docs/`, `include/`, `tests/` and all twenty-one `src/` modules exist — `bench/` is what remains)
 
 M9 added no module, which is worth stating where a reader counts them: a table is a shape over blocks
 that already exist rather than a stage of its own, so it landed in `Ir`, `DocWalker`, `MdEscape`,
@@ -1948,23 +2055,25 @@ beside them -- so it landed in `Ir`, `DocWalker`, `LinkResolver`, `MdEmitter` an
 count is still twenty. **Nor did M11**: hardening is a check where the input arrives and a bound where
 it is stored, so D10 landed in `ZipReader`, the producer quirks in `StyleModel`, `NumberingModel` and
 `DocWalker`, and the table and amplification bounds in `Ir`, `DocWalker`, `RunCoalescer` and
-`MdEmitter`.
+`MdEmitter`. **M13 added the twenty-first**, `Batch`, which this list had named from the start: the
+worker pool and the pre-flight are the one piece of the design that is not per-worker, so it could not
+land in a module that is.
 
-**Written so far (M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9 + M10 + M11)**: `src/main.cpp`, `src/BuildGuards.h`,
+**Written so far (M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9 + M10 + M11 + M13)**: `src/main.cpp`, `src/BuildGuards.h`,
 `src/CliOptions.h`/`.cpp`, `src/Diag.h`/`.cpp`, `src/Crc32.h`/`.cpp`, `src/Inflate.h`/`.cpp`,
 `src/ZipReader.h`/`.cpp`, `src/Utf.h`/`.cpp`, `src/XmlPull.h`/`.cpp`, `src/OpcPackage.h`/`.cpp`,
 `src/StyleModel.h`/`.cpp`, `src/NumberingModel.h`/`.cpp`, `src/Ir.h`/`.cpp`, `src/DocWalker.h`/`.cpp`,
 `src/RunCoalescer.h`/`.cpp`,
 `src/LinkResolver.h`/`.cpp`, `src/MediaExtractor.h`/`.cpp`,
-`src/MdEscape.h`/`.cpp`, `src/MdEmitter.h`/`.cpp` and `src/Convert.h`/`.cpp`, plus everything already in
-`docs/`, `include/` and `tests/`. Every other entry below is still to be written — do not reference one
-as if it exists.
+`src/MdEscape.h`/`.cpp`, `src/MdEmitter.h`/`.cpp`, `src/Convert.h`/`.cpp` and `src/Batch.h`/`.cpp`, plus
+everything already in `docs/`, `include/`, `tests/` and `.github/`. The one entry below still to be
+created is `bench/` — do not reference it as if it exists.
 
 Three entries below are **not** in the list `docs/CONVERSION_REFERENCE.md` 6.3 maps the stages onto, and
 all three are session-derived rather than ruled. `Ir.cpp` exists because the representation needs growable
 arrays, and growable arrays need real functions rather than a header full of `inline` the p1 rule does
 not license. `Convert` exists because the per-file pipeline is M13's worker body: it has to be callable
-from something other than `wmain` before M13 arrives, and putting the output-path derivation there is
+from something other than `wmain` before M13 arrived, and putting the output-path derivation there is
 what lets the unit suite drive it — the test project compiles every `src\*.cpp` but `main.cpp`.
 `LinkResolver` exists because a heading's GFM slug is numbered over the whole document, so the pass has
 to see all of it at once — which neither the streaming walker nor the per-block emitter can do. 6.3 puts
@@ -1982,6 +2091,9 @@ src/
    Batch.h/.cpp          input list → bounded worker pool, one file per worker at a time (D6/D7a);
                          interlocked work cursor and exit-code fold; failed-input list for the
                          end-of-run report; the only module in the tree that starts a thread
+                         [written at M13, with the pre-flight Convert held until then: outputs
+                         derived as typed, then normalised, and existing files compared by
+                         identity]
    BuildGuards.h         #ifndef __AVX2__ + #error (D4); included first by every project TU
    CliOptions.h/.cpp     argv → options struct; usage/version text
    Utf.h/.cpp            UTF-8 validate/transcode (UTF-16 only at the Win32 boundary)
@@ -2037,14 +2149,15 @@ src/
    Convert.h/.cpp        one file end to end: container → package → styles → numbering → walk → notes →
                          coalesce → resolve → plan → number → emit → write → extract, plus D7b's
                          output-path derivation and M7's
-                         media-directory derivation. M13's Batch calls this per worker
-                         [written at M5; a session addition, see above]
+                         media-directory derivation. Batch calls this per worker
+                         [written at M5; a session addition, see above; its pre-flight moved to
+                         Batch at M13]
    MediaExtractor.h/.cpp referenced media parts → disk; content-type extensions; dedup; safe names
                          [written at M7, in two halves: MediaPlan names and rewrites without touching
                          the filesystem, MediaWrite writes after the document is safely out]
    Diag.h/.cpp           error codes/messages → stderr, and the --stdout document → stdout;
-                         exit-code mapping. MT-safe from M13: every worker reports through this one
-                         sink, so it locks then (D6). Reentrant at M2
+                         exit-code mapping. MT-safe since M13: every worker reports through this one
+                         sink, which holds one spin lock per line (D6). Reentrant from M2 to M12
 tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.md; make_fixtures.py and
                          run_container.py [make_fixtures.py written at M3 and extended at every
                          milestone since; run_container.py written at M3 and extended at M4]; run_golden.py
@@ -2053,7 +2166,9 @@ tests/                   fixtures/<case>/src/ (unzipped part trees) + expected.m
                          tests/DOCXtoMD.Tests.vcxproj [written at M4, five more suites at M5, a
                          ninth at M6, an eleventh at M7, a twelfth at M8; M9 and M10 added no
                          thirteenth and put their cases in the suites that already own the stages they
-                         touch; M11 added the thirteenth, TestZipReader]; validate_gcs.py, D11's
+                         touch; M11 added the thirteenth, TestZipReader, and M13 the fourteenth,
+                         TestBatch, the first to start a thread]; run_golden.py's batch section
+                         [written at M13]; validate_gcs.py, D11's
                          mechanical GCS validator [written at M12]
 .github/workflows/       ci.yml, windows-latest CI for every push and pull request [written at M12]
 bench/                   GCS p4 microbenches (create with the first performance claim)
@@ -2079,7 +2194,7 @@ Under D6, **`Batch` and `Diag` are the only `MT-safe` modules**. Everything that
 `Ir`, `DocWalker`, `RunCoalescer`, `LinkResolver`, `MdEscape`, `MdEmitter`, `MediaExtractor`,
 `Convert` — is
 instantiated once per worker, holds no cross-file state and is never shared, so it needs no lock.
-`Convert` is the whole of one worker's body from M13: everything it opens, it opens on its own stack. `CliOptions` holds
+`Convert` is the whole of one worker's body since M13: everything it opens, it opens on its own stack. `CliOptions` holds
 the input **list** (D7b) plus the worker count, is parsed once before any worker starts and is then
 read-only, so workers may share it by const reference. Design each module that way from its first commit: retrofitting a shared cache into a
 per-worker pipeline later is exactly the rework D6 exists to avoid.
@@ -2090,7 +2205,9 @@ run both target `report.md` and `report_media\`, and an explicit `--media-dir` s
 inputs collides the same way. No amount of per-worker isolation fixes that. Recommended (derived,
 not ruled): `Batch` detects duplicate output targets up front, before any worker starts, and fails
 those inputs into D7c's failure list rather than letting two workers race — a pre-flight check is
-cheap and the alternative is silent data loss.
+cheap and the alternative is silent data loss. **M13 did that**, and the recommendation's shared
+`--media-dir` half is decision D15, open, whose strict answer the code implements meanwhile. What a
+pre-flight still cannot see is under Known gaps: two outputs not written yet that alias one file.
 
 ### Target CLI (implemented incrementally from M2)
 
@@ -2152,7 +2269,8 @@ still accept only one input; what it must not do is assume there will only ever 
   the unit suite, which drives every case from a string literal and touches no file;
   `tests/run_golden.py` (M5) converts every golden fixture twice — once to a file beside the input and
   once through `--stdout`, which are different code paths in `Convert.cpp` — and byte-compares both
-  against the case's `expected.md`. None takes another's job.
+  against the case's `expected.md`. Since M13 `run_golden.py` also converts every fixture as one
+  batch, file by file and at two thread counts, which is M13's definition of done. None takes another's job.
 - A golden fixture is a part tree under `tests/fixtures/<case>/src/` **plus** an `expected.md` beside it,
   and which built `.docx` compares against which case is declared in `make_fixtures.py`'s `GOLDENS`
   table, next to the exit-code table, so a fixture and what it must produce are named in one place. The
@@ -3319,7 +3437,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   - **Verified on Linux, mechanically**: the validator passes itself and the tree under Python 3.10, 3.11,
     3.12 and 3.13; the committed blobs of the three new or changed files are LF and their checkouts CRLF.
     No `src/` file changed, so neither project file did.
-- **M13 `[todo]` Multi-file batch + bounded worker pool** *(D6 and D7 both ruled — specifiable)*
+- **M13 `[done-unverified]` Multi-file batch + bounded worker pool** *(D6 and D7 both ruled — specifiable)*
   — `Batch` over a list of inputs, threading per D6/D7a, `Diag` made
   `MT-safe` with `include/spinlocks.h`, `--threads` parsing with the virtual-core-count default,
   per-file failures listed on the console, exit code 6 for partial success. Land it **after** the
@@ -3330,6 +3448,72 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   converts every valid input, and names every failed one on the console; `--stdout` with two inputs
   exits 1. Note MSVC v143 ships no thread sanitizer (`/fsanitize=address` only), so "no data races"
   cannot be a DoD command — the determinism comparisons are what is actually checkable.
+  **Status**: the work landed from Linux on 2026-09-27, and like M12's its Windows half was run by a
+  machine: CI built and tested every push on `windows-latest`. The marker is `[done-unverified]` rather
+  than `[done]` for two reasons, stated rather than hidden. CI's runner reports **4** virtual cores and
+  `--threads` above the core count is a usage error by design, so the DoD's `--threads 8` ran as
+  `--threads 4`; and CI builds `Release|x64` only, so the Debug configuration has not been built on
+  Windows. The owner's run on a machine with at least eight virtual cores, of both configurations and the
+  four commands under "Build & run", is what flips it.
+  - **The DoD, item by item, and what discharges it.** (1) `run_golden.py`'s batch section converts every
+    fixture -- 118, with an unopenable input, a refused claim and two repeats placed among them, 122
+    operands in all -- file by file and as one batch, and compares the two trees: 79 files, byte for byte.
+    (2) The same batch runs at `--threads 1` and three times at the smaller of 8 and the core count:
+    every run writes the same tree, exits 6, writes the same console lines once sorted and ends with the
+    same failure list, and its workers note says the pool held 1 and then 4 workers. (3) The batch mixes
+    66 valid inputs with 56 failing ones -- 53 fixtures that are not usable DOCX, the unopenable input,
+    the refused claim and a repeat of a failing fixture -- exits 6, converts every valid input, 60 of them
+    to their own `expected.md`, and ends by naming all 56 in argument order. (4) `--stdout` with two inputs
+    exits 1, in the output-options section M5 wrote.
+  - **CI's runs.** Run 36310955956 on the first commit and run 36319881192 on the review's fixes, both
+    green: `DOCXtoMD.sln` at `Release|x64` with `-warnAsError`, **0 warnings and 0 errors** on MSVC
+    14.44.35207; the unit suite 1732 and then **1723**, because the pre-flight's cases moved from
+    `TestConvert` to `TestBatch` when `BatchPlan` took them over; **118** fixtures; **229** container
+    checks; and 296 and then **304** golden checks, the Windows-only trailing-dot case among them. The
+    stem-spellings case came after, so the golden count this file records, 305, is the documentation
+    commit's own run.
+  - **Verified on Linux, mechanically**: `validate_gcs.py --format` judges 63 files clean, the three new
+    ones included; both project-file pairs are well-formed and name the same files in the same order, and
+    every file they name exists; `USAGE_TEXT` did not change.
+  - **Verified on Linux, behaviourally, against the shim**, in its plain, AddressSanitizer and
+    UndefinedBehaviorSanitizer, and ThreadSanitizer builds: **1723** unit, **229** container and **304**
+    golden checks with no sanitizer report in any of them. On top, from a harness the commit does not
+    carry, the full mixed batch was converted 150 times at 1 to 4 threads, 60 times under ThreadSanitizer
+    and 30 under AddressSanitizer: every run wrote the same 79 files and exited 6, every console line but
+    the workers note was the same line as at `--threads 1`, and the note named the pool's width each time.
+    The shim is a scratch harness a subagent built for this milestone -- a faithful `windows.h`,
+    `_beginthreadex` over pthreads with 1 MiB worker stacks as Windows gives them, the file-identity and
+    path calls over `stat` and `getcwd`, `CompareStringOrdinal` over Unicode's simple upper-casing -- and
+    it proves nothing about MSVC, which is what CI is for.
+  - **Audited, then reviewed adversarially.** A thread-safety audit of `src/` before any code was
+    written confirmed that no module keeps mutable state across documents -- every static in `src/` is
+    `constexpr`, every message buffer belongs to one object and the ZIP caps are per reader -- and found
+    what did need handling: two workers racing on one output file, a shared `--media-dir`, and `Diag`'s
+    lines tearing. The code was then reviewed by six reviewers over six dimensions, each finding put to two
+    skeptics, one reproducing it and one reading the code: 28 findings, 23 not refuted by both, 22 fixed
+    in the code, its tests or this file, and the memory one recorded under Known gaps. The aliasing
+    findings are fixed for every file that exists; what remains of them, outputs not written yet, is under
+    Known gaps too. Six skeptic runs in the Windows dimension
+    died on a session limit, which left three findings unverified; each overlaps a confirmed one or a
+    stated limit and is recorded under Known gaps rather than claimed fixed. What the review changed:
+    outputs are derived from the spelling as typed and normalised afterwards, which was a regression --
+    normalising first let `a.docx. a.docx.docx` overwrite a document with exit 0, and the Windows-only
+    golden case pins it; files that exist are compared by identity, because a case-folded string match
+    silently dropped one of two files a case-sensitive directory held and missed every alias a string
+    cannot see; `ConvertSplitPath` learned the drive colon; the repeat and `--media-dir` messages stopped
+    claiming outcomes that had not happened; and six coverage findings were closed, among them the workers
+    note, without which nothing showed that `--threads` reached the pool at all.
+  - **Mutation-tested**: twenty mutations of M13's rules, each applied to a copy of the tree, built
+    against the shim and run through all three suites. **Every one is caught**: `BatchRun` ignoring
+    `--threads`, a verdict landing at its queue index rather than its input's, a refusal's verdict, outputs
+    never identified, nothing normalised, a list and note for one input, the repeat note ignoring `-q`,
+    identity ignored, a path that exists compared with one that does not, a serial pool, the drive colon,
+    the core count stuck at one, `--media-dir` never refused, `IS_SELF` and `IS_INPUT` removed, a repeat
+    keeping verdict 0, `BatchFold` never returning 6, the note counting inputs rather than workers,
+    `Diag`'s lock removed, and repeats judged by string alone. Removing the lock is caught by a race -- a
+    torn console line -- so the catch is observed rather than guaranteed: three runs out of three.
+  - **What stays open**: decision D15, and the Known gaps entries M13 added -- memory, outputs that do
+    not exist yet, the thread sanitizer MSVC does not ship, and processor groups.
 
 ## Decisions (a ruled row is settled — do not re-litigate it)
 
@@ -3339,10 +3523,12 @@ and ruled on 2026-08-26**, the owner again accepting the recommendation as writt
 2026-08-27 and is `Open — owner call`**: the code implements the recommendation meanwhile, because a milestone cannot
 ship without doing *something*, and the row says exactly what would change if the owner rules the other way. **D14 was
 raised by M11 on 2026-09-23 and is `Open — owner call` too**, and unlike D13 the code keeps the behaviour it already
-had rather than the recommendation, because the recommendation would change a golden the owner verified. Keep the
+had rather than the recommendation, because the recommendation would change a golden the owner verified. **D15 was
+raised by M13 on 2026-09-27 and is `Open — owner call`**: the code implements the recommendation, which is the strict
+and reversible answer, as D13's does. Keep the
 IDs stable — `docs/CONVERSION_REFERENCE.md` cites D1, D2, D8, D10 and D12 by name — and keep a ruled row's question and
 the reasoning that was put to the owner rather than trimming it to the answer, because a ruling records what was
-asked as much as what was decided. New questions get the next free ID (D15, D16, …) with the same
+asked as much as what was decided. New questions get the next free ID (D16, D17, …) with the same
 question/recommendation/status shape, and stay `Open — owner call` until the owner rules.
 
 | ID | Question | **Ruling** | Executed? |
@@ -3361,6 +3547,7 @@ question/recommendation/status shape, and stay `Open — owner call` until the o
 | D12 | GitHub renders `$...$` and `$$...$$` as LaTeX math, and has since 2022. `docs/CONVERSION_REFERENCE.md` 4.1 predates that and does not list `$` among the characters to escape, so today a paragraph reading `costs $5 and $10` is emitted verbatim and github.com renders `5 and ` in math font, losing both dollar signs. Should `$` join the unconditional inline escape set, join it conditionally (only where a closing `$` could pair with it), or stay unescaped? Note the cost of each: unconditional puts a backslash in front of every price in every document, conditional needs a lookahead the line-assembly pass can do but the reference does not describe, and leaving it corrupts a real and common shape on the one renderer this converter names in its own mapping table. The same question reaches `docs/CONVERSION_REFERENCE.md`, which would gain the row either way. | **Escape `$` conditionally**, adopting the session recommendation in full; ruled 2026-08-26. Unconditional escaping is the safe direction but it is visible on every ordinary document, and math is not a CommonMark feature -- it is one renderer's extension, so paying for it everywhere is out of proportion. *(Consequence, session-derived: "conditionally" is implemented as **at most one unescaped `$` per assembled line** -- a line holding two or more has every one of them escaped, a line holding one keeps it bare. A span needs two delimiters under every renderer's reading, so a count is safe without reproducing GitHub's exact opener and closer conditions, which this project cannot verify. All-or-none was preferred over leaving one bare per line because it also narrows the one residual: a line that pairs internally contributes no live dollar to the next line.)* | **done** (the rule, the reference row and `tests/fixtures/dollars` landed 2026-08-26, after M5's verification) |
 | D13 | `--stdout` and the media files. `--stdout` is single-input only (D7d) and writes the document to a pipe; M7 gives a document pictures, which are files and cannot go down a pipe. Three readings are available. **Extract anyway**, into the media directory beside where the `.md` *would* have gone, so the piped document and a written one are the same bytes and the pictures are on disk for whatever consumes the pipe. **Extract nothing**, on the reading that `--stdout` means "write no files", which makes the piped document name pictures that do not exist unless the reader also passes `--no-images`. **Refuse the combination**, which is the strictest and costs the shell pipeline that wants both. Note what the second and third cost beyond the obvious: `tests/run_golden.py` converts every fixture twice, once to a file and once through `--stdout`, and byte-compares both against one `expected.md` -- that is the check that has caught a `--stdout`-only defect before, and either of them ends it. | **Recommendation (not yet ruled): extract anyway.** `--stdout` is about where the *document* goes, and the media directory is derived from `-o` or from the input either way, so nothing about it is ambiguous. It is also the only reading under which the two output paths produce the same document, which is the property the golden runner exists to prove. The strict direction stays open: extract-anyway to refuse is a change a user notices, but so is every other pair, and no producer or consumer has a stake in this one yet. | **Implemented as recommended at M7**, and `tests/run_golden.py` compares the two paths byte for byte. If the owner rules otherwise, the change is in `ConvertFile` alone -- the pipeline below it does not know which path it is on. |
 | D14 | A heading whose **style** carries italic. Mapping row 1 rules that heading text is never additionally bolded, and the walker clears the bold bit on a heading's spans; it clears nothing else, so a heading style set italic comes out wrapped in `*…*`. That is not a hypothetical: LibreOffice 24.2's own `Heading 2` is bold and italic, so every second-level heading it exports reads `## *A list*` -- which `tests/fixtures/libreoffice` now pins -- and `tests/fixtures/quotes`, verified on Windows, pins `## *A heading beats a quote*` from a heading style based on an italic quote style. A heading's look is its template's business in the same way its boldness is, and GitHub renders every heading in its own face. Should italic that a heading gets from its **paragraph style chain** be dropped the way bold is, keeping italic that comes from the run's own `w:rPr` or its character style? And should strikethrough, which a style may also carry, go the same way? | **Recommendation (not yet ruled): drop style-borne italic from a heading, keep run-level italic, and leave strikethrough alone.** The rule would mirror row 1's reasoning exactly: what the template says about how headings look is not something the author said about these words, while a run the author italicised inside a heading is. Strikethrough is not a typographic default any template sets on a heading, so a heading struck through was struck by someone. The cost: two goldens change, both of them owner-verified, and `StyleResolveRun` has to report which layer an italic came from, which it does not today. | **Open — owner call.** The code keeps the existing behaviour meanwhile, because the recommendation would change `tests/fixtures/quotes` and `tests/fixtures/libreoffice`, both of which the owner verified; if ruled as recommended, the change is in `DocWalker`'s heading rule and `StyleModel`'s run resolution, plus both goldens. |
+| D15 | A `--media-dir` named with several inputs. Every document names its pictures `image1`, `image2` and so on, and M12 wrote each with `CREATE_ALWAYS`, so the second document into one directory overwrote the first's pictures -- and the first's `.md` then showed the second's -- with exit 0. Under M13's pool two workers would race for the same files, and a sharing violation or a deletion of another worker's half-written picture would decide the outcome by scheduling. The directory is decided before any document is read, so which inputs draw pictures is not yet known. Refuse every input after the first one converted, in the pre-flight? Give each input a directory of its own under the named one -- `<dir>\<stem>_media\`, mirroring `-o`'s filename-for-one, directory-for-many -- and refuse only two inputs whose stems collide there? Or make `--media-dir` with several inputs a usage error, as `--stdout` is? | **Recommendation (not yet ruled): refuse every later input, in the pre-flight.** It is the strict direction and the reversible one, as D10's ruling reasoned: a run that is refused today and converts after a relaxation breaks no one's output, while the other order would move pictures users already link to. It is also what CLAUDE.md's derived pre-flight recommendation asked of `Batch`. The cost is plain and the owner should weigh it: `DOCXtoMD --media-dir img *.docx` converts the first input only and exits 6, even when no document draws a picture, and a first input that is missing or fails still owns the directory, because the plan cannot know either in advance. The per-input subdirectory is the lenient answer and is `Batch.h`'s To Do 2; the usage error is stricter still and refuses runs that would not collide. | **Open — owner call.** Implemented as recommended at M13 in `BatchPlan`, and pinned by `TestBatch` and `run_golden.py`'s `--media-dir x2` case; with `--no-images` nothing is shared and both inputs convert. If ruled for subdirectories, the change is in `ConvertMediaDir` (the directory and the link prefix) and `BatchPlan` (a stem collision instead of every later input), plus those two tests. |
 
 Consequences already folded into this file: the "no third-party code" line in Do NOT and the removal
 of `third_party/` from the architecture (D1/D2); the first-party `Inflate`/`Crc32` modules and the
@@ -3396,4 +3583,4 @@ roadmap and reference edits, is session-derived** and may be revised without re-
 - License field in every prolog: `License: MIT  Copyright: David William Bull` (two spaces).
 - `CONTRIBUTING.MD` and `GDC_GCS_v1_1_4.md` are owner-managed — do not edit them. The six shared
   headers in `include/` are owner-authored library files — do not reformat or re-version them. Raise
-  conflicts as numbered decisions instead (like D1–D14 above).
+  conflicts as numbered decisions instead (like D1–D15 above).
