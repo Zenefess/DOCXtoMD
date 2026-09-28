@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-25
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-27
  * Description: One document end to end: container, package, styles, walk, notes, resolve, emit and write.
  * To Do: 1) Report the offset UtfValidate found, which the package records and nothing prints yet.
  *        2) Write through a temporary file and rename over the target, once a partial write costs more.
@@ -83,13 +83,17 @@ static cbool ConvertPutRun(wchptrc dest, cui64 destChars, ui64ptrc used, cwchptr
 // have to agree: a document written as "report.md" must find its pictures in "report_media".
 //
 // The dot has to stand after the first character of the leaf, so a name that is nothing but an
-// extension -- ".docx" -- keeps its whole name and gains ".md" rather than becoming ".md".
+// extension -- ".docx" -- keeps its whole name and gains ".md" rather than becoming ".md". A drive letter's
+// colon ends the directory part as a separator does: "C:report.docx" is report.docx in C:'s current
+// directory, and taking "C:report" for its stem put a colon into a derived name, which NTFS reads as an
+// alternate data stream, and into a picture's link, which a renderer reads as a URL scheme.
 static void ConvertSplitPath(cwchptr path, ui64ptrc leafAt, ui64ptrc stemEnd) {
    cui64 length = ConvertLength(path);
-   ui64  leaf   = 0;
+   cbool drive  = length >= 2u && path[1] == L':' && ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z'));
+   ui64  leaf   = (drive ? 2u : 0u);
    ui64  stem   = length;
 
-   for(ui64 index = 0; index < length; ++index) {
+   for(ui64 index = leaf; index < length; ++index) {
       if(ConvertIsSeparator(path[index])) leaf = index + 1u;
    }
    for(ui64 index = leaf + 1u; index < length; ++index) {
@@ -140,20 +144,7 @@ cbool ConvertOutputPath(cwchptr inputPath, cwchptr outputPath, cbool outputIsDir
    return true;
 }
 
-// Whether two paths are the same string, folding ASCII case the way a Windows file system does. This is
-// a literal comparison and not an identity test: ".\a.md" and "a.md" name one file and do not match here.
-static cbool ConvertSamePath(cwchptr a, cwchptr b) {
-   ui64 index = 0;
-
-   for(;;) {
-      cwchar left  = (a[index] >= L'A' && a[index] <= L'Z' ? wchar(a[index] - L'A' + L'a') : a[index]);
-      cwchar right = (b[index] >= L'A' && b[index] <= L'Z' ? wchar(b[index] - L'A' + L'a') : b[index]);
-
-      if(left != right) return false;
-      if(!left) return true;
-      ++index;
-   }
-}
+cbool ConvertSamePath(cwchptr a, cwchptr b) { return CompareStringOrdinal(a, -1, b, -1, TRUE) == CSTR_EQUAL; }
 
 //-- The media directory
 
@@ -419,33 +410,9 @@ static cEXIT_CODE ConvertPackage(OPC_PACKAGEptrc package, cwchptr inputPath, MD_
 
 //== Entry points
 
-cCONVERT_TARGET ConvertTargetTaken(cCLI_OPTIONSptr options, cui32 index) {
-   wchar mine[CONVERT_MAX_PATH];
-   wchar theirs[CONVERT_MAX_PATH];
-
-   // --stdout writes no file, and a run that cannot derive a path fails on its own in ConvertFile.
-   if(!options || options->toStdout || index >= options->inputCount) return CONVERT_TARGET_FREE;
-
-   cbool several = options->inputCount > 1u;
-
-   if(!ConvertOutputPath(options->inputs[index], options->outputPath, several, mine, CONVERT_MAX_PATH)) {
-      return CONVERT_TARGET_FREE;
-   }
-   for(ui32 other = 0; other < options->inputCount; ++other) {
-      // An input that is its own output is ConvertFile's case and carries ConvertFile's message.
-      if(other != index && ConvertSamePath(mine, options->inputs[other])) return CONVERT_TARGET_IS_INPUT;
-      if(other >= index) continue;
-      // One input named twice is not a collision: the second conversion writes the same bytes over
-      // its own, which loses nothing. Only two different inputs claiming one output destroy a document.
-      if(ConvertSamePath(options->inputs[index], options->inputs[other])) continue;
-      if(!ConvertOutputPath(options->inputs[other], options->outputPath, several, theirs, CONVERT_MAX_PATH)) {
-         continue;
-      }
-      if(ConvertSamePath(mine, theirs)) return CONVERT_TARGET_CLAIMED;
-   }
-   return CONVERT_TARGET_FREE;
-}
-
+// RULE-DEV:a2 single-threaded by owner ruling (D5, narrowed by D6): one document is converted start to
+// finish on the thread that called this. The concurrency is Batch's, one input per worker, and nothing
+// below shares state with another worker, which is why none of it locks.
 cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
    wchar outputPath[CONVERT_MAX_PATH];
 
@@ -459,6 +426,8 @@ cEXIT_CODE ConvertFile(cCLI_OPTIONSptr options, cwchptr inputPath) {
          DiagErrorText("the output path would be longer than this converter builds", inputPath);
          return EXIT_OUTPUT;
       }
+      // Batch's pre-flight refuses this first, by file identity, so a second spelling of the input is caught
+      // too; the literal check stays for a caller that converts without one.
       if(ConvertSamePath(outputPath, inputPath)) {
          DiagErrorText("the output path is the input file", inputPath);
          return EXIT_OUTPUT;

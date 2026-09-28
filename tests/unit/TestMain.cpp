@@ -3,10 +3,10 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-09-23
+ * Last Modified: 2026-09-27
  * Description: Entry point of the unit-test binary: runs every group and returns the summary's verdict.
  * To Do: 1) Take a group name on the command line so one area can be run alone.
- *        2) Register groups from a table now that there are thirteen of them.
+ *        2) Register groups from a table now that there are fourteen of them.
  * Dependencies: BuildGuards.h, Check.h, typedefs.h
  * ISA: Scalar
  * Thread-safety: Reentrant
@@ -36,6 +36,7 @@ void TestMediaExtractor(void);
 void TestMdEscape(void);
 void TestMdEmitter(void);
 void TestConvert(void);
+void TestBatch(void);
 
 //== Entry point
 
@@ -55,5 +56,6 @@ si32 main(void) {
    TestMdEscape();
    TestMdEmitter();
    TestConvert();
+   TestBatch();
    return CheckSummary();
 }

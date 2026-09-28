@@ -3,10 +3,9 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-19
- * Last Modified: 2026-09-22
+ * Last Modified: 2026-09-27
  * Description: Command-line parser and validator, plus the usage and version text.
  * To Do: 1) Accept the policy switches CONVERSION_REFERENCE.md 6.3 lists as their conversion stages land.
- *        2) Add the duplicate-output pre-flight check that stops two workers targeting one .md file (M13).
  * Dependencies: BuildGuards.h, CliOptions.h, Diag.h, typedefs.h, memory management.h, windows.h, stdio.h
  * ISA: Scalar
  * Thread-safety: Reentrant

@@ -3,7 +3,7 @@
  * Version: v0.1.0
  * Owner: David William Bull
  * Created: 2026-08-24
- * Last Modified: 2026-08-25
+ * Last Modified: 2026-09-27
  * Description: The unit-test harness's counters and reporting.
  * To Do: 1) Print the group name beside each failure once groups nest.
  * Dependencies: BuildGuards.h, Check.h, typedefs.h, stdio.h
@@ -20,7 +20,8 @@
 
 //-- Counters
 
-// The suite is a single-threaded console program, so plain counters are enough; nothing here is shared.
+// CHECK is called from the main thread only -- TestBatch's pool jobs record what they saw, and the main
+// thread checks it once the pool has joined -- so plain counters are enough; nothing here is shared.
 static ui32   CHECK_PASSED = 0;
 static ui32   CHECK_FAILED = 0;
 static cchptr CHECK_GROUP  = "";

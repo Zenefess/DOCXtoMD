@@ -8,6 +8,47 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 ## [Unreleased]
 
 ### Added
+- **M13, the multi-file batch on a bounded worker pool.** `src/Batch.h`/`src/Batch.cpp` is the
+  twenty-first module and the only one that starts a thread. `BatchRun` runs a pre-flight on the calling
+  thread, in argument order, before any worker starts; hands the inputs it lets through to a pool of up
+  to `--threads` workers, the calling thread included, through one `_InterlockedIncrement` cursor; and
+  folds the verdicts into 0, 6 or the highest per-input code (D7c). Threads are started with
+  `_beginthreadex`, so a pool of one starts none and `--threads 1` converts in argument order exactly as
+  M12's loop did; a thread that cannot be started leaves a smaller pool rather than a failed run.
+  `BatchPool` is generic over a job, so the unit suite drives it with real threads and no files.
+- **The pre-flight** derives each input's output from the spelling as typed, normalises inputs and
+  outputs with `GetFullPathNameW`, and identifies every path that names an existing file by its volume
+  and file ID (`FileIdInfo`, falling back to the 64-bit index). `BatchPlan`, its pure half, converts an
+  input named twice once and gives the repeat its first spelling's verdict, and refuses with exit 4 an
+  input whose output would be the input itself, another input or an earlier input's output, however
+  either is spelled -- and, under decision D15, every input after the first one converted when one
+  `--media-dir` is shared by several.
+- **The end of a run of several inputs**: a note, `N of M inputs converted by K workers`, which `-q`
+  suppresses and which is the one line that shows the pool was as wide as `--threads` asked; and, when
+  anything failed, every failed input once more in argument order with its own verdict --
+  `failed (exit 3, not a valid DOCX): <input>` -- after the last worker has finished (D7c). A single
+  input writes neither.
+- **`Diag` is `MT-safe`**: every writer holds one spin lock from `include/spinlocks.h` (`SpinLockMin`,
+  because each write is a syscall that can block on a redirected handle) for exactly one line, over a
+  flag padded to a cache line of its own, and transcodes a wide argument before taking it. New:
+  `DiagNote`, a note that names no path, and `DiagExitCodeText`, the phrase per exit code the failure
+  list prints, with a `static_assert` tying its table to `EXIT_CODE`; and `EXIT_CODE`'s pointer aliases.
+- **`tests/unit/TestBatch.cpp`**, the fourteenth suite and the first to start a thread: every item of
+  every pool run exactly once with its verdict at its own index, a pool of one on the calling thread and
+  in order, a rendezvous that only a pool as wide as it was asked can meet (bounded by `GetTickCount64`),
+  `BatchPlan` over literal paths and supplied file identities -- aliases, case-sensitive directories, an
+  output that is an input -- `BatchFold`, and `DiagExitCodeText` row by row.
+- **M13's definition of done in `tests/run_golden.py`**: every fixture, with an unopenable input, a
+  refused claim and two repeats among them, is converted file by file and as one batch, and the two
+  trees -- 79 files -- are compared byte for byte; the batch runs at `--threads 1` and three times at the
+  smaller of 8 and the core count, which is read from the exe's own refusal and checked against
+  `os.cpu_count()`, and every run must exit 6, write the same tree, say how wide its pool was, write the
+  same console lines once sorted and end with the same failure list in argument order. Around it: the
+  repeat with and without `-q`, the refused claim, `-o` naming the input or another input under another
+  spelling, two spellings of one unwritten output, a single failing input, the shared `--media-dir` with
+  and without `--no-images`, and, on Windows only, a trailing dot. `tests/run_container.py` pins
+  `--threads 0` and a count that is not a number as usage errors.
+
 - **M12, continuous integration, and decision D11's validator.** `.github/workflows/ci.yml` runs on
   `windows-latest` for every push and pull request, in two jobs. `gcs` runs the validator's self-test
   under Python 3.12 and 3.14, installs clang-format 18.1.3 and runs
@@ -454,6 +495,21 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   nothing.
 
 ### Changed
+- **`main.cpp` hands the whole run to `BatchRun`**, and the pre-flight it ran as `ConvertTargetTaken`
+  moves to `Batch` as `BatchPlan`, as the architecture note planned. The `RULE-DEV:a2` tag moves from
+  `main.cpp`'s loop, now threaded on purpose, to `ConvertFile`, whose conversion stays sequential (D5).
+- **Four behaviours differ from M12, each deliberately.** An input named twice -- by any spelling of one
+  file -- is converted once, with a note, where M12 converted it twice. `-o` naming an input under
+  another spelling is refused where M12 wrote the Markdown over it. Two inputs sharing a `--media-dir`
+  refuse the second (D15) where M12 let it overwrite the first one's pictures. And two inputs whose names
+  differ only in case, in a case-sensitive directory, are two files but their outputs fold together, so
+  the second is refused with exit 6 where M12 converted both; CLAUDE.md's Known gaps records it.
+- **`ConvertSamePath` is public and compares through `CompareStringOrdinal`'s ignore-case form**, which
+  reads the system's upper-case table, so the accented and Cyrillic pairs NTFS folds compare equal where
+  folding A to Z alone did not. Batch uses it only for paths that name no file yet.
+- `tests/unit/Check.cpp` no longer calls the suite single-threaded: `CHECK` is called from the main thread
+  only, after `TestBatch`'s pools have joined.
+
 - `.gitattributes` stores `*.yml` LF and checks it out CRLF, like every other tooling file, so the CI
   workflow follows tc2 while GitHub reads an LF blob.
 - CLAUDE.md's rule table no longer says CI bans new `f32`/`f64` spellings or checks alias mixing: en2
@@ -719,6 +775,18 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- **`-o` naming the input under another spelling wrote the Markdown over the input.** `-o .\a.docx a.docx`
+  passed `ConvertFile`'s literal comparison, read the document and then overwrote it with exit 0. The
+  pre-flight identifies an existing output by its volume and file ID, so every spelling is refused with
+  exit 4 and the input keeps its bytes; M13's review found it while checking the pre-flight's reach.
+- **A drive-relative input derived a name with a colon in it.** `ConvertSplitPath` took `C:report.docx`
+  for a leaf called `C:report.docx`, so `-o out` wrote `out\C:report.md` -- an NTFS alternate data stream
+  on an empty file `out\C` -- and the media link was `C:report_media/...`, a URL with the scheme `c:`. A
+  leading drive letter's colon now ends the directory part. Pinned in `TestConvert` and
+  `TestMediaExtractor`.
+- **Two inputs sharing a `--media-dir` overwrote each other's pictures**, and every earlier document then
+  showed the last one's; see D15, which the pre-flight's refusal implements until the owner rules.
+
 - **`validate_gcs.py --self-test` failed on Python 3.14 and later.** Its case for `check_python`'s broad
   handler fed `compile()` a sum of 12,000 terms and relied on the interpreter giving up with
   `RecursionError`. 3.10 to 3.13 do, by counting; 3.14 and 3.15 measure the C stack instead, and compile the
@@ -1593,6 +1661,9 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
 
 ### Removed
 
+- `ConvertTargetTaken` and `CONVERT_TARGET` from `src/Convert.h`, and their cases from `TestConvert`:
+  the pre-flight is `Batch`'s `BatchPlan` now, over precomputed paths and file identities, and its cases
+  are `TestBatch`'s.
 - The `Win32` project configurations, and every `…|Win32` `PropertyGroup`, `ImportGroup` and
   `ItemDefinitionGroup`, from `DOCXtoMD.vcxproj` — decision D3, adopting GCS a2's ruling that
   32-bit targets are unsupported. x64 is the only platform, and `/p:Platform=Win32` now fails
