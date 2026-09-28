@@ -1414,8 +1414,8 @@ below.
   finds nothing to judge included), 2 a usage error or named paths that leave nothing to judge. On a
   GitHub runner each problem is also written as an `::error` annotation, so it lands on the line in a
   pull request's diff.
-- **Not yet created** (GCS obligations, see Roadmap): `bench/`. Do not reference it as if it
-  exists. Everything else this section names does exist, `tests/run_golden.py` and CI included.
+- **Not yet created** (GCS obligations, see Planned architecture): `bench/`. Do not reference it as
+  if it exists. Everything else this section names does exist, `tests/run_golden.py` and CI included.
 
 ## Build & run
 
@@ -3519,10 +3519,12 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     path calls over `stat` and `getcwd`, `CompareStringOrdinal` over Unicode's simple upper-casing -- and
     it proves nothing about MSVC, which is what CI and the owner's run are for.
   - **Audited, then reviewed adversarially.** A thread-safety audit of `src/` before any code was
-    written confirmed that no module keeps mutable state across documents -- every static in `src/` is
+    written confirmed that no module keeps mutable state across documents -- every static in `src/` was
     `constexpr`, every message buffer belongs to one object and the ZIP caps are per reader -- and found
     what did need handling: two workers racing on one output file, a shared `--media-dir`, and `Diag`'s
-    lines tearing. The code was then reviewed by six reviewers over six dimensions, each finding put to two
+    lines tearing. The one static in `src/` that is not `constexpr` is the fix for the last of those,
+    `Diag`'s lock, `DIAG_LOCK`, which every worker shares on purpose. The code was then reviewed by six
+    reviewers over six dimensions, each finding put to two
     skeptics, one reproducing it and one reading the code: 28 findings, 23 not refuted by both, 22 fixed
     in the code, its tests or this file, and the memory one recorded under Known gaps. The aliasing
     findings are fixed for every file that exists; what remains of them, outputs not written yet, is under
