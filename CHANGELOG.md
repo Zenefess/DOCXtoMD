@@ -775,6 +775,10 @@ sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is 
   refinement of D7d rather than a departure from it.
 
 ### Fixed
+- **Two statements in CLAUDE.md that were wrong after M13.** The `bench/` line pointed at the Roadmap, which
+  names no `bench/` entry, and now points at Planned architecture. M13's audit bullet said every static in
+  `src/` is `constexpr`, which `Diag`'s lock, `DIAG_LOCK`, is not; it now says every static was, when the audit
+  ran, and names the lock as the one exception.
 - **`-o` naming the input under another spelling wrote the Markdown over the input.** `-o .\a.docx a.docx`
   passed `ConvertFile`'s literal comparison, read the document and then overwrote it with exit 0. The
   pre-flight identifies an existing output by its volume and file ID, so every spelling is refused with

@@ -1414,8 +1414,8 @@ below.
   finds nothing to judge included), 2 a usage error or named paths that leave nothing to judge. On a
   GitHub runner each problem is also written as an `::error` annotation, so it lands on the line in a
   pull request's diff.
-- **Not yet created** (GCS obligations, see Roadmap): `bench/`. Do not reference it as if it
-  exists. Everything else this section names does exist, `tests/run_golden.py` and CI included.
+- **Not yet created** (GCS obligations, see Planned architecture): `bench/`. Do not reference it as
+  if it exists. Everything else this section names does exist, `tests/run_golden.py` and CI included.
 
 ## Build & run
 
@@ -1450,7 +1450,8 @@ tests\x64\Release\DOCXtoMD.Tests.exe                           :: the unit suite
 
 `run_container.py` and `run_golden.py` each build the fixtures themselves, so either alone is enough. At
 M13 they return **229**, **305** and **1723** checks, over the **118** fixtures `make_fixtures.py`
-builds, all four confirmed on `windows-latest` by CI on 2026-09-27. The three check counts are the interesting ones: they are what
+builds, all four confirmed on `windows-latest` by CI on 2026-09-27 and on the owner's machine in a run
+reported on 2026-09-28. The three check counts are the interesting ones: they are what
 the shim measures on Linux, and at every milestone since M3 they have been exactly what the real MSVC
 binary then returned -- with one exception M13 introduced on purpose: the golden runner returns **304** on
 Linux, because its trailing-dot case exercises Win32's own path trimming and runs only where `os.name` is
@@ -3437,7 +3438,7 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   - **Verified on Linux, mechanically**: the validator passes itself and the tree under Python 3.10, 3.11,
     3.12 and 3.13; the committed blobs of the three new or changed files are LF and their checkouts CRLF.
     No `src/` file changed, so neither project file did.
-- **M13 `[done-unverified]` Multi-file batch + bounded worker pool** *(D6 and D7 both ruled — specifiable)*
+- **M13 `[done]` Multi-file batch + bounded worker pool** *(D6 and D7 both ruled — specifiable)*
   — `Batch` over a list of inputs, threading per D6/D7a, `Diag` made
   `MT-safe` with `include/spinlocks.h`, `--threads` parsing with the virtual-core-count default,
   per-file failures listed on the console, exit code 6 for partial success. Land it **after** the
@@ -3448,20 +3449,48 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
   converts every valid input, and names every failed one on the console; `--stdout` with two inputs
   exits 1. Note MSVC v143 ships no thread sanitizer (`/fsanitize=address` only), so "no data races"
   cannot be a DoD command — the determinism comparisons are what is actually checkable.
-  **Status**: the work landed from Linux on 2026-09-27, and like M12's its Windows half was run by a
-  machine: CI built and tested every push on `windows-latest`. The marker is `[done-unverified]` rather
-  than `[done]` for two reasons, stated rather than hidden. CI's runner reports **4** virtual cores and
-  `--threads` above the core count is a usage error by design, so the DoD's `--threads 8` ran as
-  `--threads 4`; and CI builds `Release|x64` only, so the Debug configuration has not been built on
-  Windows. The owner's run on a machine with at least eight virtual cores, of both configurations and the
-  four commands under "Build & run", is what flips it.
+  **Status**: the work landed from Linux on 2026-09-27 as `[done-unverified]`, and the owner verified it
+  on Windows in a run reported on 2026-09-28, on a machine reporting **32** virtual cores. Both x64
+  configurations build with **zero errors and zero warnings**; `python tests\make_fixtures.py` builds all
+  **118** fixtures; `python tests\run_container.py` passes all **229** checks against `x64\Release` and all
+  **229** again against `x64\Debug`; `python tests\run_golden.py` passes all **305**, its many-thread
+  batches at `--threads 8` as the DoD writes them; `tests\x64\Release\DOCXtoMD.Tests.exe` passes all
+  **1723**; and `python tests\validate_gcs.py` and its `--format` run each judge **63** files and find
+  nothing, with `--self-test` passing all **173** of its checks, the five symbolic-link cases skipped on a
+  host that cannot make a link, as at M12. That settles both reasons the marker waited: CI's runner
+  reports **4** virtual cores, so it ran the DoD's `--threads 8` as `--threads 4`, and CI builds
+  `Release|x64` only, so no recorded Windows run had built M13's code in Debug. CI's Release runs had
+  already met the two global bullets only a Windows build can discharge -- bullet 1, zero warnings at
+  `/W3`, and bullet 4, where `run_golden.py` carries all four items of M13's own definition of done. The
+  owner's run meets both again on a second machine, adds the Debug configuration, which bullet 1 does not
+  name, and runs DoD item (2) at the `--threads 8` it names. Bullet 2's validator half passed there as it
+  does in CI's `gcs` job, and bullets 2, 3 and 5 were checked on Linux, so the marker is `[done]` with no
+  DoD item outstanding.
+  - **The three tallies are CI's, and the shim's but for one case.** 229, 305 and 1723, over 118
+    fixtures, are the counts CI's runs returned (see "CI's runs" below), so the owner's run confirms them
+    on a second machine rather than being the first Windows run to return them. Against the shim, only the
+    golden count differs, 305 against 304, for the Windows-only trailing-dot case "Build & run" describes.
+  - **What the owner's run adds to CI's**: the Debug configuration, and the golden runner's document
+    batches on a pool of eight. The Debug build is the first recorded Debug compile of `Batch.cpp` and of
+    `include/spinlocks.h`, which M13's `Diag.cpp` is the first translation unit to `#include`. The only
+    Debug run the owner's report records is `run_container.py`'s, which passes at most one input per
+    invocation: its six command-line cases stop before `BatchRun`, and every other invocation went through
+    `BatchRun`'s pre-flight to a pool of one and started no worker thread. Every run the report records
+    that started worker threads was against a Release binary -- `TestBatch`'s, and `run_golden.py`'s,
+    whose default binary is `x64\Release` and for which the report names no other -- and the report does
+    not say whether the Debug unit binary was built or run. `TestBatch` had already started pools of 8, 12
+    and 64 threads on CI's four-core runner, but over test jobs rather than documents. M13 grew no `al32`
+    structure: the two it declares aligned are `al64` -- `Batch.cpp`'s `BATCH_CURSOR`, held in the
+    stack-resident `BATCH_POOL`, and `Diag.cpp`'s `DIAG_LOCK_LINE`, whose `static_assert` holds its size
+    to 64 bytes so that with `al64` it fills exactly one cache line -- and neither is zeroed through
+    `mzero`, so `mzero`'s aligned 256-bit path met nothing new.
   - **The DoD, item by item, and what discharges it.** (1) `run_golden.py`'s batch section converts every
     fixture -- 118, with an unopenable input, a refused claim and two repeats placed among them, 122
     operands in all -- file by file and as one batch, and compares the two trees: 79 files, byte for byte.
     (2) The same batch runs at `--threads 1` and three times at the smaller of 8 and the core count:
     every run writes the same tree, exits 6, writes the same console lines once sorted -- all but the
     workers note, which differs on purpose -- and ends with the same failure list, and its workers note
-    says the pool held 1 and then 4 workers. (3) The batch mixes
+    says the pool held 1 and then 4 workers on CI's runner and 8 on the owner's machine. (3) The batch mixes
     66 valid inputs with 56 failing ones -- 53 fixtures that are not usable DOCX, the unopenable input,
     the refused claim and a repeat of a failing fixture -- exits 6, converts every valid input, 60 of them
     to their own `expected.md`, and ends by naming all 56 in argument order. (4) `--stdout` with two inputs
@@ -3471,9 +3500,11 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     14.44.35207; the unit suite 1732 and then **1723**, because the pre-flight's cases moved from
     `TestConvert` to `TestBatch` when `BatchPlan` took them over; **118** fixtures; **229** container
     checks; and 296 and then **304** golden checks, the Windows-only trailing-dot case among them. The
-    stem-spellings case came after, and run 36320420500, on the commit that recorded this status, returned
-    exactly the counts "Build & run" gives: 0 warnings, **1723** unit, **118** fixtures, **229** container and
-    **305** golden checks.
+    stem-spellings case came after, and run 36320420500, on `309b425`, the commit that recorded the
+    `[done-unverified]` status, returned exactly the counts "Build & run" gives: 0 warnings, **1723** unit,
+    **118** fixtures, **229** container and **305** golden checks. Pull request #17 merged on 2026-09-28,
+    and run 36408046035 on its merge commit `aae94a0` was green on `main`; only `CLAUDE.md` changed
+    between `309b425` and `aae94a0`, so it ran the same code.
   - **Verified on Linux, mechanically**: `validate_gcs.py --format` judges 63 files clean, the three new
     ones included; both project-file pairs are well-formed and name the same files in the same order, and
     every file they name exists; `USAGE_TEXT` did not change.
@@ -3486,12 +3517,14 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     The shim is a scratch harness a subagent built for this milestone -- a faithful `windows.h`,
     `_beginthreadex` over pthreads with 1 MiB worker stacks as Windows gives them, the file-identity and
     path calls over `stat` and `getcwd`, `CompareStringOrdinal` over Unicode's simple upper-casing -- and
-    it proves nothing about MSVC, which is what CI is for.
+    it proves nothing about MSVC, which is what CI and the owner's run are for.
   - **Audited, then reviewed adversarially.** A thread-safety audit of `src/` before any code was
-    written confirmed that no module keeps mutable state across documents -- every static in `src/` is
+    written confirmed that no module keeps mutable state across documents -- every static in `src/` was
     `constexpr`, every message buffer belongs to one object and the ZIP caps are per reader -- and found
     what did need handling: two workers racing on one output file, a shared `--media-dir`, and `Diag`'s
-    lines tearing. The code was then reviewed by six reviewers over six dimensions, each finding put to two
+    lines tearing. The one static in `src/` that is not `constexpr` is the fix for the last of those,
+    `Diag`'s lock, `DIAG_LOCK`, which every worker shares on purpose. The code was then reviewed by six
+    reviewers over six dimensions, each finding put to two
     skeptics, one reproducing it and one reading the code: 28 findings, 23 not refuted by both, 22 fixed
     in the code, its tests or this file, and the memory one recorded under Known gaps. The aliasing
     findings are fixed for every file that exists; what remains of them, outputs not written yet, is under
@@ -3514,6 +3547,13 @@ verifies (not reimplements) `[done-unverified]` milestones before starting new w
     keeping verdict 0, `BatchFold` never returning 6, the note counting inputs rather than workers,
     `Diag`'s lock removed, and repeats judged by string alone. Removing the lock is caught by a race -- a
     torn console line -- so the catch is observed rather than guaranteed: three runs out of three.
+  - **What a Linux session could not reach, and what CI and the owner's Windows run then covered**: `/W3`
+    and its zero-warnings requirement, `/sdl`, `/RTCu`, `/arch:AVX2`, the real `include/` headers, and the
+    Win32 and C runtime calls the shim stands in for, among them `_beginthreadex`, `WaitForSingleObject`,
+    `GetFullPathNameW`, `GetFileInformationByHandleEx` and `CompareStringOrdinal`. All of it is now
+    covered, `/RTCu` only over the one Debug run the owner's report records, which gave the binary at most
+    one input at a time. Only the three sanitizers stay Linux-only: AddressSanitizer and
+    UndefinedBehaviorSanitizer, neither of which is switched on in `DOCXtoMD.vcxproj`, and ThreadSanitizer.
   - **What stays open**: decision D15, and the Known gaps entries M13 added -- memory, outputs that do
     not exist yet, the thread sanitizer MSVC does not ship, and processor groups.
 
