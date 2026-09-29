@@ -5,7 +5,7 @@ All notable changes to DOCXtoMD are recorded here, per GCS c2. The format follow
 Added / Changed / Fixed / Removed / Perf. Nothing has been released yet, so every entry
 sits under `[Unreleased]`. File prologs carry no history (GCS c1); this file is the history.
 
-## [Unreleased]
+## [v0.1.0]
 
 ### Added
 - **M13, the multi-file batch on a bounded worker pool.** `src/Batch.h`/`src/Batch.cpp` is the
